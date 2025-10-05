@@ -1,0 +1,19 @@
+[project]
+name = "logqbit"
+version = "0.0.1"
+description = "Lightweight data logger and live plotter for lab-scale experiments."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "dpath>=2.2.0",
+    "json-tricks>=3.17.3",
+    "matplotlib>=3.10.6",
+    "msgpack>=1.1.1",
+    "msgpack-numpy>=0.4.8",
+    "numpy>=2.3.3",
+    "pandas>=2.3.3",
+    "pyarrow>=21.0.0",
+    "pyqtgraph>=0.13.7",
+    "pyside6>=6.9.3",
+    "tqdm>=4.67.1",
+]
