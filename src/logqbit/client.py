@@ -2,6 +2,8 @@ import inspect
 import itertools
 import os
 import socket
+import threading
+import time
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +25,7 @@ class LogFolder:
     META_FILENAME = "meta.json"
     DATA_FILENAME = "data.parquet"
     CREATE_MACHINE: str = socket.gethostname()
+    SAVE_INTERVAL: float = 1.0  # seconds
 
     def __init__(self, path: Path, meta: dict | None = None) -> None:
         if meta is None:
@@ -31,6 +34,8 @@ class LogFolder:
         self.meta = meta
         self._records: list[dict] = []
         self._segs: list[pd.DataFrame] = []
+        self._io_worker = _IOWorker(self.data_path)
+        self._last_add_row_time = datetime.now().timestamp()
 
     @classmethod
     def get_init_meta(cls) -> dict:
@@ -38,24 +43,6 @@ class LogFolder:
             "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "create_machine": cls.CREATE_MACHINE,
         }
-
-    @property
-    def df(self) -> pd.DataFrame:
-        self._flush_rec_to_segs()
-        if len(self._segs) == 0:
-            warnings.warn("No data in DataLogger.")
-            return pd.DataFrame({})
-        elif len(self._segs) == 1:
-            df = self._segs[0]
-        else:
-            df = pd.concat(self._segs)
-            self._segs = [df]
-        return df
-
-    def _flush_rec_to_segs(self) -> None:
-        if self._records:
-            self._segs.append(pd.DataFrame.from_records(self._records))
-            self._records = []
 
     @classmethod
     def load(cls, path: Path) -> "LogFolder":
@@ -88,14 +75,31 @@ class LogFolder:
         new_folder.mkdir()
         return cls(new_folder)
 
+    @property
+    def df(self) -> pd.DataFrame:
+        """Get the full dataframe, flushing all data rows."""
+        self._flush_rec_to_segs()
+        if len(self._segs) == 0:
+            warnings.warn("No data in DataLogger.")
+            return pd.DataFrame({})
+        elif len(self._segs) == 1:
+            df = self._segs[0]
+        else:
+            df = pd.concat(self._segs)
+            self._segs = [df]
+        return df
+
+    def _flush_rec_to_segs(self) -> None:
+        if self._records:
+            self._segs.append(pd.DataFrame.from_records(self._records))
+            self._records = []
+
     def add_row(self, **kwargs) -> None:
         """
         Add a new row or multiple rows to the dataframe.
         Supports both scalar and vector input.
         For vector input, pandas will check length consistency.
         """
-        # TODO: save every 1s in background thread.
-        # TODO: send data to live plotter.
         is_multi_row = [
             k
             for k, v in kwargs.items()
@@ -106,6 +110,16 @@ class LogFolder:
             self._segs.append(pd.DataFrame(kwargs))
         else:
             self._records.append(kwargs)
+
+        self._notify_plotter()
+
+        now = datetime.now().timestamp()
+        if now - self._last_add_row_time > self.SAVE_INTERVAL:
+            self._io_worker.save(self.df)
+            self._last_add_row_time = now
+
+    def _notify_plotter(self) -> None:
+        return None  # TODO: implement live plotter
 
     def capture(
         self,
@@ -157,8 +171,8 @@ class LogFolder:
     def __del__(self):
         try:
             self.save()
-        except:
-            warnings.warn("Save failed.")
+        except Exception as e:
+            warnings.warn(f"LogFile {self.path} save failed:\n{e}")
 
     @property
     def indeps(self) -> list[str]:
@@ -176,3 +190,31 @@ class LogFolder:
     @property
     def data_path(self) -> Path:
         return self.path / self.DATA_FILENAME
+
+
+class _IOWorker:
+    def __init__(
+        self,
+        data_path: Path,
+    ) -> None:
+        self.data_path = data_path
+        self.df = pd.DataFrame()
+        self._lock = threading.Lock()
+        self._event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def save(self, df: pd.DataFrame) -> None:
+        with self._lock:
+            self.df = df
+            self._event.set()
+
+    def _run(self):
+        while True:
+            self._event.wait()
+            self._event.clear()
+            try:
+                self.df.to_parquet(self.data_path, index=False)
+            except Exception as e:
+                print(f"IOWorker save error: {e}")
+            time.sleep(0.01)
