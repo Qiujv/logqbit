@@ -1,9 +1,9 @@
-# logqbit
+# LogQbit
 
-*logqbit* 是一个轻量且可扩展的实验数据记录工具包。
+*LogQbit* 是一个轻量且可扩展的实验数据记录工具包。
 它最初用于记录 量子比特（qubit）实验测量数据，但凭借灵活的数据格式和实时可视化功能，同样适用于 任意中小规模（≤MB级）实验数据 的采集与管理。
 
-*logqbit* is a lightweight and extensible data logging toolkit for lab-scale experiments.
+*LogQbit* is a lightweight and extensible data logging toolkit for lab-scale experiments.
 It was originally developed for recording quantum qubit measurement data, 
 but its flexible format and real-time visualization tools make it suitable for any small to medium (≤MB-level) experimental dataset.
 

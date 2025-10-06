@@ -17,3 +17,9 @@ dependencies = [
     "pyside6>=6.9.3",
     "tqdm>=4.67.1",
 ]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.30.1",
+    "pytest>=8.4.2",
+]
