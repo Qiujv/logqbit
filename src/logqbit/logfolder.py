@@ -89,7 +89,7 @@ class LogFolder:
         """Get the full dataframe, flushing all data rows."""
         self._flush_rec_to_segs()
         if len(self._segs) == 0:
-            warnings.warn("No data in DataLogger.")
+            warnings.warn("No data in DataLogger.", stacklevel=2)
             return pd.DataFrame({})
         elif len(self._segs) == 1:
             df = self._segs[0]
