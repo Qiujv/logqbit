@@ -4,11 +4,13 @@ import pickle
 import sys
 import warnings
 from collections import deque
+from importlib.resources import files
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
 import pyqtgraph as pg
-from PySide6.QtCore import QCoreApplication, QObject, Signal
+from PySide6.QtCore import QCoreApplication, QObject, Qt, Signal
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication,
@@ -49,6 +51,7 @@ class LivePlotterWindow(QMainWindow):
         super().__init__()
         pg.setConfigOptions(antialias=True)
         self.setWindowTitle("LogQbit Live Plotter")
+        self.setWindowIcon(QIcon(QPixmap(str(files("logqbit") / "assets" / "icon.svg"))))
 
         self.line_count = max(1, line_count)
         self._active_index = 0
@@ -105,7 +108,7 @@ class LivePlotterWindow(QMainWindow):
                 self._set_inactive(idx)
 
         self._sync_y_selector()
-        self.statusBar().clearMessage()
+        self._set_status_message("")
         self._refresh_all_lines()
 
     def add(
@@ -144,16 +147,31 @@ class LivePlotterWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
         central = QWidget(self)
-        root = QVBoxLayout(central)
+        root = QVBoxLayout()
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.plot_widget = pg.PlotWidget(background="w", parent=self)
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.25)
+        root.addWidget(self.plot_widget)
 
         controls = QHBoxLayout()
-        controls.addWidget(QLabel("Y axis:", self))
+        controls.setContentsMargins(8, 4, 8, 4)
+        controls.setSpacing(8)
 
         self.y_selector = QComboBox(self)
         self.y_selector.currentTextChanged.connect(self._on_y_changed)
         self.y_selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         controls.addWidget(self.y_selector)
-        controls.addStretch(1)
+
+        self._status_bar = QStatusBar(self)
+        self._status_bar.setSizeGripEnabled(False)
+        self._status_bar.setContentsMargins(0, 0, 0, 0)
+        self._status_bar.setStyleSheet("QStatusBar::item { border: none; }")
+        self._status_label = QLabel("", self._status_bar)
+        self._status_label.setAlignment(Qt.AlignCenter)
+        self._status_bar.addWidget(self._status_label, 1)
+        controls.addWidget(self._status_bar, 1)
 
         self.marker_button = QPushButton("Markers Off", self)
         self.marker_button.setCheckable(True)
@@ -163,15 +181,8 @@ class LivePlotterWindow(QMainWindow):
 
         root.addLayout(controls)
 
-        self.plot_widget = pg.PlotWidget(background="w", parent=self)
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.25)
-        root.addWidget(self.plot_widget, stretch=1)
-
         central.setLayout(root)
         self.setCentralWidget(central)
-
-        status = QStatusBar(self)
-        self.setStatusBar(status)
 
         self._line_items: list[pg.PlotDataItem] = []
         for idx in range(self.line_count):
@@ -300,10 +311,14 @@ class LivePlotterWindow(QMainWindow):
 
     def _update_stepper_display(self, stepper: tuple[Any, ...]) -> None:
         if not self._stepper_keys:
-            self.statusBar().clearMessage()
+            self._set_status_message("")
             return
         parts = [f"{key}={value}" for key, value in zip(self._stepper_keys, stepper)]
-        self.statusBar().showMessage(" | ".join(parts))
+        self._set_status_message(" | ".join(parts))
+
+    def _set_status_message(self, message: str) -> None:
+        if hasattr(self, "_status_label"):
+            self._status_label.setText(message)
 
     def _ingest_row(self, row: Mapping[str, Any]) -> None:
         if not self._indeps:
