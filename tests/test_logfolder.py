@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from logqbit.client import LogFolder
+from logqbit.logfolder import LogFolder
 
 
 def test_new_creates_incremental_directory(tmp_path: Path) -> None:

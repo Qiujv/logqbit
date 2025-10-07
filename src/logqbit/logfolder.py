@@ -5,6 +5,7 @@ import socket
 import threading
 import time
 import warnings
+import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -34,8 +35,16 @@ class LogFolder:
         self.meta = meta
         self._records: list[dict] = []
         self._segs: list[pd.DataFrame] = []
-        self._io_worker = _IOWorker(self.data_path)
+        self._io_worker = _IOWorker(self)
         self._last_add_row_time = datetime.now().timestamp()
+
+    @property
+    def meta_path(self) -> Path:
+        return self.path / self.META_FILENAME
+
+    @property
+    def data_path(self) -> Path:
+        return self.path / self.DATA_FILENAME
 
     @classmethod
     def get_init_meta(cls) -> dict:
@@ -115,7 +124,7 @@ class LogFolder:
 
         now = datetime.now().timestamp()
         if now - self._last_add_row_time > self.SAVE_INTERVAL:
-            self._io_worker.save(self.df)
+            self.save(block=False)
             self._last_add_row_time = now
 
     def _notify_plotter(self) -> None:
@@ -162,15 +171,18 @@ class LogFolder:
         meta.update(kwargs)
         self.meta = dpath.merge(meta, self.meta)
 
-    def save(self) -> None:
-        with open(self.meta_path, "w", encoding="utf-8") as f:
-            json.dump(self.meta, f, ensure_ascii=False, indent=2)
+    def save(self, block: bool = True) -> None:
+        if block:
+            with open(self.meta_path, "w", encoding="utf-8") as f:
+                json.dump(self.meta, f, ensure_ascii=False, indent=2)
 
-        self.df.to_parquet(self.data_path, index=False)
+            self.df.to_parquet(self.data_path, index=False)
+        else:
+            self._io_worker.save_logfolder()
 
     def __del__(self):
         try:
-            self.save()
+            self.save(block=True)
         except Exception as e:
             warnings.warn(f"LogFile {self.path} save failed:\n{e}")
 
@@ -181,32 +193,24 @@ class LogFolder:
 
     @indeps.setter
     def indeps(self, value: list[str]) -> None:
+        if not isinstance(value, list):
+            raise ValueError("indeps must be a list of strings.")
+        if not all(isinstance(v, str) for v in value):
+            raise ValueError("indeps must be a list of strings.")
+
         self.meta["indeps"] = value
-
-    @property
-    def meta_path(self) -> Path:
-        return self.path / self.META_FILENAME
-
-    @property
-    def data_path(self) -> Path:
-        return self.path / self.DATA_FILENAME
 
 
 class _IOWorker:
-    def __init__(
-        self,
-        data_path: Path,
-    ) -> None:
-        self.data_path = data_path
-        self.df = pd.DataFrame()
+    def __init__(self, logfolder: "LogFolder") -> None:
+        self.lf_ref = weakref.ref(logfolder)
         self._lock = threading.Lock()
         self._event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def save(self, df: pd.DataFrame) -> None:
+    def save_logfolder(self) -> None:
         with self._lock:
-            self.df = df
             self._event.set()
 
     def _run(self):
@@ -214,7 +218,9 @@ class _IOWorker:
             self._event.wait()
             self._event.clear()
             try:
-                self.df.to_parquet(self.data_path, index=False)
+                lf = self.lf_ref()
+                if lf is not None:
+                    lf.save()
             except Exception as e:
                 print(f"IOWorker save error: {e}")
             time.sleep(0.01)

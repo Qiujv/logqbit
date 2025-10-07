@@ -1,1 +1,1 @@
-from .client import LogFolder
+from .logfolder import LogFolder
