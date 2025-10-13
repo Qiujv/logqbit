@@ -11,8 +11,10 @@ dependencies = [
     "numpy>=2.3.3",
     "pandas>=2.3.3",
     "pyarrow>=21.0.0",
+    "pylabrad>=0.98.3",
     "pyqtgraph>=0.13.7",
     "pyside6>=6.9.3",
+    "ruamel-yaml>=0.18.15",
     "tqdm>=4.67.1",
 ]
 

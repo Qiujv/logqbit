@@ -1,0 +1,181 @@
+z_settling_time_ns: 0
+xyz_after_rr_start: 2 us
+readout_bias_dev: all
+period_ns: 50_000
+reset:
+  D: 0.0
+  G2: -0.25
+  G4: -0.25
+  Q1: 0.0
+  Q2: -0.017
+  Q3: 0.0
+  Q4: 0.06
+Device:
+  Q1:
+    ADC: {name: r1a, ch: 0}
+    DACrr: {name: r2a, timing_lag: 0 ns, readout_power: -32 dBm, readout_length: 1 us}
+    DACxy: {name: x7a, timing_lag: 0 ns, global_phase: 0.0}
+    DACz: {name: z8a, ch: i, timing_lag: 0 ns, offset: -0.3}
+    DACz_Correction:
+      - [3000 ns, 600 ns, 90 ns, 9 ns]
+      - [0.0035, -0.014, -0.01, -0.08]
+    frr: 5.856 GHz
+    f10: 7.907 GHz
+    f21: 7.6 GHz
+    fit: {xmax: -0.7328102, fmax: 4.375165, xmin: -0.026125, fmin: 3.35388}
+    pi: {df: 0 MHz, amp: 0.632, len: 35 ns, alpha: 0.5}
+    piHalf: {df: 0 MHz, amp: 0.316, len: 35 ns, alpha: 0.5}
+    pulse12: {df: -248 MHz, amp: 0.741, len: 25 ns, alpha: 0.0}
+    spectroscopy: {amp: 0.98, len: 10 us}
+    reset: {zpa: -0.4, plateau: 4 us, freq: 0 MHz, amp: 0.0, width: 1 ns}
+    readout_bias: 0.3
+    ro_mat:
+      - [0.86933333, 0.16633333]
+      - [0.13066667, 0.83366667]
+    centers:
+      - [-362.36833, 306.784]
+      - [-264.632, 74.66033]
+      - [-2433.79567, -3025.139]
+  Q2:
+    ADC: {name: r1a, ch: 1}
+    DACrr: {name: r2a, timing_lag: 0 ns, readout_power: -24.5 dBm, readout_length: 0.2 us}
+    DACxy: {name: x4b, timing_lag: 0 ns, global_phase: 0.0}
+    DACz: {name: z8a, ch: q, timing_lag: 0 ns, offset: -0.416}
+    DACz_Correction:
+      - [7050 ns, 460 ns, 90 ns, 35 ns, 5 ns]
+      - [0.002365, -0.01443, -0.003, -0.01375, -0.2475]
+    JPA: {bias: -0.13, pump: 1.8, freq: 12.05}
+    frr: 5.962 GHz
+    f10: 7.7468 GHz
+    f21: 7.5418 GHz
+    fit: {xmax: 0.653793, fmax: 7.946944, xmin: 0.059259, fmin: 3.948707}
+    pi: {df: 0 MHz, amp: 0.574, len: 20 ns, alpha: 1.866}
+    piHalf: {df: 0 MHz, amp: 0.569, len: 10 ns, alpha: 1.1}
+    pulse12: {df: -205 MHz, amp: 0.54, len: 20 ns, alpha: 0.0}
+    spectroscopy: {amp: 0.6, len: 10 us}
+    reset: {zpa: 0.52, plateau: 4 us, freq: 0 MHz, amp: 0.0, width: 1 ns}
+    readout_ringup: {len: 5 ns, relative_amp: 1}
+    readout_bias: 0.175
+    readout_phase: 0.0
+    ro_mat:
+      - [0.9625, 0.18816667]
+      - [0.0295, 0.662]
+    rr_postselect1: true
+    centers:
+      - [-3628.899, 1059.53217]
+      - [-2282.06833, 2732.81533]
+      - [-3018.52533, 3579.09917]
+  Q3:
+    ADC: {name: r1b, ch: 0}
+    DACrr: {name: r2b, timing_lag: 0 ns, readout_power: -32 dBm, readout_length: 1 us}
+    DACxy: {name: x7b, timing_lag: 0 ns, global_phase: 0.0}
+    DACz: {name: z11a, ch: i, timing_lag: 0 ns, offset: 0.2}
+    DACz_Correction:
+      - [3000 ns, 600 ns, 90 ns, 9 ns]
+      - [0.0035, -0.014, -0.01, -0.08]
+    frr: 5.85 GHz
+    f10: 7.899 GHz
+    f21: 7.7 GHz
+    fit: {xmax: -0.732810, fmax: 4.37516, xmin: -0.026125, fmin: 3.35388}
+    pi: {df: 0 MHz, amp: 0.692, len: 100 ns, alpha: 2.94}
+    piHalf: {df: 0 MHz, amp: 0.346, len: 100 ns, alpha: 0.0}
+    pulse12: {df: -248 MHz, amp: 0.741, len: 25 ns, alpha: 0.0}
+    spectroscopy: {amp: 0.99, len: 10 us}
+    reset: {zpa: 0.35, plateau: 8 us, freq: 0 MHz, amp: 0.0, width: 1 ns}
+    readout_bias: 0.2
+    ro_mat:
+      - [0.88333333, 0.18366667]
+      - [0.11666667, 0.81633333]
+    centers:
+      - [-17.65, 536.30067]
+      - [-195.95367, 326.90833]
+      - [-2433.79567, -3025.139]
+  Q4:
+    ADC: {name: r1b, ch: 1}
+    DACrr: {name: r2b, timing_lag: 0 ns, readout_power: -20 dBm, readout_length: 0.2 us}
+    DACxy: {name: x4a, timing_lag: 0 ns, global_phase: 0.0}
+    DACz: {name: z11a, ch: q, timing_lag: 0 ns, offset: 0.074}
+    DACz_Correction:
+      - [3000 ns, 600 ns, 90 ns, 12 ns, 5 ns]
+      - [0.0035, -0.0145, -0.008, -0.08, 0.15]
+    JPA: {bias: -0.8, pump: 7.5, freq: 12.05}
+    frr: 5.9545 GHz
+    f10: 7.7653 GHz
+    f21: 7.5578 GHz
+    fit: {xmax: 0.64230, fmax: 7.67643, xmin: 0.0282706, fmin: 4.8484985}
+    pi: {df: 0 MHz, amp: 0.656, len: 20 ns, alpha: 0.79}
+    piHalf: {df: 0 MHz, amp: 0.646, len: 10 ns, alpha: 0.65}
+    pulse12: {df: -207.5 MHz, amp: 0.667, len: 20 ns, alpha: 0.0}
+    spectroscopy: {amp: 0.2, len: 10 us}
+    reset: {zpa: 0.5, plateau: 8 us, freq: 0 MHz, amp: 0.0, width: 1 ns}
+    readout_ringup: {len: 5 ns, relative_amp: 1.0}
+    readout_bias: 0.17
+    readout_phase: 0.0
+    ro_mat:
+      - [0.962, 0.20533333]
+      - [0.02833333, 0.6655]
+    rr_postselect1: true
+    centers:
+      - [1209.89683, -2989.0485]
+      - [-153.19583, -3968.85767]
+      - [-4.0275, -5307.034]
+  C12:
+    DACz: {name: z8b, ch: q, timing_lag: 0 ns, offset: -0.18}
+    DACz_Correction:
+      - [10 ns, 30 ns]
+      - [0.0, 0.0]
+  C34:
+    DACz: {name: z11b, ch: q, timing_lag: 0 ns, offset: -0.18}
+    DACz_Correction:
+      - [10 ns, 30 ns]
+      - [0.0, 0.0]
+  D:
+    DACz: {name: z6a, ch: i, timing_lag: 0 ns, offset: 0.315}
+    DACz_Correction:
+      - [7050 ns, 410 ns, 20 ns]
+      - [0.00196, -0.0152, -0.041]
+    readout_bias: 0.25
+  G2:
+    DACz: {name: z8b, ch: i, timing_lag: 0 ns, offset: -0.254}
+    DACz_Correction:
+      - [7050 ns, 410 ns, 20 ns]
+      - [0.00196, -0.0152, -0.041]
+    readout_bias: 0.02
+  G4:
+    DACz: {name: z11b, ch: i, timing_lag: 0 ns, offset: 0.014}
+    DACz_Correction:
+      - [3000 ns, 600 ns, 90 ns, 9 ns]
+      - [0.0035, -0.014, -0.01, -0.08]
+    readout_bias: -0.02
+  J2:
+    DACz: {name: z6b, ch: q, timing_lag: 0 ns, offset: 0.0}
+    DACz_Correction:
+      - [200 ns, 30 ns]
+      - [0.0, 0.0]
+    readout_bias: 0.9
+    readout_bias_margin: 100 ns
+  J4:
+    DACz: {name: z6b, ch: i, timing_lag: 0 ns, offset: 0.0}
+    DACz_Correction:
+      - [200 ns, 30 ns]
+      - [0.0, 0.0]
+    readout_bias: 0.9
+    readout_bias_margin: 100 ns
+LO:
+  LOrr: {ID: TCPIP0::10.0.13.143::2000::SOCKET, frequency: 6.05 GHz, power: 12 dBm}
+  LOxy: {ID: TCPIP0::10.0.13.142::2000::SOCKET, frequency: 8 GHz, power: 12 dBm}
+Board:
+  r1a: {ID: ad_box1pcie1ch12, start_delay: 180 ns, demod_length: 220 ns}
+  r1b: {ID: ad_box1pcie1ch34, start_delay: 180 ns, demod_length: 220 ns}
+  r2a: {ID: da_box1pcie2ch12, start_delay: 16 ns, LO_name: LOrr}
+  r2b: {ID: da_box1pcie2ch34, start_delay: 16 ns, LO_name: LOrr}
+  x4a: {ID: da_box1pcie4ch12, start_delay: 16 ns, LO_name: LOxy}
+  x4b: {ID: da_box1pcie4ch34, start_delay: 16 ns, LO_name: LOxy}
+  x7a: {ID: da_box1pcie5ch12, start_delay: 16 ns, LO_name: LOxy}
+  x7b: {ID: da_box1pcie5ch34, start_delay: 16 ns, LO_name: LOxy}
+  z11a: {ID: da_box1pcie11ch12, start_delay: 16 ns}
+  z11b: {ID: da_box1pcie11ch34, start_delay: 16 ns}
+  z6a: {ID: da_box1pcie6ch12, start_delay: 16 ns}
+  z6b: {ID: da_box1pcie6ch34, start_delay: 16 ns}
+  z8a: {ID: da_box1pcie8ch12, start_delay: 16 ns}
+  z8b: {ID: da_box1pcie8ch34, start_delay: 16 ns}
