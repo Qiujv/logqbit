@@ -571,11 +571,15 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
-    { name = "pylabrad" },
     { name = "pyqtgraph" },
     { name = "pyside6" },
     { name = "ruamel-yaml" },
     { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+labrad = [
+    { name = "pylabrad" },
 ]
 
 [package.dev-dependencies]
@@ -592,12 +596,13 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.3" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pyarrow", specifier = ">=21.0.0" },
-    { name = "pylabrad", specifier = ">=0.98.3" },
+    { name = "pylabrad", marker = "extra == 'labrad'", specifier = ">=0.98.3" },
     { name = "pyqtgraph", specifier = ">=0.13.7" },
     { name = "pyside6", specifier = ">=6.9.3" },
     { name = "ruamel-yaml", specifier = ">=0.18.15" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
+provides-extras = ["labrad"]
 
 [package.metadata.requires-dev]
 dev = [

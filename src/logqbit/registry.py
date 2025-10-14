@@ -1,5 +1,6 @@
 import re
 import sys
+import warnings
 from collections.abc import Mapping, Sequence, Set
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,8 +16,10 @@ if TYPE_CHECKING:
 
 _sentinel = object()
 
+
 class FileSnap:
-    __slots__ = ('path', 'mtime', 'size')
+    __slots__ = ("path", "mtime", "size")
+
     def __init__(self, path: Path):
         self.path = Path(path)
         self._refresh()
@@ -24,7 +27,7 @@ class FileSnap:
     def _refresh(self):
         st = self.path.stat()
         self.mtime = st.st_mtime
-        self.size  = st.st_size
+        self.size = st.st_size
 
     def changed(self) -> bool:
         st = self.path.stat()
@@ -32,6 +35,7 @@ class FileSnap:
             self._refresh()
             return True
         return False
+
 
 class Registry:
     """A simple registry based on YAML file.
@@ -41,7 +45,7 @@ class Registry:
     reg = Registry('config.yaml')
     reg['new_key/sub_key'] = 123  # synced with file
     ```
-    
+
     Operations on `root` and subitems are **local** and needs to be saved manually. e.g.
     ```python
     reg.reload()
@@ -52,9 +56,10 @@ class Registry:
 
     NOTE: Local operations is useful for batch update without frequent file I/O.
     """
+
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.yaml = self.get_parser()
+        self.yaml = get_parser()
         self.root: CommentedMap = None
         self.load()
         self._snap = FileSnap(self.path)
@@ -64,11 +69,11 @@ class Registry:
 
     def __setitem__(self, key: str, value):
         self.set(key, value, create_parents=True)
-    
+
     def get(self, key: str, default=_sentinel):
         self.reload()
         return self.get_local(key, default)
-    
+
     def set(self, key: str, value, create_parents: bool = True):
         self.reload()
         self.set_local(key, value, create_parents)
@@ -126,29 +131,39 @@ class Registry:
     @deprecated("For backward compatibility only.")
     def copy(self) -> dict:
         return _to_builtins(self.root)
-    
+
     @deprecated("For backward compatibility only.")
     def cwd(self) -> str:
-        return self['data_folder']
+        return self["data_folder"]
 
-    @staticmethod
-    def get_parser() -> YAML:
-        yaml = YAML()
-        yaml.preserve_quotes = True
-        yaml.width = 100
-        yaml.indent(mapping=2, sequence=4, offset=2)
-        # add support for labrad units.
+
+def get_parser() -> YAML:
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.width = 100
+    yaml.indent(mapping=2, sequence=4, offset=2)
+    _set_yaml_for_labrad_units(yaml)
+    return yaml
+
+
+def _set_yaml_for_labrad_units(yaml: YAML) -> YAML:
+    return yaml  # placeholder if labrad is not available
+
+
+try:
+    import labrad.units as lab_units
+    from labrad.units import Unit, Value, WithUnit
+
+    def _set_yaml_for_labrad_units(yaml: YAML) -> YAML:
         yaml.resolver.add_implicit_resolver(
             "!labrad_unit", _UNIT_PATTERN, list("+-0123456789")
         )
         yaml.constructor.add_constructor("!labrad_unit", _construct_labrad_value)
         yaml.representer.add_representer(WithUnit, _represent_labrad_value)
         yaml.representer.add_representer(Value, _represent_labrad_value)
-        return yaml
+except ImportError:
+    warnings.warn("labrad.units not found, unit support disabled.", ImportWarning)
 
-
-from labrad import units as lab_units
-from labrad.units import Unit, Value, WithUnit
 
 _UNIT_PATTERN = re.compile(r"^\s*([-+]?\d[\d_]*(?:\.\d[\d_]*)?)\s*([A-Za-z]*)\s*$")
 
@@ -179,11 +194,13 @@ def _represent_labrad_value(dumper: "BaseRepresenter", data: WithUnit):
     # return dumper.represent_scalar('tag:yaml.org,2002:str', "="+spaced, style="")
     return dumper.represent_scalar("!labrad_unit", spaced)
 
+
 def _to_builtins(obj):
     if isinstance(obj, Mapping):
         return {_to_builtins(k): _to_builtins(v) for k, v in obj.items()}
     if isinstance(obj, Sequence) and not isinstance(obj, (str, bytes)):
-        return tuple(_to_builtins(item) for item in obj)  # BUG: labRAD dump tuple only, remove it!!
+        # BUG: labRAD dump tuple only, remove it!!
+        return tuple(_to_builtins(item) for item in obj)
     if isinstance(obj, Set):
         return {_to_builtins(item) for item in obj}
 
