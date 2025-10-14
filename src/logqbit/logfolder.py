@@ -6,37 +6,61 @@ import threading
 import time
 import warnings
 import weakref
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-import dpath
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-try:
-    import json_tricks as json
-except ImportError:
-    import json
+from .registry import get_parser
+
+yaml = get_parser()
 
 
 class LogFolder:
-    META_FILENAME = "meta.json"
+    META_FILENAME = "meta.yaml"
     DATA_FILENAME = "data.parquet"
     CREATE_MACHINE: str = socket.gethostname()
     SAVE_INTERVAL: float = 1.0  # seconds
 
-    def __init__(self, path: Path, meta: dict | None = None) -> None:
-        if meta is None:
-            meta = self.get_init_meta()
+    def __init__(self, path: str | Path, create: bool = True):
         self.path = Path(path)
-        self.meta = meta
-        self._records: list[dict] = []
+        self.meta = OrderedDict()
         self._segs: list[pd.DataFrame] = []
-        self._io_worker = _IOWorker(self)
+        self._records: list[dict] = []
         self._last_add_row_time = datetime.now().timestamp()
+        self._stop = threading.Event()
+        self._dirty = threading.Event()
+        self._lock = threading.Lock()
+
+        _thread = threading.Thread(target=self._writer, daemon=True)
+        _thread.start()
+        weakref.finalize(self, self._cleanup, self._stop, _thread)
+
+        if self.path.exists() and self.path.is_dir():
+            if self.meta_path.exists():
+                with open(self.meta_path, "r", encoding="utf-8") as f:
+                    self.meta = yaml.load(f)
+            if self.data_path.exists():
+                self._segs = [pd.read_parquet(self.data_path)]
+        elif create:
+            self.path.mkdir(parents=True, exist_ok=True)
+            self.meta = self.get_init_meta()
+        else:
+            raise FileNotFoundError(f"LogFolder path '{self.path}' does not exist.")
+
+    @staticmethod
+    def _cleanup(stop_event: threading.Event, thread: threading.Thread):
+        try:
+            stop_event.set()
+            if thread.is_alive():
+                thread.join(timeout=2)
+        except Exception:
+            pass
 
     @property
     def meta_path(self) -> Path:
@@ -47,24 +71,13 @@ class LogFolder:
         return self.path / self.DATA_FILENAME
 
     @classmethod
-    def get_init_meta(cls) -> dict:
-        return {
-            "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "create_machine": cls.CREATE_MACHINE,
-        }
-
-    @classmethod
-    def load(cls, path: Path) -> "LogFolder":
-        path = Path(path)
-        if not (path.exists() and path.is_dir()):
-            raise FileNotFoundError(f"{path} is not a valid directory.")
-        meta_path = path / cls.META_FILENAME
-        if meta_path.exists():
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-        else:
-            meta = {}
-        return cls(path, meta)
+    def get_init_meta(cls):
+        return OrderedDict(
+            {
+                "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "create_machine": cls.CREATE_MACHINE,
+            }
+        )
 
     @classmethod
     def new(cls, parent_path: Path) -> "LogFolder":
@@ -81,7 +94,6 @@ class LogFolder:
         while (parent_path / str(new_index)).exists():
             new_index += 1
         new_folder = parent_path / str(new_index)
-        new_folder.mkdir()
         return cls(new_folder)
 
     @property
@@ -120,12 +132,8 @@ class LogFolder:
         else:
             self._records.append(kwargs)
 
+        self._dirty.set()
         self._notify_plotter()
-
-        now = datetime.now().timestamp()
-        if now - self._last_add_row_time > self.SAVE_INTERVAL:
-            self.save(block=False)
-            self._last_add_row_time = now
 
     def _notify_plotter(self) -> None:
         return None  # TODO: implement live plotter
@@ -163,28 +171,32 @@ class LogFolder:
         if meta is None:
             meta = {}
         meta.update(kwargs)
-        self.meta = dpath.merge(self.meta, meta)
+        self.meta.update(meta)
 
     def add_meta_to_head(self, meta: dict = None, /, **kwargs):
         if meta is None:
             meta = {}
         meta.update(kwargs)
-        self.meta = dpath.merge(meta, self.meta)
+        self.meta.update(meta)
+        for k in reversed(meta.keys()):
+            self.meta.move_to_end(k, last=False)
 
-    def save(self, block: bool = True) -> None:
-        if block:
+    def save(self, force: bool = False) -> None:
+        if not self._dirty.is_set() and not force:
+            return
+
+        with self._lock:
             with open(self.meta_path, "w", encoding="utf-8") as f:
-                json.dump(self.meta, f, ensure_ascii=False, indent=2)
+                yaml.dump(self.meta, f)
 
             self.df.to_parquet(self.data_path, index=False)
-        else:
-            self._io_worker.save_logfolder()
 
-    def __del__(self):
-        try:
-            self.save(block=True)
-        except Exception as e:
-            warnings.warn(f"LogFile {self.path} save failed:\n{e}")
+    def _writer(self):
+        while not self._stop.is_set():
+            self._dirty.wait()
+            time.sleep(self.SAVE_INTERVAL)  # debounce interval
+            self._dirty.clear()
+            self.save()
 
     @property
     def indeps(self) -> list[str]:
@@ -199,28 +211,3 @@ class LogFolder:
             raise ValueError("indeps must be a list of strings.")
 
         self.meta["indeps"] = value
-
-
-class _IOWorker:
-    def __init__(self, logfolder: "LogFolder") -> None:
-        self.lf_ref = weakref.ref(logfolder)
-        self._lock = threading.Lock()
-        self._event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def save_logfolder(self) -> None:
-        with self._lock:
-            self._event.set()
-
-    def _run(self):
-        while True:
-            self._event.wait()
-            self._event.clear()
-            try:
-                lf = self.lf_ref()
-                if lf is not None:
-                    lf.save()
-            except Exception as e:
-                print(f"IOWorker save error: {e}")
-            time.sleep(0.01)
