@@ -5,13 +5,14 @@ from collections.abc import Mapping, Sequence, Set
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from typing_extensions import deprecated
 
 if TYPE_CHECKING:
     from ruamel.yaml.constructor import BaseConstructor
-    from ruamel.yaml.nodes import ScalarNode
+    from ruamel.yaml.nodes import ScalarNode, SequenceNode
     from ruamel.yaml.representer import BaseRepresenter
 
 _sentinel = object()
@@ -142,8 +143,21 @@ def get_parser() -> YAML:
     yaml.preserve_quotes = True
     yaml.width = 100
     yaml.indent(mapping=2, sequence=4, offset=2)
+    yaml.constructor.add_constructor("!numpy", _construct_numpy)
+    yaml.representer.add_representer(np.ndarray, _represent_numpy)
     _set_yaml_for_labrad_units(yaml)
     return yaml
+
+
+def _represent_numpy(dumper: "BaseRepresenter", data: np.ndarray):
+    return dumper.represent_sequence("!numpy", data.tolist(), flow_style=True)
+
+
+def _construct_numpy(loader: "BaseConstructor", node: "SequenceNode"):
+    return np.array(loader.construct_sequence(node))
+
+
+####### labrad.units support #########
 
 
 def _set_yaml_for_labrad_units(yaml: YAML) -> YAML:
