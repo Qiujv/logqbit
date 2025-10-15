@@ -23,9 +23,6 @@ class FileSnap:
 
     def __init__(self, path: Path):
         self.path = Path(path)
-        self._refresh()
-
-    def _refresh(self):
         st = self.path.stat()
         self.mtime = st.st_mtime
         self.size = st.st_size
@@ -33,7 +30,8 @@ class FileSnap:
     def changed(self) -> bool:
         st = self.path.stat()
         if (st.st_mtime, st.st_size) != (self.mtime, self.size):
-            self._refresh()
+            self.mtime = st.st_mtime
+            self.size = st.st_size
             return True
         return False
 
@@ -58,12 +56,13 @@ class Registry:
     NOTE: Local operations is useful for batch update without frequent file I/O.
     """
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, auto_reload: bool = True):
         self.path = Path(path)
         self.yaml = get_parser()
         self.root: CommentedMap = None
         self.load()
         self._snap = FileSnap(self.path)
+        self.auto_reload = auto_reload
 
     def __getitem__(self, key: str):
         return self.get(key)
@@ -72,11 +71,11 @@ class Registry:
         self.set(key, value, create_parents=True)
 
     def get(self, key: str, default=_sentinel):
-        self.reload()
+        if self.auto_reload: self.reload()
         return self.get_local(key, default)
 
     def set(self, key: str, value, create_parents: bool = True):
-        self.reload()
+        if self.auto_reload: self.reload()
         self.set_local(key, value, create_parents)
         self.save()
 
@@ -126,8 +125,10 @@ class Registry:
     def save(self, path: str | Path | None = None):
         """Save self.root to YAML file."""
         path = self.path if path is None else path
-        with open(path, "w", encoding="utf-8") as f:
+        tmp_path = path.with_suffix('.tmp')
+        with open(tmp_path, "w", encoding="utf-8") as f:
             self.yaml.dump(self.root, f)
+        tmp_path.replace(path)
 
     @deprecated("For backward compatibility only.")
     def copy(self) -> dict:
@@ -143,18 +144,17 @@ def get_parser() -> YAML:
     yaml.preserve_quotes = True
     yaml.width = 100
     yaml.indent(mapping=2, sequence=4, offset=2)
-    yaml.constructor.add_constructor("!numpy", _construct_numpy)
-    yaml.representer.add_representer(np.ndarray, _represent_numpy)
+    yaml.representer.add_representer(np.ndarray, _represent_numpy_array)
+    yaml.representer.add_multi_representer(np.generic, _represent_numpy_scalar)
     _set_yaml_for_labrad_units(yaml)
     return yaml
 
+def _represent_numpy_array(dumper: "BaseRepresenter", data: np.ndarray):
+    # return dumper.represent_sequence("!numpy", data.tolist(), flow_style=True)
+    return dumper.represent_sequence("tag:yaml.org,2002:seq", data.tolist(), flow_style=True)
 
-def _represent_numpy(dumper: "BaseRepresenter", data: np.ndarray):
-    return dumper.represent_sequence("!numpy", data.tolist(), flow_style=True)
-
-
-def _construct_numpy(loader: "BaseConstructor", node: "SequenceNode"):
-    return np.array(loader.construct_sequence(node))
+def _represent_numpy_scalar(dumper: "BaseRepresenter", data: np.generic):
+    return dumper.represent_data(data.item())
 
 
 ####### labrad.units support #########
