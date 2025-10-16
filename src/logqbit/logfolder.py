@@ -4,9 +4,7 @@ import os
 import socket
 import threading
 import time
-import warnings
 import weakref
-from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -16,68 +14,51 @@ import pandas as pd
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from .registry import get_parser
+from .registry import Registry, get_parser
 
 yaml = get_parser()
 
 
 class LogFolder:
-    META_FILENAME = "meta.yaml"
-    DATA_FILENAME = "data.parquet"
-    CREATE_MACHINE: str = socket.gethostname()
-    SAVE_INTERVAL: float = 1.0  # seconds
+    create_machine = socket.gethostname()  # Can be overridden.
 
-    def __init__(self, path: str | Path, create: bool = True):
-        self.path = Path(path)
-        self.meta = OrderedDict()
-        self._segs: list[pd.DataFrame] = []
-        self._records: list[dict] = []
-        self._last_add_row_time = datetime.now().timestamp()
-        self._stop = threading.Event()
-        self._dirty = threading.Event()
-        self._lock = threading.Lock()
-
-        _thread = threading.Thread(target=self._writer, daemon=True)
-        _thread.start()
-        weakref.finalize(self, self._cleanup, self._stop, _thread)
-
-        if self.path.exists() and self.path.is_dir():
-            if self.meta_path.exists():
-                with open(self.meta_path, "r", encoding="utf-8") as f:
-                    self.meta = yaml.load(f)
-            if self.data_path.exists():
-                self._segs = [pd.read_parquet(self.data_path)]
-        elif create:
-            self.path.mkdir(parents=True, exist_ok=True)
-            self.meta = self.get_init_meta()
-        else:
-            raise FileNotFoundError(f"LogFolder path '{self.path}' does not exist.")
-
-    @staticmethod
-    def _cleanup(stop_event: threading.Event, thread: threading.Thread):
-        try:
-            stop_event.set()
-            if thread.is_alive():
-                thread.join(timeout=2)
-        except Exception:
+    def __init__(
+        self,
+        path: str | Path,
+        create: bool = True,
+        save_delay_secs: float = 1.0,
+    ):
+        path = Path(path)
+        meta_path = path / "meta.yaml"
+        data_path = path / "data.parquet"
+        if path.exists() and path.is_dir():
             pass
+        elif create:
+            path.mkdir(parents=True, exist_ok=True)
+            with open(meta_path, "w", encoding="utf-8") as f:
+                yaml.dump(
+                    {
+                        "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "create_machine": self.create_machine,
+                    },
+                    f,
+                )
+        else:
+            raise FileNotFoundError(f"LogFolder at '{path}' does not exist.")
+
+        self.path = path
+
+        if meta_path.exists():
+            self.reg = Registry(meta_path, auto_reload=False)
+        else:
+            self.reg = None
+
+        self._handler = _DataHandler(data_path, save_delay_secs, self)
 
     @property
-    def meta_path(self) -> Path:
-        return self.path / self.META_FILENAME
-
-    @property
-    def data_path(self) -> Path:
-        return self.path / self.DATA_FILENAME
-
-    @classmethod
-    def get_init_meta(cls):
-        return OrderedDict(
-            {
-                "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "create_machine": cls.CREATE_MACHINE,
-            }
-        )
+    def df(self) -> pd.DataFrame:
+        """Get the full dataframe, flushing all data rows."""
+        return self._handler.get_df()
 
     @classmethod
     def new(cls, parent_path: Path) -> "LogFolder":
@@ -96,25 +77,6 @@ class LogFolder:
         new_folder = parent_path / str(new_index)
         return cls(new_folder)
 
-    @property
-    def df(self) -> pd.DataFrame:
-        """Get the full dataframe, flushing all data rows."""
-        self._flush_rec_to_segs()
-        if len(self._segs) == 0:
-            warnings.warn("No data in DataLogger.", stacklevel=2)
-            return pd.DataFrame({})
-        elif len(self._segs) == 1:
-            df = self._segs[0]
-        else:
-            df = pd.concat(self._segs)
-            self._segs = [df]
-        return df
-
-    def _flush_rec_to_segs(self) -> None:
-        if self._records:
-            self._segs.append(pd.DataFrame.from_records(self._records))
-            self._records = []
-
     def add_row(self, **kwargs) -> None:
         """
         Add a new row or multiple rows to the dataframe.
@@ -127,16 +89,9 @@ class LogFolder:
             if hasattr(v, "__len__") and not isinstance(v, str)
         ]
         if is_multi_row:
-            self._flush_rec_to_segs()
-            self._segs.append(pd.DataFrame(kwargs))
+            self._handler.add_multi_rows(pd.DataFrame(kwargs))
         else:
-            self._records.append(kwargs)
-
-        self._dirty.set()
-        self._notify_plotter()
-
-    def _notify_plotter(self) -> None:
-        return None  # TODO: implement live plotter
+            self._handler.add_one_row(kwargs)
 
     def capture(
         self,
@@ -171,37 +126,21 @@ class LogFolder:
         if meta is None:
             meta = {}
         meta.update(kwargs)
-        self.meta.update(meta)
+        self.reg.root.update(meta)
+        self.reg.save()
 
     def add_meta_to_head(self, meta: dict = None, /, **kwargs):
         if meta is None:
             meta = {}
         meta.update(kwargs)
-        self.meta.update(meta)
-        for k in reversed(meta.keys()):
-            self.meta.move_to_end(k, last=False)
-
-    def save(self, force: bool = False) -> None:
-        if not self._dirty.is_set() and not force:
-            return
-
-        with self._lock:
-            with open(self.meta_path, "w", encoding="utf-8") as f:
-                yaml.dump(self.meta, f)
-
-            self.df.to_parquet(self.data_path, index=False)
-
-    def _writer(self):
-        while not self._stop.is_set():
-            self._dirty.wait()
-            time.sleep(self.SAVE_INTERVAL)  # debounce interval
-            self._dirty.clear()
-            self.save()
+        for i, (k, v) in enumerate(meta.items()):
+            self.reg.root.insert(i, k, v)
+        self.reg.save()
 
     @property
     def indeps(self) -> list[str]:
         """Running axes for plotting."""
-        return self.meta["indeps"]  # Let KeyError raise if not exists.
+        return self.reg["indeps"]  # Let KeyError raise if not exists.
 
     @indeps.setter
     def indeps(self, value: list[str]) -> None:
@@ -210,4 +149,91 @@ class LogFolder:
         if not all(isinstance(v, str) for v in value):
             raise ValueError("indeps must be a list of strings.")
 
-        self.meta["indeps"] = value
+        self.reg["indeps"] = value
+
+
+class _DataHandler:
+    def __init__(
+        self,
+        path: str | Path,
+        save_delay_secs: float,
+        parent: LogFolder,
+    ):
+        self.path = Path(path)
+        self._segs: list[pd.DataFrame] = []
+        if self.path.exists():
+            self._segs.append(pd.read_parquet(self.path))
+        self._records: list[dict[str, float | int | str]] = []
+
+        self.save_delay_secs = save_delay_secs
+        self._should_stop = False
+        self._skip_debounce = threading.Event()
+        self._dirty = threading.Event()
+        self._save_done = True
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        weakref.finalize(parent, self._cleanup)
+
+    def get_df(self, _clear: bool = False) -> pd.DataFrame:
+        with self._lock:
+            if self._records:
+                self._segs.append(pd.DataFrame.from_records(self._records))
+                self._records = []
+
+            if len(self._segs) == 0:
+                df = pd.DataFrame({})
+            elif len(self._segs) == 1:
+                df = self._segs[0]
+            else:
+                df = pd.concat(self._segs)
+                self._segs = [df]
+
+            if _clear:
+                self._dirty.clear()
+        return df
+
+    def add_one_row(self, kwargs: dict[str, float | int | str]):
+        with self._lock:
+            self._records.append(kwargs)
+            if not self._dirty.is_set():
+                self._dirty.set()
+
+    def add_multi_rows(self, df: pd.DataFrame):
+        with self._lock:
+            if self._records:
+                self._segs.append(pd.DataFrame.from_records(self._records))
+                self._records = []
+            self._segs.append(df)
+            if not self._dirty.is_set():
+                self._dirty.set()
+
+    def _run(self):
+        while not self._should_stop:
+            self._dirty.wait()
+            if self._should_stop:
+                break
+            self._save_done = False
+            if self._skip_debounce.wait(self.save_delay_secs):
+                self._skip_debounce.clear()
+            df = self.get_df(_clear=True)
+            try:
+                df.to_parquet(self.path, index=False)
+            finally:
+                self._save_done = True
+
+    def _cleanup(self):
+        try:
+            self._should_stop = True
+            self._skip_debounce.set()  # Process all pending data.
+            self._dirty.set()  # Just break the run loop.
+            if self._thread.is_alive():
+                self._thread.join(timeout=2)
+        except Exception:
+            pass
+
+    def flush(self):
+        """Flash the pending data immediately, block until done."""
+        self._skip_debounce.set()
+        while not self._save_done:
+            time.sleep(0.01)
