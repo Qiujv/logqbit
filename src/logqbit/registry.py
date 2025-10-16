@@ -132,6 +132,7 @@ class Registry:
 
     @deprecated("For backward compatibility only.")
     def copy(self) -> dict:
+        if self.auto_reload: self.reload()
         return _to_builtins(self.root)
 
     @deprecated("For backward compatibility only.")

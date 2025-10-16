@@ -1,34 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5"
-            markerWidth="3" markerHeight="3" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#FF5E00"/>
+    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="3" markerHeight="3"
+      orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2DB84D" />
     </marker>
   </defs>
-
-  <!-- 背景透明（可省略，保留以示意） -->
-  <!-- <rect x="0" y="0" width="512" height="512" fill="none"/> -->
-
-  <!-- 坐标轴 -->
-  <g stroke="#FF5E00" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none">
-    <!-- 竖轴 -->
+  <g stroke="#2DB84D" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none">
     <path d="M 96 432 L 96 96" />
-    <!-- 横轴 -->
     <path d="M 96 432 L 416 432" />
   </g>
-
-  <!-- 折线（带箭头） -->
-  <polyline
-    points="136,360 220,220 300,300 396,168"
-    fill="none"
-    stroke="#FF5E00"
-    stroke-width="32"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    marker-end="url(#arrow)"
-  />
-
-  <!-- 数据点（位于第一个波峰） -->
-  <circle cx="300" cy="360" r="20" fill="#FF5E00" />
-
+  <polyline points="136,360 220,220 300,300 396,168" fill="none" stroke="#2DB84D" stroke-width="32"
+    stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" />
+  <circle cx="300" cy="360" r="20" fill="#2DB84D" />
 </svg>
