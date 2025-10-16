@@ -60,6 +60,14 @@ class LogFolder:
         """Get the full dataframe, flushing all data rows."""
         return self._handler.get_df()
 
+    @property
+    def meta_path(self) -> Path:
+        return self.reg.path
+
+    @property
+    def data_path(self) -> Path:
+        return self._handler.path
+
     @classmethod
     def new(cls, parent_path: Path) -> "LogFolder":
         parent_path = Path(parent_path)
@@ -151,14 +159,13 @@ class LogFolder:
 
         self.reg["indeps"] = value
 
+    def flush(self) -> None:
+        """Flash the pending data immediately, block until done."""
+        self._handler.flush()
+
 
 class _DataHandler:
-    def __init__(
-        self,
-        path: str | Path,
-        save_delay_secs: float,
-        parent: LogFolder,
-    ):
+    def __init__(self, path: str | Path, save_delay_secs: float, parent: LogFolder):
         self.path = Path(path)
         self._segs: list[pd.DataFrame] = []
         if self.path.exists():
@@ -167,9 +174,8 @@ class _DataHandler:
 
         self.save_delay_secs = save_delay_secs
         self._should_stop = False
-        self._skip_debounce = threading.Event()
-        self._dirty = threading.Event()
-        self._save_done = True
+        self._skip_debounce = EventWithWaitingState()
+        self._dirty = EventWithWaitingState()
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -213,14 +219,12 @@ class _DataHandler:
             self._dirty.wait()
             if self._should_stop:
                 break
-            self._save_done = False
             if self._skip_debounce.wait(self.save_delay_secs):
                 self._skip_debounce.clear()
             df = self.get_df(_clear=True)
-            try:
-                df.to_parquet(self.path, index=False)
-            finally:
-                self._save_done = True
+            tmp_path = self.path.with_suffix(".tmp")
+            df.to_parquet(tmp_path, index=False)
+            tmp_path.replace(self.path)
 
     def _cleanup(self):
         try:
@@ -234,6 +238,19 @@ class _DataHandler:
 
     def flush(self):
         """Flash the pending data immediately, block until done."""
-        self._skip_debounce.set()
-        while not self._save_done:
+        if self._skip_debounce.waiting:
+            self._skip_debounce.set()
+        while not self._dirty.waiting:
             time.sleep(0.01)
+
+
+class EventWithWaitingState(threading.Event):
+    def __init__(self):
+        super().__init__()
+        self.waiting = False
+
+    def wait(self, timeout: float | None = None):
+        self.waiting = True
+        ret = super().wait(timeout)
+        self.waiting = False
+        return ret
