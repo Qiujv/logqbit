@@ -51,7 +51,7 @@ class LivePlotterWindow(QMainWindow):
         super().__init__()
         pg.setConfigOptions(antialias=True)
         self.setWindowTitle("LogQbit Live Plotter")
-        self.setWindowIcon(QIcon(QPixmap(str(files("logqbit") / "assets" / "icon.svg"))))
+        self.setWindowIcon(QIcon(QPixmap(str(files("logqbit") / "assets" / "live_plotter.svg"))))
 
         self.line_count = max(1, line_count)
         self._active_index = 0

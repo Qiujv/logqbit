@@ -19,6 +19,7 @@ Homepage = "https://github.com/Qiujv/logqbit"
 
 [project.gui-scripts]
 logqbit-live-plotter = "logqbit.live_plotter:main"
+logqbit-browser = "logqbit.browser:main"
 
 [project.optional-dependencies]
 labrad = [
@@ -31,6 +32,9 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "dpath>=2.2.0",
     "ipykernel>=6.30.1",
+    "json-tricks>=3.17.3",
+    "labcodes>=1.0.3",
     "pytest>=8.4.2",
 ]
