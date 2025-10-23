@@ -1,0 +1,9 @@
+numpy
+pandas
+pyarrow
+pyqtgraph
+PySide6
+pytest
+ruamel.base
+tqdm
+typing_extensions
