@@ -12,19 +12,12 @@ import pyqtgraph as pg
 from PySide6.QtCore import QCoreApplication, QObject, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import (
-    QApplication,
-    QComboBox,
-    QHBoxLayout,
-    QLabel,
-    QMainWindow,
-    QPushButton,
-    QStatusBar,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
+                               QMainWindow, QPushButton, QStatusBar,
+                               QVBoxLayout, QWidget)
 
-from .constants import HEAD_LENGTH, LIVE_PLOTTER_PIPE_NAME
+HEAD_LENGTH = 4  # Allows 4,294,967,295 bytes per message.
+LIVE_PLOTTER_PIPE_NAME = "logqbit-live-plotter"
 
 ACTIVE_COLOR = (255, 94, 0)
 INACTIVE_COLOR = (30, 144, 255, 120)

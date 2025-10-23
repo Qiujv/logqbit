@@ -5,6 +5,7 @@ description = "Simple data logger and live plotter for lab-scale experiments."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "labcodes>=1.0.4",
     "numpy>=2.3.3",
     "pandas>=2.3.3",
     "pyarrow>=21.0.0",
@@ -32,9 +33,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "dpath>=2.2.0",
     "ipykernel>=6.30.1",
-    "json-tricks>=3.17.3",
-    "labcodes>=1.0.3",
+    "ipywidgets>=8.1.7",
     "pytest>=8.4.2",
 ]
