@@ -1,5 +1,7 @@
 # LogQbit
 
+## 说明
+
 *LogQbit* 是一个轻量且可扩展的实验数据记录工具包。
 它最初用于记录 量子比特（qubit）实验测量数据，但凭借灵活的数据格式和实时可视化功能，同样适用于 任意中小规模（≤MB级）实验数据 的采集与管理。
 
@@ -28,3 +30,12 @@ With `logqbit`, you can:
 
 Whether you are monitoring qubit readouts, scanning a parameter sweep, or simply logging sensor outputs, 
 `logqbit` provides a simple and robust workflow for capturing and revisiting your experimental data.
+
+
+## 安装 Python 项目依赖
+
+在该仓库目录下，运行如下指令以安装依赖的第三方python库
+
+```
+pip install -r requirements.txt
+```
