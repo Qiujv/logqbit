@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from logqbit.logfolder import LogFolder, yaml
+from logqbit.logfolder import LogFolder
 
 
 def test_new_creates_incremental_directory(tmp_path: Path) -> None:
@@ -18,8 +19,13 @@ def test_new_creates_incremental_directory(tmp_path: Path) -> None:
 
     assert lf.path.parent == parent
     assert lf.path.name == "2"
-    assert lf.reg["create_machine"] == LogFolder.create_machine
-    assert "create_time" in lf.reg.root
+
+    index_data = lf.idx.root
+    assert index_data["title"] == "untitled"
+    assert index_data["starred"] is False
+    assert index_data["trashed"] is False
+    assert index_data["create_machine"] == socket.gethostname()
+    assert index_data["create_time"]
 
 
 def test_add_row_scalar_and_save(tmp_path: Path) -> None:
@@ -31,25 +37,16 @@ def test_add_row_scalar_and_save(tmp_path: Path) -> None:
 
     lf.flush()
 
-    assert lf.meta_path.exists()
-    with lf.meta_path.open("r", encoding="utf-8") as meta_file:
-        meta = yaml.load(meta_file)
-
-    assert meta["create_machine"] == LogFolder.create_machine
-    assert "create_time" in meta
-
-    assert lf.data_path.exists()
-    saved_df = pd.read_parquet(lf.data_path)
+    assert lf.df_path.exists()
+    saved_df = pd.read_parquet(lf.df_path)
     pd.testing.assert_frame_equal(saved_df.reset_index(drop=True), expected_df)
 
     loaded = LogFolder(lf.path)
-    assert loaded.reg["create_machine"] == LogFolder.create_machine
-    assert "create_time" in loaded.reg.root
+    pd.testing.assert_frame_equal(loaded.df.reset_index(drop=True), expected_df)
 
 
 def test_add_row_vector_creates_dataframe(tmp_path: Path) -> None:
     lf = LogFolder.new(tmp_path)
-
     lf.add_row(step=[0, 1, 2], current=[0.1, 0.2, 0.3])
 
     expected_df = pd.DataFrame({"step": [0, 1, 2], "current": [0.1, 0.2, 0.3]})
@@ -67,8 +64,16 @@ def test_add_meta_covers_existing_meta(tmp_path: Path) -> None:
         lf.reg["experiment"]["name"]
     assert lf.reg["experiment"]["operator"] == "alice"
     assert lf.reg["run"] == 1
-    assert "create_machine" in lf.reg.root
-    assert "create_time" in lf.reg.root
+
+def test_logfolder_index_persists_updates(tmp_path: Path) -> None:
+    lf = LogFolder.new(tmp_path, title="demo")
+    lf.idx.starred = True
+    lf.idx.trashed = True
+
+    reloaded = LogFolder(lf.path)
+    assert reloaded.idx.starred is True
+    assert reloaded.idx.trashed is True
+    assert reloaded.idx.title == "demo"
 
 
 def test_load_raises_for_missing_directory(tmp_path: Path) -> None:

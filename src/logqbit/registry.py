@@ -56,13 +56,19 @@ class Registry:
     NOTE: Local operations is useful for batch update without frequent file I/O.
     """
 
-    def __init__(self, path: str | Path, auto_reload: bool = True):
-        self.path = Path(path)
+    def __init__(self, path: str | Path, create: bool = True):
+        path = Path(path)
+        if path.exists():
+            pass
+        elif create:
+            path.touch()  # TODO: delay the file creation on first save. 
+        else:
+            raise FileNotFoundError(f"Registry file at '{path}' does not exist.")
+        
+        self.path = path
         self.yaml = get_parser()
-        self.root: CommentedMap = None
-        self.load()
+        self.root: CommentedMap = self.load()
         self._snap = FileSnap(self.path)
-        self.auto_reload = auto_reload
 
     def __getitem__(self, key: str):
         return self.get(key)
@@ -71,11 +77,11 @@ class Registry:
         self.set(key, value, create_parents=True)
 
     def get(self, key: str, default=_sentinel):
-        if self.auto_reload: self.reload()
+        self.reload()
         return self.get_local(key, default)
 
     def set(self, key: str, value, create_parents: bool = True):
-        if self.auto_reload: self.reload()
+        self.reload()
         self.set_local(key, value, create_parents)
         self.save()
 
@@ -110,29 +116,29 @@ class Registry:
     def reload(self):
         """Reloads the file if it has changed since the last load."""
         if self._snap.changed():
-            self.load()
-        return self.root
+            self.root = self.load()
 
-    def load(self):
-        """Load YAML file to self.root."""
+    def load(self, path: str | Path | None = None) -> CommentedMap:
         # NOTE: `yaml.load` also returns `CommentedSeq`, `float`, `str`, `None`
         # or other build-in types depending on the top-level YAML content. But
         # only `CommentedMap` is legal for the use case of this class.
-        with open(self.path, "r", encoding="utf-8") as f:
-            self.root = self.yaml.load(f)
-        return self.root
+        path = self.path if path is None else path
+        with open(path, "r", encoding="utf-8") as f:
+            root = self.yaml.load(f)
+        if root is None:
+            root = CommentedMap()
+        return root
 
     def save(self, path: str | Path | None = None):
-        """Save self.root to YAML file."""
         path = self.path if path is None else path
-        tmp_path = path.with_suffix('.tmp')
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             self.yaml.dump(self.root, f)
-        tmp_path.replace(path)
+        tmp.replace(path)
 
     @deprecated("For backward compatibility only.")
     def copy(self) -> dict:
-        if self.auto_reload: self.reload()
+        self.reload()
         return _to_builtins(self.root)
 
     @deprecated("For backward compatibility only.")
@@ -144,15 +150,21 @@ def get_parser() -> YAML:
     yaml = YAML()
     yaml.preserve_quotes = True
     yaml.width = 100
+    # enable best_style in representer.represent_sequence.
+    yaml.default_flow_style = None
     yaml.indent(mapping=2, sequence=4, offset=2)
     yaml.representer.add_representer(np.ndarray, _represent_numpy_array)
     yaml.representer.add_multi_representer(np.generic, _represent_numpy_scalar)
     _set_yaml_for_labrad_units(yaml)
     return yaml
 
+
 def _represent_numpy_array(dumper: "BaseRepresenter", data: np.ndarray):
     # return dumper.represent_sequence("!numpy", data.tolist(), flow_style=True)
-    return dumper.represent_sequence("tag:yaml.org,2002:seq", data.tolist(), flow_style=True)
+    return dumper.represent_sequence(
+        "tag:yaml.org,2002:seq", data.tolist(), flow_style=True
+    )
+
 
 def _represent_numpy_scalar(dumper: "BaseRepresenter", data: np.generic):
     return dumper.represent_data(data.item())

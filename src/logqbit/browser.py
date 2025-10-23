@@ -13,34 +13,20 @@ from typing import Iterable, List, Optional
 
 import pandas as pd
 import pyarrow.parquet as pq
-from PySide6.QtCore import (
-	QAbstractTableModel,
-	QFileSystemWatcher,
-	QModelIndex,
-	Qt,
-	QTimer,
-)
+from PySide6.QtCore import (QAbstractTableModel, QFileSystemWatcher,
+                            QModelIndex, Qt, QTimer)
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import (
-	QApplication,
-	QFileDialog,
-	QHBoxLayout,
-	QHeaderView,
-	QLabel,
-	QMainWindow,
-	QMenu,
-	QMessageBox,
-	QPlainTextEdit,
-	QPushButton,
-	QSizePolicy,
-	QSplitter,
-	QTableView,
-	QTableWidget,
-	QTableWidgetItem,
-	QTabWidget,
-	QVBoxLayout,
-	QWidget,
-)
+from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout,
+                               QHeaderView, QLabel, QMainWindow, QMenu,
+                               QMessageBox, QPlainTextEdit, QPushButton,
+                               QSizePolicy, QSplitter, QTableView,
+                               QTableWidget, QTableWidgetItem, QTabWidget,
+                               QVBoxLayout, QWidget)
+
+try:  # pragma: no cover - fallback for direct execution
+	from .index import LogIndex
+except ImportError:  # pragma: no cover - fallback for direct execution
+	from index import LogIndex  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +34,21 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 MAX_TABLE_ROWS = 50000
 REFRESH_DEBOUNCE_MS = 250
 
+COL_STAR = 0
+COL_ID = 1
+COL_TITLE = 2
+COL_ROWS = 3
+COL_CREATE_TIME = 4
+COL_CREATE_MACHINE = 5
+
 
 @dataclass
 class IndexInfo:
 	starred: bool = False
 	trashed: bool = False
 	title: str = ""
-	extra_lines: List[str] = field(default_factory=list)
+	create_time: str = ""
+	create_machine: str = ""
 
 
 @dataclass
@@ -62,58 +56,61 @@ class ExperimentRecord:
 	experiment_id: int
 	path: Path
 	index_info: IndexInfo
-	row_count: Optional[int]
-	data_path: Optional[Path]
-	meta_path: Optional[Path]
-	index_path: Optional[Path]
+	row_count: Optional[int] = None
+	columns: List[str] = field(default_factory=list)
+	data_path: Optional[Path] = None
+	meta_path: Optional[Path] = None
+	index_path: Optional[Path] = None
 
 
 def _read_index_file(path: Path) -> IndexInfo:
 	info = IndexInfo()
-	if not path.exists():
+	if path is None or not path.exists():
 		return info
-	extra_lines: List[str] = []
-	try:
-		for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-			line = raw_line.strip()
-			if not line or line.startswith("#"):
-				extra_lines.append(raw_line)
-				continue
-			if ":" not in line:
-				extra_lines.append(raw_line)
-				continue
-			key, value = line.split(":", 1)
-			key = key.strip().lower()
-			value = value.strip()
-			if key == "title":
-				info.title = value
-			elif key == "starred":
-				info.starred = value.lower() in {"1", "true", "yes", "y"}
-			elif key == "trashed":
-				info.trashed = value.lower() in {"1", "true", "yes", "y"}
-			else:
-				extra_lines.append(raw_line)
-	except Exception as exc:  # pragma: no cover - defensive
-		logger.warning("Failed to parse index file %s: %s", path, exc)
-		return info
-	info.extra_lines = extra_lines
-	return info
+	return _read_json_index(path)
 
 
 def _write_index_file(path: Path, info: IndexInfo) -> None:
-	lines: List[str] = []
+	_write_json_index(path, info)
+
+
+def _read_json_index(path: Path) -> IndexInfo:
+	info = IndexInfo()
+	try:
+		log_index = LogIndex(path, create=False)
+	except FileNotFoundError:
+		return info
+	except Exception as exc:  # pragma: no cover - defensive
+		logger.warning("Failed to load index.json %s: %s", path, exc)
+		return info
+	try:
+		log_index.reload()
+	except Exception as exc:  # pragma: no cover - defensive
+		logger.debug("Reload index %s failed: %s", path, exc)
+	data = log_index.root
+	info.title = str(data.get("title", ""))
+	info.starred = bool(data.get("starred", False))
+	info.trashed = bool(data.get("trashed", False))
+	info.create_time = str(data.get("create_time", ""))
+	info.create_machine = str(data.get("create_machine", ""))
+	return info
+
+
+def _write_json_index(path: Path, info: IndexInfo) -> None:
+	create = not path.exists()
+	title = info.title or "untitled"
+	log_index = LogIndex(path, title=title, create=True)
+	try:
+		log_index.reload()
+	except Exception:  # pragma: no cover - defensive
+		pass
 	if info.title:
-		lines.append(f"title: {info.title}")
-	lines.append("starred: yes" if info.starred else "starred: no")
-	lines.append("trashed: yes" if info.trashed else "trashed: no")
-	if info.extra_lines:
-		if lines and info.extra_lines[0].strip():
-			lines.append("")
-		lines.extend(info.extra_lines)
-	text = "\n".join(lines)
-	if text and not text.endswith("\n"):
-		text += "\n"
-	path.write_text(text, encoding="utf-8")
+		log_index.root["title"] = info.title
+	elif create:
+		log_index.root.setdefault("title", title)
+	log_index.root["starred"] = bool(info.starred)
+	log_index.root["trashed"] = bool(info.trashed)
+	log_index.save(timeout=1.0)
 
 
 def _detect_data_file(folder: Path) -> Optional[Path]:
@@ -130,8 +127,8 @@ def _detect_meta_file(folder: Path) -> Optional[Path]:
 
 
 def _detect_index_file(folder: Path) -> Optional[Path]:
-	path = folder / "index"
-	return path if path.exists() else None
+	json_path = folder / "index.json"
+	return json_path if json_path.exists() else None
 
 
 def _list_image_files(folder: Path) -> List[Path]:
@@ -144,23 +141,28 @@ def _list_image_files(folder: Path) -> List[Path]:
 
 
 def _read_meta_text(path: Optional[Path]) -> str:
-	if not path:
+	if not path or not path.exists():
 		return "meta.yaml not found."
 	try:
-		return path.read_text(encoding="utf-8", errors="ignore")
+		text = path.read_text(encoding="utf-8", errors="ignore")
 	except Exception as exc:  # pragma: no cover - defensive
 		logger.error("Failed to read meta file %s: %s", path, exc)
 		return f"Failed to read meta.yaml: {exc}"
+	return text if text.strip() else "(meta.yaml is empty)"
 
 
-def _read_row_count(data_path: Optional[Path]) -> Optional[int]:
+def _read_parquet_summary(data_path: Optional[Path]) -> tuple[Optional[int], List[str]]:
 	if not data_path:
-		return None
+		return None, []
 	try:
-		return pq.ParquetFile(data_path).metadata.num_rows
+		parquet_file = pq.ParquetFile(data_path)
+		metadata = parquet_file.metadata
+		row_count = metadata.num_rows if metadata is not None else None
+		columns = list(parquet_file.schema.names) if parquet_file.schema is not None else []
+		return row_count, columns
 	except Exception as exc:  # pragma: no cover - defensive
-		logger.warning("Failed to read row count from %s: %s", data_path, exc)
-		return None
+		logger.warning("Failed to inspect parquet file %s: %s", data_path, exc)
+		return None, []
 
 
 def _load_dataframe(data_path: Optional[Path]) -> Optional[pd.DataFrame]:
@@ -257,13 +259,15 @@ class LogBrowserWindow(QMainWindow):
 
 		self._base_dir = Path(directory) if directory else Path.cwd()
 		self._records: List[ExperimentRecord] = []
-		self._display_records: List[ExperimentRecord] = []
 		self._current_record: Optional[ExperimentRecord] = None
 		self._list_refresh_pending = False
 		self._detail_refresh_pending = False
 		self._show_trashed = True
 		self._suppress_item_changed = False
 		self._image_tab_indices: List[int] = []
+		self._sort_column = COL_ID
+		self._sort_order = Qt.AscendingOrder
+		self._suppress_sort_sync = False
 
 		self._dir_watcher = QFileSystemWatcher(self)
 		self._detail_watcher = QFileSystemWatcher(self)
@@ -301,8 +305,15 @@ class LogBrowserWindow(QMainWindow):
 
 		splitter = QSplitter(Qt.Horizontal, central)
 
-		self.experiment_table = QTableWidget(0, 4, splitter)
-		self.experiment_table.setHorizontalHeaderLabels(["Star", "ID", "Title", "Rows"])
+		self.experiment_table = QTableWidget(0, 6, splitter)
+		self.experiment_table.setHorizontalHeaderLabels([
+			"Star",
+			"ID",
+			"Title",
+			"Rows",
+			"Create Time",
+			"Create Machine",
+		])
 		self.experiment_table.setSelectionBehavior(QTableWidget.SelectRows)
 		self.experiment_table.setSelectionMode(QTableWidget.SingleSelection)
 		self.experiment_table.verticalHeader().setVisible(False)
@@ -311,13 +322,22 @@ class LogBrowserWindow(QMainWindow):
 		header.setSectionResizeMode(1, QHeaderView.Interactive)
 		header.setSectionResizeMode(3, QHeaderView.Interactive)
 		header.setSectionResizeMode(2, QHeaderView.Stretch)
+		header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+		header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
 		header.resizeSection(0, 40)
 		header.resizeSection(1, 60)
 		header.resizeSection(3, 60)
+		header.setSectionsClickable(True)
+		header.setSortIndicator(self._sort_column, self._sort_order)
+		header.setSortIndicatorShown(True)
+		header.sortIndicatorChanged.connect(self._on_sort_indicator_changed)
 		self.experiment_table.itemSelectionChanged.connect(self._on_experiment_selection_changed)
 		self.experiment_table.setContextMenuPolicy(Qt.CustomContextMenu)
 		self.experiment_table.customContextMenuRequested.connect(self._open_table_context_menu)
 		self.experiment_table.itemChanged.connect(self._on_table_item_changed)
+		self.experiment_table.setSortingEnabled(True)
+		self.experiment_table.setColumnHidden(COL_CREATE_TIME, True)
+		self.experiment_table.setColumnHidden(COL_CREATE_MACHINE, True)
 
 		detail_widget = QWidget(splitter)
 		detail_layout = QVBoxLayout(detail_widget)
@@ -340,12 +360,10 @@ class LogBrowserWindow(QMainWindow):
 		data_tab = QWidget()
 		data_layout = QVBoxLayout(data_tab)
 		data_layout.setContentsMargins(4, 4, 4, 4)
-		self.data_info_label = QLabel("No data loaded.")
 		self.data_table = QTableView()
 		self.data_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 		self.data_table.setSortingEnabled(False)
 		self.data_table.horizontalHeader().setStretchLastSection(True)
-		data_layout.addWidget(self.data_info_label)
 		data_layout.addWidget(self.data_table)
 		self.tab_widget.addTab(data_tab, "Data")
 
@@ -418,12 +436,13 @@ class LogBrowserWindow(QMainWindow):
 		records = self._scan_directory(self._base_dir)
 		self._records = records
 		self._populate_experiment_table(records)
-		if self._display_records:
+		row_count = self.experiment_table.rowCount()
+		if row_count:
 			self.detail_label.setText("Select an experiment to preview.")
 			if previous_id is not None and self._select_experiment_by_id(previous_id):
 				return
-			if self._display_records:
-				self.experiment_table.setCurrentCell(0, 0)
+			if row_count:
+				self.experiment_table.setCurrentCell(0, COL_ID)
 		else:
 			if records:
 				self.detail_label.setText("No experiments to display.")
@@ -435,16 +454,17 @@ class LogBrowserWindow(QMainWindow):
 			self._clear_detail_watcher()
 
 	def _select_experiment_by_id(self, experiment_id: int) -> bool:
-		for row, record in enumerate(self._display_records):
-			if record.experiment_id == experiment_id:
-				table = self.experiment_table
+		table = self.experiment_table
+		for row in range(table.rowCount()):
+			record = self._record_for_row(row)
+			if record and record.experiment_id == experiment_id:
 				table.blockSignals(True)
 				table.selectRow(row)
-				table.setCurrentCell(row, 0)
+				table.setCurrentCell(row, COL_ID)
 				table.blockSignals(False)
-				self._current_record = record
-				self._load_experiment(record)
-				return True
+			self._current_record = record
+			self._load_experiment(record)
+			return True
 		return False
 
 	def refresh_current_experiment(self) -> None:
@@ -466,12 +486,13 @@ class LogBrowserWindow(QMainWindow):
 			data_file = _detect_data_file(entry)
 			index_path = _detect_index_file(entry)
 			index_info = _read_index_file(index_path) if index_path else IndexInfo()
-			row_count = _read_row_count(data_file)
+			row_count, columns = _read_parquet_summary(data_file)
 			record = ExperimentRecord(
 				experiment_id=exp_id,
 				path=entry,
 				index_info=index_info,
 				row_count=row_count,
+				columns=columns,
 				data_path=data_file,
 				meta_path=meta,
 				index_path=index_path,
@@ -482,42 +503,115 @@ class LogBrowserWindow(QMainWindow):
 
 	def _populate_experiment_table(self, records: Iterable[ExperimentRecord]) -> None:
 		table = self.experiment_table
+		was_sorting = table.isSortingEnabled()
+		if was_sorting:
+			table.setSortingEnabled(False)
 		table.blockSignals(True)
 		self._suppress_item_changed = True
 		table.setRowCount(0)
-		self._display_records = []
 		for record in records:
 			if not self._show_trashed and record.index_info.trashed:
 				continue
 			row = table.rowCount()
 			table.insertRow(row)
-			self._display_records.append(record)
-			star_item = QTableWidgetItem()
-			star_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
-			star_item.setCheckState(Qt.Checked if record.index_info.starred else Qt.Unchecked)
-			star_item.setData(Qt.TextAlignmentRole, Qt.AlignCenter)
-			table.setItem(row, 0, star_item)
-
-			id_item = QTableWidgetItem(str(record.experiment_id))
-			id_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-			id_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-			table.setItem(row, 1, id_item)
-
-			title_text = record.index_info.title or "(untitled)"
-			if record.index_info.trashed:
-				title_text = "[trash] " + title_text
-			title_item = QTableWidgetItem(title_text)
-			title_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-			table.setItem(row, 2, title_item)
-
-			rows_display = "" if record.row_count is None else f"{record.row_count:,}"
-			rows_item = QTableWidgetItem(rows_display)
-			rows_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-			rows_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-			table.setItem(row, 3, rows_item)
+			self._set_row_items(row, record)
 		table.blockSignals(False)
 		self._suppress_item_changed = False
-		table.resizeRowsToContents()
+		if was_sorting:
+			table.setSortingEnabled(True)
+			self._apply_current_sort()
+		else:
+			table.resizeRowsToContents()
+
+	def _set_row_items(self, row: int, record: ExperimentRecord) -> None:
+		table = self.experiment_table
+		star_item = QTableWidgetItem()
+		star_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+		star_item.setCheckState(Qt.Checked if record.index_info.starred else Qt.Unchecked)
+		star_item.setData(Qt.TextAlignmentRole, Qt.AlignCenter)
+		star_item.setData(Qt.UserRole, record)
+		table.setItem(row, COL_STAR, star_item)
+
+		id_item = QTableWidgetItem()
+		id_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+		id_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+		id_item.setData(Qt.DisplayRole, record.experiment_id)
+		table.setItem(row, COL_ID, id_item)
+
+		title_text = record.index_info.title or "(untitled)"
+		if record.index_info.trashed:
+			title_text = "[trash] " + title_text
+		title_item = QTableWidgetItem(title_text)
+		title_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+		table.setItem(row, COL_TITLE, title_item)
+
+		rows_item = QTableWidgetItem()
+		rows_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+		rows_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+		rows_value = record.row_count if record.row_count is not None else None
+		rows_item.setData(Qt.DisplayRole, rows_value)
+		table.setItem(row, COL_ROWS, rows_item)
+
+		time_item = QTableWidgetItem(record.index_info.create_time or "")
+		time_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+		table.setItem(row, COL_CREATE_TIME, time_item)
+
+		machine_item = QTableWidgetItem(record.index_info.create_machine or "")
+		machine_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+		table.setItem(row, COL_CREATE_MACHINE, machine_item)
+
+	def _apply_current_sort(self) -> None:
+		if not self.experiment_table.isSortingEnabled():
+			self.experiment_table.resizeRowsToContents()
+			return
+		self._suppress_sort_sync = True
+		try:
+			header = self.experiment_table.horizontalHeader()
+			header.setSortIndicator(self._sort_column, self._sort_order)
+			self.experiment_table.sortItems(self._sort_column, self._sort_order)
+		finally:
+			self._suppress_sort_sync = False
+		self.experiment_table.resizeRowsToContents()
+
+	def _on_sort_indicator_changed(self, section: int, order: Qt.SortOrder) -> None:
+		if self._suppress_sort_sync:
+			return
+		self._sort_column = section
+		self._sort_order = order
+		self._apply_current_sort()
+
+	def _record_for_row(self, row: int) -> Optional[ExperimentRecord]:
+		item = self.experiment_table.item(row, COL_STAR)
+		if item is None:
+			return None
+		return item.data(Qt.UserRole)
+
+	def _find_row_for_record(self, record: ExperimentRecord) -> Optional[int]:
+		table = self.experiment_table
+		for row in range(table.rowCount()):
+			row_record = self._record_for_row(row)
+			if row_record is record:
+				return row
+			if row_record and row_record.experiment_id == record.experiment_id and row_record.path == record.path:
+				return row
+		return None
+
+	def _update_row_items(self, record: ExperimentRecord) -> None:
+		row = self._find_row_for_record(record)
+		if row is None:
+			return
+		table = self.experiment_table
+		table.blockSignals(True)
+		self._suppress_item_changed = True
+		try:
+			self._set_row_items(row, record)
+		finally:
+			table.blockSignals(False)
+			self._suppress_item_changed = False
+		table.resizeRowToContents(row)
+
+	def _toggle_column(self, column: int, visible: bool) -> None:
+		self.experiment_table.setColumnHidden(column, not visible)
 
 	def _on_experiment_selection_changed(self) -> None:
 		table = self.experiment_table
@@ -525,9 +619,9 @@ class LogBrowserWindow(QMainWindow):
 		if not selected:
 			return
 		row = selected[0].row()
-		if row >= len(self._display_records):
+		record = self._record_for_row(row)
+		if record is None:
 			return
-		record = self._display_records[row]
 		self._current_record = record
 		self._load_experiment(record)
 
@@ -539,13 +633,9 @@ class LogBrowserWindow(QMainWindow):
 		if df is not None:
 			model = PandasTableModel(df, self.data_table)
 			self.data_table.setModel(model)
-			total_rows = record.row_count if record.row_count is not None else len(df)
-			truncated = "" if len(df) == total_rows else " (displaying first {0:,} rows)".format(len(df))
-			rows_info = "unknown" if total_rows is None else f"{total_rows:,}"
-			self.data_info_label.setText(f"Rows: {rows_info}{truncated}")
+			record.columns = list(df.columns)
 		else:
 			self.data_table.setModel(None)
-			self.data_info_label.setText("No data available.")
 
 		image_files = _list_image_files(record.path)
 		self._update_image_tabs(image_files)
@@ -560,18 +650,27 @@ class LogBrowserWindow(QMainWindow):
 		if self._suppress_item_changed or item.column() != 0:
 			return
 		row = item.row()
-		if row >= len(self._display_records):
+		record = self._record_for_row(row)
+		if record is None:
 			return
-		record = self._display_records[row]
 		starred = item.checkState() == Qt.Checked
 		if record.index_info.starred == starred:
 			return
+		previous = record.index_info.starred
 		record.index_info.starred = starred
-		self._persist_index_info(record)
+		if not self._persist_index_info(record):
+			record.index_info.starred = previous
+			self._suppress_item_changed = True
+			try:
+				item.setCheckState(Qt.Checked if previous else Qt.Unchecked)
+			except Exception:
+				pass
+			finally:
+				self._suppress_item_changed = False
 
 	def _open_table_context_menu(self, point) -> None:
 		row = self.experiment_table.indexAt(point).row()
-		if 0 <= row < len(self._display_records):
+		if 0 <= row < self.experiment_table.rowCount():
 			self.experiment_table.selectRow(row)
 		record = self._get_selected_record()
 		menu = QMenu(self)
@@ -584,6 +683,13 @@ class LogBrowserWindow(QMainWindow):
 		show_trash_action = menu.addAction("Show Trashed Items")
 		show_trash_action.setCheckable(True)
 		show_trash_action.setChecked(self._show_trashed)
+		menu.addSeparator()
+		create_time_action = menu.addAction("Show Create Time Column")
+		create_time_action.setCheckable(True)
+		create_time_action.setChecked(not self.experiment_table.isColumnHidden(COL_CREATE_TIME))
+		create_machine_action = menu.addAction("Show Create Machine Column")
+		create_machine_action.setCheckable(True)
+		create_machine_action.setChecked(not self.experiment_table.isColumnHidden(COL_CREATE_MACHINE))
 		menu.addSeparator()
 		open_explorer = menu.addAction("Open in Explorer")
 		if record is None:
@@ -610,6 +716,10 @@ class LogBrowserWindow(QMainWindow):
 			self._set_record_trashed(record, False)
 		elif chosen == show_trash_action:
 			self._toggle_show_trashed()
+		elif chosen == create_time_action:
+			self._toggle_column(COL_CREATE_TIME, create_time_action.isChecked())
+		elif chosen == create_machine_action:
+			self._toggle_column(COL_CREATE_MACHINE, create_machine_action.isChecked())
 		elif chosen == open_explorer and record is not None:
 			self._open_record_in_explorer(record)
 
@@ -618,22 +728,26 @@ class LogBrowserWindow(QMainWindow):
 		if not selected:
 			return None
 		row = selected[0].row()
-		if 0 <= row < len(self._display_records):
-			return self._display_records[row]
-		return None
+		return self._record_for_row(row)
 
 	def _set_record_starred(self, record: ExperimentRecord, value: bool) -> None:
 		if record.index_info.starred == value:
 			return
+		previous = record.index_info.starred
 		record.index_info.starred = value
-		self._persist_index_info(record)
+		if not self._persist_index_info(record):
+			record.index_info.starred = previous
+			return
 		self.refresh_experiments()
 
 	def _set_record_trashed(self, record: ExperimentRecord, value: bool) -> None:
 		if record.index_info.trashed == value:
 			return
+		previous = record.index_info.trashed
 		record.index_info.trashed = value
-		self._persist_index_info(record)
+		if not self._persist_index_info(record):
+			record.index_info.trashed = previous
+			return
 		self.refresh_experiments()
 
 	def _toggle_show_trashed(self) -> None:
@@ -653,11 +767,21 @@ class LogBrowserWindow(QMainWindow):
 			logger.error("Failed to open explorer for %s: %s", path, exc)
 			QMessageBox.warning(self, "Open in Explorer", f"Failed to open file browser: {exc}")
 
-	def _persist_index_info(self, record: ExperimentRecord) -> None:
-		index_path = record.index_path or (record.path / "index")
+	def _persist_index_info(self, record: ExperimentRecord) -> bool:
+		index_path = record.index_path
+		if index_path is None or not index_path.exists():
+			index_path = record.path / "index.json"
 		record.index_path = index_path
 		try:
 			_write_index_file(index_path, record.index_info)
+		except TimeoutError as exc:  # pragma: no cover - defensive
+			logger.warning("Timed out updating index file %s: %s", index_path, exc)
+			QMessageBox.warning(
+				self,
+				"Update Failed",
+				"Another process is updating this log. Please try again.",
+			)
+			return False
 		except Exception as exc:  # pragma: no cover - defensive
 			logger.error("Failed to update index file %s: %s", index_path, exc)
 			QMessageBox.warning(
@@ -665,14 +789,17 @@ class LogBrowserWindow(QMainWindow):
 				"Update Failed",
 				f"Failed to update index file for experiment {record.experiment_id}: {exc}",
 			)
-			return
+			return False
+		record.index_info = _read_index_file(index_path)
+		self._update_row_items(record)
+		self._apply_current_sort()
 		if self._current_record and self._current_record.experiment_id == record.experiment_id:
 			self._update_detail_watcher(record)
+		return True
 
 	def _clear_preview_panels(self) -> None:
 		self.meta_view.setPlainText("")
 		self.data_table.setModel(None)
-		self.data_info_label.setText("No data loaded.")
 		self._clear_image_tabs()
 
 	def _clear_detail_watcher(self) -> None:
@@ -720,6 +847,25 @@ def ensure_application() -> QApplication:
 		app.setApplicationName("Logqbit Log Browser")
 	return app
 
+
+def open_browser(directory: Optional[str] = None) -> LogBrowserWindow:
+	app = ensure_application()
+	window = LogBrowserWindow(Path(directory) if directory else None)
+	window.show()
+	return window
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+	args = argv if argv is not None else sys.argv[1:]
+	directory = Path(args[0]).expanduser().resolve() if args else None
+	app = ensure_application()
+	window = LogBrowserWindow(directory)
+	window.show()
+	return app.exec()
+
+
+if __name__ == "__main__":  # pragma: no cover - manual run
+	sys.exit(main())
 
 def open_browser(directory: Optional[str] = None) -> LogBrowserWindow:
 	app = ensure_application()

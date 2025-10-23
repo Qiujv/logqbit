@@ -26,11 +26,12 @@ def temp_yaml(tmp_path: Path) -> Path:
 
 
 def test_get_unit_value(temp_yaml):
+    pytest.importorskip("labrad.units", reason="requires labrad.units for unit parsing")
     reg = Registry(temp_yaml)
     val = reg.get("Device/Q1/frr")
     assert hasattr(val, "unit")
     assert val.unit.name == "GHz"
-    assert abs(val._value - 5.856) < 1e-9
+    assert pytest.approx(val._value, rel=0, abs=1e-9) == 5.856
 
 
 def test_set_and_persistence(temp_yaml):
@@ -50,13 +51,14 @@ def test_local_change_not_saved_until_save(temp_yaml):
 
     # new Registry instance (reads file) should not see local_only
     reg2 = Registry(temp_yaml)
-    with pytest.raises(Exception):
+    with pytest.raises(KeyError):
         reg2.get("local_only")
 
     # after saving, the change should persist
     reg.save()
     reg2.reload()
     assert reg2.get("local_only") == "temp"
+    assert reg.get("local_only") == "temp"
 
 
 def test_reload_detects_external_change(temp_yaml):
@@ -69,3 +71,9 @@ def test_reload_detects_external_change(temp_yaml):
 
     # Change should be detected and reloaded automatically
     assert reg.get("period_ns") == 12345
+
+
+def test_create_false_raises(tmp_path):
+    path = tmp_path / "missing.yaml"
+    with pytest.raises(FileNotFoundError):
+        Registry(path, create=False)
