@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import socket
 from pathlib import Path
 
 import pandas as pd
@@ -19,13 +18,6 @@ def test_new_creates_incremental_directory(tmp_path: Path) -> None:
 
     assert lf.path.parent == parent
     assert lf.path.name == "2"
-
-    index_data = lf.idx.root
-    assert index_data["title"] == "untitled"
-    assert index_data["starred"] is False
-    assert index_data["trashed"] is False
-    assert index_data["create_machine"] == socket.gethostname()
-    assert index_data["create_time"]
 
 
 def test_add_row_scalar_and_save(tmp_path: Path) -> None:
@@ -65,14 +57,15 @@ def test_add_meta_covers_existing_meta(tmp_path: Path) -> None:
     assert lf.reg["experiment"]["operator"] == "alice"
     assert lf.reg["run"] == 1
 
+
 def test_logfolder_index_persists_updates(tmp_path: Path) -> None:
     lf = LogFolder.new(tmp_path, title="demo")
-    lf.idx.starred = True
-    lf.idx.trashed = True
+    lf.idx.star = 1
+    lf.idx.trash = True
 
     reloaded = LogFolder(lf.path)
-    assert reloaded.idx.starred is True
-    assert reloaded.idx.trashed is True
+    assert reloaded.idx.star == 1
+    assert reloaded.idx.trash is True
     assert reloaded.idx.title == "demo"
 
 

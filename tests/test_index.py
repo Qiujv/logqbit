@@ -14,8 +14,9 @@ def test_logindex_creates_defaults(tmp_path: Path) -> None:
 
     assert idx_path.exists()
     assert idx.title == "untitled"
-    assert idx.starred is False
-    assert idx.trashed is False
+    assert idx.star == 0
+    assert idx.trash is False
+    assert idx.plot_axes == []
     datetime.strptime(idx.root["create_time"], "%Y-%m-%d %H:%M:%S")
     assert idx.root["create_machine"] == socket.gethostname()
 
@@ -25,13 +26,15 @@ def test_logindex_persists_updates(tmp_path: Path) -> None:
     idx = LogIndex(idx_path, title="demo")
 
     idx.title = "demo-updated"
-    idx.starred = True
-    idx.trashed = True
+    idx.star = 3
+    idx.trash = True
+    idx.plot_axes = ["x", "y"]
 
     reloaded = LogIndex(idx_path)
     assert reloaded.title == "demo-updated"
-    assert reloaded.starred is True
-    assert reloaded.trashed is True
+    assert reloaded.star == 3
+    assert reloaded.trash is True
+    assert reloaded.plot_axes == ["x", "y"]
     assert not idx_path.with_suffix(".lock").exists()
 
 

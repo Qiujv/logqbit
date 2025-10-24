@@ -27,8 +27,9 @@ class LogIndex:
                 json.dump(
                     {
                         "title": title,
-                        "starred": False,
-                        "trashed": False,
+                        "star": 0,
+                        "trash": False,
+                        "plot_axes": [],
                         "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "create_machine": socket.gethostname(),
                     },
@@ -78,20 +79,33 @@ class LogIndex:
         self["title"] = str(value)
 
     @property
-    def starred(self) -> bool:
-        return self["starred"]
+    def star(self) -> int:
+        return int(self["star"])
 
-    @starred.setter
-    def starred(self, value: bool):
-        self["starred"] = bool(value)
+    @star.setter
+    def star(self, value: int):
+        self["star"] = int(value)
 
     @property
-    def trashed(self) -> bool:
-        return self["trashed"]
+    def trash(self) -> bool:
+        return bool(self["trash"])
 
-    @trashed.setter
-    def trashed(self, value: bool):
-        self["trashed"] = bool(value)
+    @trash.setter
+    def trash(self, value: bool):
+        self["trash"] = bool(value)
+
+    @property
+    def plot_axes(self) -> list[str]:
+        axes = self["plot_axes"]
+        if isinstance(axes, list):
+            return [str(item) for item in axes]
+        return []
+
+    @plot_axes.setter
+    def plot_axes(self, value: list[str]):
+        if not isinstance(value, list):
+            raise TypeError("plot_axes must be a list of strings")
+        self["plot_axes"] = [str(item) for item in value]
 
 
 class FileLock:
@@ -101,7 +115,7 @@ class FileLock:
         timeout: float = 0.5,
         delete_on_release: bool = True,
     ):
-        self.path = Path(path).with_suffix('.lock')
+        self.path = Path(path).with_suffix(".lock")
         self.timeout = timeout
         self.delete_on_release = delete_on_release
         self._file = None
