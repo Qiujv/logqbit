@@ -12,8 +12,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pyarrow.ipc
 from PySide6.QtCore import (
     QAbstractTableModel,
     QFileSystemWatcher,
@@ -53,7 +52,6 @@ except ImportError:  # pragma: no cover - fallback for direct execution
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
-MAX_TABLE_ROWS = 50000
 REFRESH_DEBOUNCE_MS = 250
 
 COL_ID = 0
@@ -158,11 +156,8 @@ def _write_json_index(path: Path, info: IndexInfo) -> None:
 
 
 def _detect_data_file(folder: Path) -> Optional[Path]:
-    for candidate in ("data.parquent", "data.parquet"):
-        path = folder / candidate
-        if path.exists():
-            return path
-    return None
+    data_path = folder / "data.feather"
+    return data_path if data_path.exists() else None
 
 
 def _detect_meta_file(folder: Path) -> Optional[Path]:
@@ -195,19 +190,21 @@ def _read_meta_text(path: Optional[Path]) -> str:
     return text if text.strip() else "(meta.yaml is empty)"
 
 
-def _read_parquet_summary(data_path: Optional[Path]) -> tuple[Optional[int], List[str]]:
+def _read_feather_summary(data_path: Optional[Path]) -> tuple[Optional[int], List[str]]:
     if not data_path:
         return None, []
     try:
-        parquet_file = pq.ParquetFile(data_path)
-        metadata = parquet_file.metadata
-        row_count = metadata.num_rows if metadata is not None else None
-        columns = (
-            list(parquet_file.schema.names) if parquet_file.schema is not None else []
-        )
+        with pyarrow.ipc.open_file(data_path) as reader:
+            schema = reader.schema
+            row_count = sum(
+                reader.get_batch(i).num_rows for i in range(reader.num_record_batches)
+            )
+            columns = [str(name) for name in schema.names]
         return row_count, columns
+    except FileNotFoundError:
+        return None, []
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Failed to inspect parquet file %s: %s", data_path, exc)
+        logger.warning("Failed to inspect feather file %s: %s", data_path, exc)
         return None, []
 
 
@@ -215,42 +212,9 @@ def _load_dataframe(data_path: Optional[Path]) -> Optional[pd.DataFrame]:
     if not data_path:
         return None
     try:
-        df = pd.read_parquet(data_path)
-        if len(df) > MAX_TABLE_ROWS:
-            return df.head(MAX_TABLE_ROWS)
-        return df
+        return pd.read_feather(data_path)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.error("Failed to read parquet file %s: %s", data_path, exc)
-        return None
-
-
-def _load_dataframe_preview(
-    data_path: Optional[Path], limit: int
-) -> Optional[pd.DataFrame]:
-    if not data_path or limit <= 0:
-        return None
-    remaining = limit
-    tables: List[pa.Table] = []
-    try:
-        parquet_file = pq.ParquetFile(data_path)
-        for group_index in range(parquet_file.num_row_groups):
-            table = parquet_file.read_row_group(group_index)
-            if table is None or table.num_rows == 0:
-                continue
-            if table.num_rows > remaining:
-                table = table.slice(0, remaining)
-            tables.append(table)
-            remaining -= table.num_rows
-            if remaining <= 0:
-                break
-        if not tables:
-            return pd.DataFrame()
-        preview_table = (
-            tables[0] if len(tables) == 1 else pa.concat_tables(tables, promote=True)
-        )
-        return preview_table.to_pandas()
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.error("Failed to read parquet preview %s: %s", data_path, exc)
+        logger.error("Failed to read feather file %s: %s", data_path, exc)
         return None
 
 
@@ -620,7 +584,7 @@ class LogBrowserWindow(QMainWindow):
             data_file = _detect_data_file(entry)
             index_path = _detect_index_file(entry)
             index_info = _read_index_file(index_path) if index_path else IndexInfo()
-            row_count, columns = _read_parquet_summary(data_file)
+            row_count, columns = _read_feather_summary(data_file)
             record = ExperimentRecord(
                 experiment_id=exp_id,
                 path=entry,
@@ -812,18 +776,12 @@ class LogBrowserWindow(QMainWindow):
             preview_only = False
 
         frame: Optional[pd.DataFrame]
-        total_rows = record.row_count
         has_more = False
 
-        if preview_only:
-            frame = record.data_preview
-            if frame is None or len(frame) < limit:
-                if record.data_frame is not None and len(record.data_frame) >= limit:
-                    frame = record.data_frame.head(limit).copy()
-                else:
-                    frame = _load_dataframe_preview(record.data_path, limit)
-                record.data_preview = frame
-            if frame is None:
+        dataframe = record.data_frame if record.data_loaded_fully else None
+        if dataframe is None:
+            dataframe = _load_dataframe(record.data_path)
+            if dataframe is None:
                 message = (
                     "Data file not found."
                     if not record.data_path or not record.data_path.exists()
@@ -833,34 +791,23 @@ class LogBrowserWindow(QMainWindow):
                 self._set_data_table_empty(message)
                 self._data_preview_cap = self._data_preview_limit
                 return
-            frame_rows = len(frame)
-            if total_rows is not None:
-                has_more = total_rows > frame_rows
-            else:
-                has_more = True if limit else False
+            record.data_frame = dataframe
+            record.data_loaded_fully = True
+            record.row_count = len(dataframe)
+
+        total_rows = len(dataframe)
+
+        if preview_only:
+            frame = dataframe.head(limit).copy()
+            record.data_preview = frame
+            has_more = total_rows > len(frame)
         else:
-            frame = record.data_frame
-            if frame is None or not record.data_loaded_fully:
-                frame = _load_dataframe(record.data_path)
-                if frame is None:
-                    message = (
-                        "Data file not found."
-                        if not record.data_path or not record.data_path.exists()
-                        else "Failed to load data."
-                    )
-                    record.columns = []
-                    self._set_data_table_empty(message)
-                    self._data_preview_cap = self._data_preview_limit
-                    return
-                record.data_frame = frame
-                record.data_loaded_fully = True
+            frame = dataframe
             record.data_preview = (
                 frame.head(self._data_preview_limit).copy()
-                if frame is not None
-                else None
+                if frame is not None and len(frame) > self._data_preview_limit
+                else frame
             )
-            frame_rows = len(frame)
-            total_rows = frame_rows
             has_more = False
 
         if frame is None:

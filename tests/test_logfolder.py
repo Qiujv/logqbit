@@ -30,7 +30,7 @@ def test_add_row_scalar_and_save(tmp_path: Path) -> None:
     lf.flush()
 
     assert lf.df_path.exists()
-    saved_df = pd.read_parquet(lf.df_path)
+    saved_df = pd.read_feather(lf.df_path)
     pd.testing.assert_frame_equal(saved_df.reset_index(drop=True), expected_df)
 
     loaded = LogFolder(lf.path)

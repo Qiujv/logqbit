@@ -39,7 +39,7 @@ class LogFolder:
         # File created anyway.
         self.idx = LogIndex(path / "index.json", title, create=True)
         # File create on setting values.
-        self._handler = _DataHandler(path / "data.parquet", save_delay_secs)
+        self._handler = _DataHandler(path / "data.feather", save_delay_secs)
         weakref.finalize(self, self._handler.stop)
 
     @cached_property
@@ -144,7 +144,7 @@ class _DataHandler:
         self.path = Path(path)
         self._segs: list[pd.DataFrame] = []
         if self.path.exists():
-            self._segs.append(pd.read_parquet(self.path))
+            self._segs.append(pd.read_feather(self.path))
         self._records: list[dict[str, float | int | str]] = []
 
         self.save_delay_secs = save_delay_secs
@@ -197,7 +197,7 @@ class _DataHandler:
                 self._skip_debounce.clear()
             df = self.get_df(_clear=True)
             tmp = self.path.with_suffix(".tmp")
-            df.to_parquet(tmp, index=False)
+            df.to_feather(tmp)
             tmp.replace(self.path)
 
     def stop(self):
