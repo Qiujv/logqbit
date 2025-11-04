@@ -17,7 +17,7 @@ except ImportError:
     from registry import FileSnap  # type: ignore
 
 
-class LogIndex:
+class LogMetadata:
     def __init__(self, path: str | Path, title: str = "untitled", create: bool = True):
         path = Path(path)
         if path.exists():
@@ -36,7 +36,7 @@ class LogIndex:
                     f,
                 )
         else:
-            raise FileNotFoundError(f"Index file at '{path}' does not exist.")
+            raise FileNotFoundError(f"Metadata file at '{path}' does not exist.")
 
         self.path = path
         self.root: dict = self.load()
@@ -107,6 +107,18 @@ class LogIndex:
             raise TypeError("plot_axes must be a list of strings")
         self["plot_axes"] = [str(item) for item in value]
 
+    @property
+    def create_time(self) -> str:
+        """Get creation time."""
+        value = self["create_time"]
+        return str(value) if value is not None else ""
+
+    @property
+    def create_machine(self) -> str:
+        """Get creation machine."""
+        value = self["create_machine"]
+        return str(value) if value is not None else ""
+
 
 class FileLock:
     def __init__(
@@ -135,7 +147,7 @@ class FileLock:
                     fcntl.flock(self._file, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return  # 成功获取锁
             except (OSError, BlockingIOError) as e:
-                # 检查是否为“资源被占用”错误
+                # 检查是否为"资源被占用"错误
                 if getattr(e, "errno", None) not in (errno.EACCES, errno.EAGAIN):
                     raise
                 if time.time() > deadline:

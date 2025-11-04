@@ -60,13 +60,13 @@ def test_add_meta_covers_existing_meta(tmp_path: Path) -> None:
 
 def test_logfolder_index_persists_updates(tmp_path: Path) -> None:
     lf = LogFolder.new(tmp_path, title="demo")
-    lf.idx.star = 1
-    lf.idx.trash = True
+    lf.meta.star = 1
+    lf.meta.trash = True
 
     reloaded = LogFolder(lf.path)
-    assert reloaded.idx.star == 1
-    assert reloaded.idx.trash is True
-    assert reloaded.idx.title == "demo"
+    assert reloaded.meta.star == 1
+    assert reloaded.meta.trash is True
+    assert reloaded.meta.title == "demo"
 
 
 def test_load_raises_for_missing_directory(tmp_path: Path) -> None:

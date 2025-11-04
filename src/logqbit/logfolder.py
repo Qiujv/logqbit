@@ -13,7 +13,7 @@ import pandas as pd
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from .index import LogIndex
+from .metadata import LogMetadata
 from .registry import Registry, get_parser
 
 yaml = get_parser()
@@ -37,7 +37,7 @@ class LogFolder:
 
         self.path = path
         # File created anyway.
-        self.idx = LogIndex(path / "index.json", title, create=True)
+        self.meta = LogMetadata(path / "metadata.json", title, create=True)
         # File create on setting values.
         self._handler = _DataHandler(path / "data.feather", save_delay_secs)
         weakref.finalize(self, self._handler.stop)
@@ -45,7 +45,7 @@ class LogFolder:
     @cached_property
     def reg(self) -> Registry:
         # File create on setting values.
-        return Registry(self.path / "meta.yaml", create=True)
+        return Registry(self.path / "const.yaml", create=True)
 
     @property
     def df(self) -> pd.DataFrame:

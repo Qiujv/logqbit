@@ -5,54 +5,54 @@ from pathlib import Path
 
 import pytest
 
-from logqbit.index import FileLock, LogIndex
+from logqbit.metadata import FileLock, LogMetadata
 
 
-def test_logindex_creates_defaults(tmp_path: Path) -> None:
-    idx_path = tmp_path / "index.json"
-    idx = LogIndex(idx_path)
+def test_logmetadata_creates_defaults(tmp_path: Path) -> None:
+    meta_path = tmp_path / "metadata.json"
+    meta = LogMetadata(meta_path)
 
-    assert idx_path.exists()
-    assert idx.title == "untitled"
-    assert idx.star == 0
-    assert idx.trash is False
-    assert idx.plot_axes == []
-    datetime.strptime(idx.root["create_time"], "%Y-%m-%d %H:%M:%S")
-    assert idx.root["create_machine"] == socket.gethostname()
+    assert meta_path.exists()
+    assert meta.title == "untitled"
+    assert meta.star == 0
+    assert meta.trash is False
+    assert meta.plot_axes == []
+    datetime.strptime(meta.root["create_time"], "%Y-%m-%d %H:%M:%S")
+    assert meta.root["create_machine"] == socket.gethostname()
 
 
-def test_logindex_persists_updates(tmp_path: Path) -> None:
-    idx_path = tmp_path / "index.json"
-    idx = LogIndex(idx_path, title="demo")
+def test_logmetadata_persists_updates(tmp_path: Path) -> None:
+    meta_path = tmp_path / "metadata.json"
+    meta = LogMetadata(meta_path, title="demo")
 
-    idx.title = "demo-updated"
-    idx.star = 3
-    idx.trash = True
-    idx.plot_axes = ["x", "y"]
+    meta.title = "demo-updated"
+    meta.star = 3
+    meta.trash = True
+    meta.plot_axes = ["x", "y"]
 
-    reloaded = LogIndex(idx_path)
+    reloaded = LogMetadata(meta_path)
     assert reloaded.title == "demo-updated"
     assert reloaded.star == 3
     assert reloaded.trash is True
     assert reloaded.plot_axes == ["x", "y"]
-    assert not idx_path.with_suffix(".lock").exists()
+    assert not meta_path.with_suffix(".lock").exists()
 
 
-def test_logindex_detects_external_change(tmp_path: Path) -> None:
-    idx_path = tmp_path / "index.json"
-    idx = LogIndex(idx_path)
+def test_logmetadata_detects_external_change(tmp_path: Path) -> None:
+    meta_path = tmp_path / "metadata.json"
+    meta = LogMetadata(meta_path)
 
-    payload = json.loads(idx_path.read_text(encoding="utf-8"))
+    payload = json.loads(meta_path.read_text(encoding="utf-8"))
     payload["title"] = "external"
-    idx_path.write_text(json.dumps(payload), encoding="utf-8")
+    meta_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    assert idx.title == "external"
+    assert meta.title == "external"
 
 
-def test_logindex_create_false(tmp_path: Path) -> None:
+def test_logmetadata_create_false(tmp_path: Path) -> None:
     missing = tmp_path / "missing.json"
     with pytest.raises(FileNotFoundError):
-        LogIndex(missing, create=False)
+        LogMetadata(missing, create=False)
 
 
 def test_filelock_context_cleans_up(tmp_path: Path) -> None:
