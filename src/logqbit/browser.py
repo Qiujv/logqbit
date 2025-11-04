@@ -17,10 +17,11 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QFileSystemWatcher,
     QModelIndex,
+    QSettings,
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -60,6 +62,11 @@ COL_ROWS = 2
 COL_CREATE_TIME = 3
 COL_CREATE_MACHINE = 4
 COL_PLOT_AXES = 5
+
+SETTINGS_ORG = "LogQbit"
+SETTINGS_APP = "LogBrowser"
+SETTINGS_RECENT_DIRS_KEY = "recent/directories"
+SETTINGS_THEME_KEY = "ui/theme"
 
 
 @dataclass
@@ -335,6 +342,16 @@ class LogBrowserWindow(QMainWindow):
         self._data_preview_active = False
         self._data_preview_cap = 100
         self._shortcuts: List[QAction] = []
+        app = QApplication.instance()
+        self._system_palette = app.palette() if app else QPalette()
+        self._theme_mode_cycle = ["light", "dark", "system"]
+        self._theme_mode_index = 2  # start at 'system'
+        self._settings = QSettings(
+            QSettings.IniFormat, QSettings.UserScope, SETTINGS_ORG, SETTINGS_APP
+        )
+        self._recent_directories: List[Path] = []
+        self._restore_state(Path(directory) if directory else None)
+        self._directory_menu: Optional[QMenu] = None
 
         self._dir_watcher = QFileSystemWatcher(self)
         self._detail_watcher = QFileSystemWatcher(self)
@@ -344,6 +361,7 @@ class LogBrowserWindow(QMainWindow):
         self._detail_watcher.fileChanged.connect(self._schedule_detail_refresh)
 
         self._build_ui()
+        self._apply_theme()
         self._sync_directory_watcher()
         self.refresh_experiments()
 
@@ -360,14 +378,22 @@ class LogBrowserWindow(QMainWindow):
         self.directory_label = QLabel(str(self._base_dir))
         self.directory_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.directory_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        change_button = QPushButton("Change...")
-        refresh_button = QPushButton("Refresh")
-        change_button.clicked.connect(self._on_change_directory_clicked)
+        self.directory_button = QToolButton()
+        self.directory_button.setText("Change dir...")
+        self.directory_button.setPopupMode(QToolButton.InstantPopup)
+        refresh_button = QPushButton("🔄️Refresh")
+        self.theme_button = QPushButton()
+        self.theme_button.setFixedWidth(36)
+        self.theme_button.setFocusPolicy(Qt.NoFocus)
+        self.theme_button.clicked.connect(self._on_theme_button_clicked)
+        self._directory_menu = QMenu(self.directory_button)
+        self.directory_button.setMenu(self._directory_menu)
         refresh_button.clicked.connect(self._on_refresh_clicked)
         top_bar.addWidget(QLabel("Directory:"))
         top_bar.addWidget(self.directory_label)
-        top_bar.addWidget(change_button)
+        top_bar.addWidget(self.directory_button)
         top_bar.addWidget(refresh_button)
+        top_bar.addWidget(self.theme_button)
         layout.addLayout(top_bar)
 
         splitter = QSplitter(Qt.Horizontal, central)
@@ -473,12 +499,98 @@ class LogBrowserWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self._setup_shortcuts()
+        self._rebuild_directory_menu()
+        self._update_theme_button()
+
+    def _restore_state(self, explicit_directory: Optional[Path]) -> None:
+        stored = self._settings.value(SETTINGS_RECENT_DIRS_KEY, [])
+        if isinstance(stored, str):
+            candidates = [stored]
+        elif isinstance(stored, (list, tuple)):
+            candidates = list(stored)
+        else:
+            candidates = []
+        recent_paths: List[Path] = []
+        for item in candidates:
+            text = str(item)
+            if not text:
+                continue
+            try:
+                path = Path(text)
+            except Exception:
+                continue
+            if path not in recent_paths:
+                recent_paths.append(path)
+        if explicit_directory is not None:
+            base_dir = explicit_directory
+        elif recent_paths:
+            base_dir = recent_paths[0]
+        else:
+            base_dir = Path.cwd()
+        self._base_dir = base_dir
+        self._recent_directories = [base_dir] + [p for p in recent_paths if p != base_dir]
+        self._recent_directories = self._recent_directories[:5]
+        saved_mode = self._settings.value(SETTINGS_THEME_KEY, "system")
+        if isinstance(saved_mode, str) and saved_mode in self._theme_mode_cycle:
+            self._theme_mode_index = self._theme_mode_cycle.index(saved_mode)
+        self._settings.setValue(
+            SETTINGS_RECENT_DIRS_KEY, [str(path) for path in self._recent_directories]
+        )
+
+    def _rebuild_directory_menu(self) -> None:
+        if self._directory_menu is None:
+            return
+        self._directory_menu.clear()
+        for path in self._recent_directories:
+            action = self._directory_menu.addAction(str(path))
+            action.triggered.connect(
+                lambda _checked=False, target=path: self.set_directory(target)
+            )
+        if self._recent_directories:
+            self._directory_menu.addSeparator()
+        open_action = self._directory_menu.addAction("Open Other Folder...")
+        open_action.triggered.connect(self._open_directory_dialog)
+
+    def _persist_recent_directories(self, rebuild_menu: bool = True) -> None:
+        self._settings.setValue(
+            SETTINGS_RECENT_DIRS_KEY, [str(path) for path in self._recent_directories]
+        )
+        if rebuild_menu and self._directory_menu is not None:
+            self._rebuild_directory_menu()
+
+    def _update_recent_directories(self, path: Path) -> None:
+        resolved = Path(path)
+        entries = [resolved]
+        for existing in self._recent_directories:
+            if existing != resolved:
+                entries.append(existing)
+            if len(entries) >= 5:
+                break
+        self._recent_directories = entries
+        self._persist_recent_directories()
+
+    def _open_directory_dialog(self) -> None:
+        current = str(self._base_dir)
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Select log directory", current
+        )
+        if chosen:
+            self.set_directory(Path(chosen))
+
+    def _save_theme_mode(self) -> None:
+        mode = self._theme_mode_cycle[self._theme_mode_index]
+        self._settings.setValue(SETTINGS_THEME_KEY, mode)
 
     def _on_destroyed(self) -> None:
         try:
             LogBrowserWindow._open_windows.remove(self)
         except ValueError:
             pass
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override naming
+        self._persist_recent_directories(rebuild_menu=False)
+        self._save_theme_mode()
+        super().closeEvent(event)
 
     def _open_new_window(self) -> None:
         window = LogBrowserWindow(self._base_dir)
@@ -513,19 +625,16 @@ class LogBrowserWindow(QMainWindow):
         self._detail_refresh_pending = False
         self.refresh_current_experiment()
 
-    def _on_change_directory_clicked(self) -> None:
-        current = str(self._base_dir)
-        chosen = QFileDialog.getExistingDirectory(self, "Select log directory", current)
-        if chosen:
-            self.set_directory(Path(chosen))
-
     def set_directory(self, directory: Path) -> None:
-        if directory == self._base_dir:
-            return
-        self._base_dir = directory
-        self.directory_label.setText(str(self._base_dir))
-        self._sync_directory_watcher()
-        self.refresh_experiments()
+        path = Path(directory)
+        if path != self._base_dir:
+            self._base_dir = path
+            self.directory_label.setText(str(self._base_dir))
+            self._sync_directory_watcher()
+            self.refresh_experiments()
+        else:
+            self.directory_label.setText(str(self._base_dir))
+        self._update_recent_directories(path)
 
     def refresh_experiments(self) -> None:
         previous_id = (
@@ -846,7 +955,6 @@ class LogBrowserWindow(QMainWindow):
         if not self._data_preview_active:
             self._show_data_table(record, preview_only=False)
             return
-        previous_cap = self._data_preview_cap
         self._data_preview_cap += 3000
         self._show_data_table(record, preview_only=True)
 
@@ -1070,6 +1178,95 @@ class LogBrowserWindow(QMainWindow):
         add_shortcut(Qt.Key_1, lambda: self._shortcut_set_star(1))
         add_shortcut(Qt.Key_2, lambda: self._shortcut_set_star(2))
         add_shortcut(Qt.Key_3, lambda: self._shortcut_set_star(3))
+
+    def _on_theme_button_clicked(self) -> None:
+        self._theme_mode_index = (self._theme_mode_index + 1) % len(self._theme_mode_cycle)
+        self._apply_theme()
+
+    def _update_theme_button(self) -> None:
+        mode = self._theme_mode_cycle[self._theme_mode_index]
+        emoji_map = {
+            "light": "🌝",
+            "dark": "🌚",
+            "system": "🌗",
+        }
+        tooltip_map = {
+            "light": "Light mode",
+            "dark": "Dark mode",
+            "system": "Follow system theme",
+        }
+        if hasattr(self, "theme_button"):
+            self.theme_button.setText(emoji_map.get(mode, "🌗"))
+            self.theme_button.setToolTip(tooltip_map.get(mode, "Follow system theme"))
+
+    def _apply_theme(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        mode = self._theme_mode_cycle[self._theme_mode_index]
+        style_hints = getattr(app, "styleHints", None)
+        can_use_color_scheme = False
+        hints = None
+        if style_hints and hasattr(Qt, "ColorScheme"):
+            hints = style_hints()
+            can_use_color_scheme = hasattr(hints, "setColorScheme")
+        if can_use_color_scheme:
+            unknown_scheme = getattr(Qt.ColorScheme, "Unknown", Qt.ColorScheme.Light)
+            hints.setColorScheme(
+                Qt.ColorScheme.Dark
+                if mode == "dark"
+                else Qt.ColorScheme.Light
+                if mode == "light"
+                else unknown_scheme
+            )
+            app.setPalette(self._system_palette)
+            app.setStyleSheet("")
+        else:
+            if mode == "system":
+                app.setPalette(self._system_palette)
+                app.setStyleSheet("")
+            elif mode == "dark":
+                app.setPalette(self._create_dark_palette())
+                app.setStyleSheet("")
+            else:  # light
+                app.setPalette(self._create_light_palette())
+                app.setStyleSheet("")
+        self._save_theme_mode()
+        self._update_theme_button()
+
+    def _create_light_palette(self) -> QPalette:
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(250, 250, 250))
+        palette.setColor(QPalette.WindowText, QColor(30, 30, 30))
+        palette.setColor(QPalette.Base, QColor(255, 255, 255))
+        palette.setColor(QPalette.AlternateBase, QColor(245, 245, 245))
+        palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
+        palette.setColor(QPalette.ToolTipText, QColor(30, 30, 30))
+        palette.setColor(QPalette.Text, QColor(30, 30, 30))
+        palette.setColor(QPalette.Button, QColor(245, 245, 245))
+        palette.setColor(QPalette.ButtonText, QColor(30, 30, 30))
+        palette.setColor(QPalette.BrightText, QColor(255, 0, 0))
+        palette.setColor(QPalette.Link, QColor(0, 122, 204))
+        palette.setColor(QPalette.Highlight, QColor(51, 153, 255))
+        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+        return palette
+
+    def _create_dark_palette(self) -> QPalette:
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(37, 37, 38))
+        palette.setColor(QPalette.WindowText, QColor(220, 220, 220))
+        palette.setColor(QPalette.Base, QColor(30, 30, 30))
+        palette.setColor(QPalette.AlternateBase, QColor(45, 45, 45))
+        palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
+        palette.setColor(QPalette.ToolTipText, QColor(255, 255, 255))
+        palette.setColor(QPalette.Text, QColor(220, 220, 220))
+        palette.setColor(QPalette.Button, QColor(45, 45, 45))
+        palette.setColor(QPalette.ButtonText, QColor(220, 220, 220))
+        palette.setColor(QPalette.BrightText, QColor(255, 0, 0))
+        palette.setColor(QPalette.Link, QColor(100, 160, 220))
+        palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
+        palette.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
+        return palette
 
     def _open_data_context_menu(self, point) -> None:
         record = self._current_record
