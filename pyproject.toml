@@ -1,6 +1,6 @@
 [project]
 name = "logqbit"
-version = "0.0.1"
+version = "0.1.0"
 description = "Simple data logger and live plotter for lab-scale experiments."
 readme = "README.md"
 requires-python = ">=3.13"
