@@ -2,7 +2,6 @@ import inspect
 import itertools
 import os
 import threading
-import time
 import weakref
 from functools import cached_property
 from pathlib import Path
@@ -149,8 +148,9 @@ class _DataHandler:
 
         self.save_delay_secs = save_delay_secs
         self._should_stop = False
-        self._skip_debounce = EventWithWaitingState()
-        self._dirty = EventWithWaitingState()
+        self._skip_debounce = threading.Event()
+        self._dirty = threading.Event()
+        self._flush_complete = threading.Event()
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -199,6 +199,7 @@ class _DataHandler:
             tmp = self.path.with_suffix(".tmp")
             df.to_feather(tmp)
             tmp.replace(self.path)
+            self._flush_complete.set()
 
     def stop(self):
         try:
@@ -210,21 +211,9 @@ class _DataHandler:
         except Exception:
             pass
 
-    def flush(self):
-        """Flash the pending data immediately, block until done."""
-        if self._skip_debounce.waiting:
+    def flush(self, timeout: float | None = 5.0):
+        """Flush the pending data immediately, block until done."""
+        self._flush_complete.clear()
+        if self._dirty.is_set():
             self._skip_debounce.set()
-        while not self._dirty.waiting:
-            time.sleep(0.01)
-
-
-class EventWithWaitingState(threading.Event):
-    def __init__(self):
-        super().__init__()
-        self.waiting = False
-
-    def wait(self, timeout: float | None = None):
-        self.waiting = True
-        ret = super().wait(timeout)
-        self.waiting = False
-        return ret
+            self._flush_complete.wait(timeout=timeout)
