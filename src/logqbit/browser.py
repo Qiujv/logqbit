@@ -11,6 +11,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+import numpy as np
 import pandas as pd
 import pyarrow.ipc
 import pyqtgraph as pg
@@ -62,14 +63,19 @@ REFRESH_DEBOUNCE_MS = 250
 COL_ID = 0
 COL_TITLE = 1
 COL_ROWS = 2
-COL_CREATE_TIME = 3
-COL_CREATE_MACHINE = 4
-COL_PLOT_AXES = 5
+COL_PLOT_AXES = 3
+COL_CREATE_TIME = 4
+COL_CREATE_MACHINE = 5
 
 SETTINGS_ORG = "LogQbit"
 SETTINGS_APP = "LogBrowser"
 SETTINGS_RECENT_DIRS_KEY = "recent/directories"
 SETTINGS_THEME_KEY = "ui/theme"
+
+# Tab indices for detail panel
+TAB_CONST = 0
+TAB_DATA = 1
+TAB_PLOT = 2
 
 
 @dataclass
@@ -80,7 +86,7 @@ class LogRecord:
     yaml_path: Optional[Path] = None
 
     # Data metadata
-    row_count: Optional[int] = None
+    row_count: int = 0
     columns: List[str] = field(default_factory=list)
 
     # Cached data
@@ -143,7 +149,7 @@ class LogRecord:
                 data_path = None
 
             # Read feather summary if available
-            row_count: Optional[int] = None
+            row_count: int = 0
             columns: List[str] = []
             if data_path:
                 try:
@@ -218,37 +224,37 @@ class LogListTableModel(QAbstractTableModel):
 
         record = self._records[index.row()]
         col = index.column()
-        metadata = record.meta
+        meta = record.meta
 
         # Display text
         if role == Qt.DisplayRole:
             if col == COL_ID:
                 return record.log_id
             elif col == COL_TITLE:
-                star_count = max(int(metadata.star), 0)
+                star_count = max(int(meta.star), 0)
                 star_prefix = "⭐" * star_count
                 parts: List[str] = []
-                if metadata.trash:
+                if meta.trash:
                     parts.append("🗑️")
                 if star_prefix:
                     parts.append(star_prefix)
-                title_text = metadata.title or "(untitled)"
+                title_text = meta.title or "(untitled)"
                 parts.append(title_text)
                 return " ".join(parts)
             elif col == COL_ROWS:
-                return record.row_count if record.row_count is not None else None
+                return record.row_count
             elif col == COL_CREATE_TIME:
-                return metadata.create_time
+                return meta.create_time
             elif col == COL_CREATE_MACHINE:
-                return metadata.create_machine
+                return meta.create_machine
             elif col == COL_PLOT_AXES:
-                return ", ".join(metadata.plot_axes) if metadata.plot_axes else ""
+                return ", ".join([i[:3] for i in meta.plot_axes]) if meta.plot_axes else ""
 
         # Font styling
         elif role == Qt.FontRole and col == COL_TITLE:
-            star_count = max(int(metadata.star), 0)
+            star_count = max(int(meta.star), 0)
             is_bold = star_count > 0
-            is_trash = metadata.trash
+            is_trash = meta.trash
             if is_bold and is_trash:
                 return self._bold_strikeout_font
             elif is_bold:
@@ -258,8 +264,11 @@ class LogListTableModel(QAbstractTableModel):
             return None
 
         # Tooltip
-        elif role == Qt.ToolTipRole and col == COL_TITLE:
-            return metadata.title or "(untitled)"
+        elif role == Qt.ToolTipRole:
+            if col == COL_TITLE:
+                return meta.title or "(untitled)"
+            elif col == COL_PLOT_AXES:
+                return ", ".join(meta.plot_axes) if meta.plot_axes else "(no plot axes)"
 
         # User data - store record reference
         elif role == Qt.UserRole and col == COL_ID:
@@ -275,7 +284,7 @@ class LogListTableModel(QAbstractTableModel):
     ):
         if role != Qt.DisplayRole or orientation != Qt.Horizontal:
             return None
-        headers = ["ID", "Title", "Rows", "Create Time", "Create Machine", "Plot Axes"]
+        headers = ["ID", "Title", "Rows", "Axes", "Create Time", "Create Machine"]
         if 0 <= section < len(headers):
             return headers[section]
         return None
@@ -540,37 +549,116 @@ class ThemeManager:
 class PlotManager:
     MARKER_AUTO_THRESHOLD = 500  # Auto-enable markers when point count <= this value
 
-    def __init__(
-        self,
-        plot_widget: pg.PlotWidget,
-        plot_x_combo: QComboBox,
-        plot_y_combo: QComboBox,
-        plot_mode_combo: QComboBox,
-        plot_marker_checkbox: QCheckBox,
-        plot_status_label: QLabel,
-    ):
-        self.plot_widget = plot_widget
-        self.plot_x_combo = plot_x_combo
-        self.plot_y_combo = plot_y_combo
-        self.plot_mode_combo = plot_mode_combo
-        self.plot_marker_checkbox = plot_marker_checkbox
-        self.plot_status_label = plot_status_label
+    def __init__(self, parent: Optional[QWidget] = None):
         self._plot_record: Optional[LogRecord] = None
         self._suppress_updates = False
         self._marker_auto = True
+        self._needs_refresh = False
+
+        # Current selections
+        self._x_column: str = ""
+        self._y_column: str = ""
+        self._z_column: str = ""
+
+        self.widget = self._create_widget(parent)
+
+    def _create_widget(self, parent: Optional[QWidget] = None) -> QWidget:
+        """Create and return the plot tab widget."""
+        plot_tab = QWidget(parent)
+        plot_layout = QVBoxLayout(plot_tab)
+        plot_layout.setContentsMargins(4, 4, 4, 4)
+
+        # Plot controls
+        plot_controls = QHBoxLayout()
+        plot_controls.setContentsMargins(0, 0, 0, 0)
+
+        self.plot_mode_combo = QComboBox()
+        self.plot_mode_combo.addItem("1D", "1d")
+        self.plot_mode_combo.addItem("2D", "2d")
+        self.plot_mode_combo.setCurrentIndex(0)
+
+        # Use QToolButton with popup menu for column selection
+        self.plot_x_button = QToolButton()
+        self.plot_y_button = QToolButton()
+        self.plot_z_button = QToolButton()
+        self.plot_x_button.setText("(none)")
+        self.plot_y_button.setText("(none)")
+        self.plot_z_button.setText("(none)")
+        self.plot_x_button.setEnabled(False)
+        self.plot_y_button.setEnabled(False)
+        self.plot_z_button.setEnabled(False)
+
+        # Menus for buttons
+        self._x_menu = QMenu()
+        self._y_menu = QMenu()
+        self._z_menu = QMenu()
+        self.plot_x_button.setMenu(self._x_menu)
+        self.plot_y_button.setMenu(self._y_menu)
+        self.plot_z_button.setMenu(self._z_menu)
+        self.plot_x_button.setPopupMode(QToolButton.InstantPopup)
+        self.plot_y_button.setPopupMode(QToolButton.InstantPopup)
+        self.plot_z_button.setPopupMode(QToolButton.InstantPopup)
+
+        plot_controls.addWidget(QLabel("Mode:"))
+        plot_controls.addWidget(self.plot_mode_combo)
+        plot_controls.addSpacing(6)
+        plot_controls.addWidget(QLabel("X:"))
+        plot_controls.addWidget(self.plot_x_button)
+        plot_controls.addSpacing(6)
+        plot_controls.addWidget(QLabel("Y:"))
+        plot_controls.addWidget(self.plot_y_button)
+        plot_controls.addSpacing(6)
+        self.plot_z_label = QLabel("Z:")
+        plot_controls.addWidget(self.plot_z_label)
+        plot_controls.addWidget(self.plot_z_button)
+        plot_controls.addSpacing(6)
+
+        self.plot_marker_checkbox = QCheckBox("Show markers")
+        self.plot_marker_checkbox.setEnabled(False)
+        self.plot_marker_checkbox.setChecked(False)
+        plot_controls.addWidget(self.plot_marker_checkbox)
+        plot_controls.addStretch(1)
+        plot_layout.addLayout(plot_controls)
+
+        # Plot widget
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setBackground(None)
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
+        self.plot_widget.setMinimumHeight(220)
+        plot_layout.addWidget(self.plot_widget, stretch=1)
+
+        # Status label
+        self.plot_status_label = QLabel("No data to plot.")
+        self.plot_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        plot_layout.addWidget(self.plot_status_label)
+
+        # Connect signals
+        self.plot_mode_combo.currentIndexChanged.connect(self.on_mode_changed)
+        self.plot_marker_checkbox.toggled.connect(self.on_marker_toggled)
+
+        return plot_tab
 
     def reset_plot_state(self, message: str = "No data to plot.") -> None:
         """Reset plot to empty state."""
         self._plot_record = None
         self._suppress_updates = True
-        self.plot_x_combo.clear()
-        self.plot_y_combo.clear()
+        self._x_column = ""
+        self._y_column = ""
+        self._z_column = ""
+        self._x_menu.clear()
+        self._y_menu.clear()
+        self._z_menu.clear()
+        self.plot_x_button.setText("(none)")
+        self.plot_y_button.setText("(none)")
+        self.plot_z_button.setText("(none)")
         self._suppress_updates = False
-        self.plot_x_combo.setEnabled(False)
-        self.plot_y_combo.setEnabled(False)
+        self.plot_x_button.setEnabled(False)
+        self.plot_y_button.setEnabled(False)
+        self.plot_z_button.setEnabled(False)
         self._reset_marker_checkbox(enabled=False)
         self.plot_widget.clear()
         self.plot_status_label.setText(message)
+        self._needs_refresh = False
 
     def _reset_marker_checkbox(self, enabled: bool) -> None:
         """Reset marker checkbox to unchecked state."""
@@ -580,76 +668,168 @@ class PlotManager:
         self.plot_marker_checkbox.blockSignals(False)
         self.plot_marker_checkbox.setEnabled(enabled)
 
-    def update_plot_controls(self, record: LogRecord) -> None:
+    def mark_needs_refresh(self) -> None:
+        self._needs_refresh = True
+
+    def refresh_if_needed(self) -> None:
+        if self._needs_refresh:
+            self._needs_refresh = False
+            self.refresh_plot()
+
+    def update_plot_and_controls(
+        self, record: LogRecord, defer_plot: bool = False
+    ) -> None:
         same_record = record is self._plot_record
-        previous_x = self.plot_x_combo.currentText() if same_record else ""
-        previous_y = self.plot_y_combo.currentText() if same_record else ""
+        previous_x = self._x_column if same_record else ""
+        previous_y = self._y_column if same_record else ""
+        previous_z = self._z_column if same_record else ""
+        previous_mode = self.plot_mode_combo.currentData() if same_record else None
         self._plot_record = record
 
         frame = record.load_dataframe()
 
         if frame is None or frame.empty or not len(frame.columns):
             self._suppress_updates = True
-            self.plot_x_combo.clear()
-            self.plot_y_combo.clear()
+            self._x_column = ""
+            self._y_column = ""
+            self._z_column = ""
+            self._x_menu.clear()
+            self._y_menu.clear()
+            self._z_menu.clear()
+            self.plot_x_button.setText("(none)")
+            self.plot_y_button.setText("(none)")
+            self.plot_z_button.setText("(none)")
             self._suppress_updates = False
-            self.plot_x_combo.setEnabled(False)
-            self.plot_y_combo.setEnabled(False)
+            self.plot_x_button.setEnabled(False)
+            self.plot_y_button.setEnabled(False)
+            self.plot_z_button.setEnabled(False)
             self._reset_marker_checkbox(enabled=False)
             self.plot_widget.clear()
             self.plot_status_label.setText("No columns available to plot.")
+            self._needs_refresh = False
             return
 
-        columns = [col for col in frame.columns]
-        plot_axes_candidates = [col for col in record.meta.plot_axes if col in columns]
+        columns = frame.columns
+        plot_axes = [col for col in record.meta.plot_axes if col in columns]
+        plot_zs = [col for col in columns if col not in plot_axes]
+
+        # Populate menus
         self._suppress_updates = True
-        self.plot_x_combo.clear()
-        self.plot_y_combo.clear()
+        self._x_menu.clear()
+        self._y_menu.clear()
+        self._z_menu.clear()
+
         for name in columns:
-            self.plot_x_combo.addItem(name)
-            self.plot_y_combo.addItem(name)
-        if plot_axes_candidates:
-            x_default = plot_axes_candidates[0]
-        else:
-            x_default = columns[0]
-        excluded_for_y = set(plot_axes_candidates)
-        excluded_for_y.add(x_default)
-        y_default = next((col for col in columns if col not in excluded_for_y), None)
-        if y_default is None:
-            y_default = next((col for col in columns if col != x_default), x_default)
+            x_action = self._x_menu.addAction(name)
+            x_action.triggered.connect(
+                lambda checked=False, col=name: self._on_x_selected(col)
+            )
+            y_action = self._y_menu.addAction(name)
+            y_action.triggered.connect(
+                lambda checked=False, col=name: self._on_y_selected(col)
+            )
+            z_action = self._z_menu.addAction(name)
+            z_action.triggered.connect(
+                lambda checked=False, col=name: self._on_z_selected(col)
+            )
+
+        auto_mode = "2d" if len(plot_axes) >= 2 else "1d"
+        if previous_mode:
+            auto_mode = previous_mode  # Keep user's choice
+
+        if auto_mode == "2d":
+            if len(plot_axes) >= 2:
+                x_default = plot_axes[0]
+                y_default = plot_axes[1]
+                z_default = plot_zs[0] if plot_zs else columns[0]
+            elif len(plot_axes) == 1:
+                x_default = plot_axes[0]
+                y_default = plot_zs[0] if plot_zs else columns[0]
+                z_default = plot_zs[1] if len(plot_zs) > 1 else columns[0]
+            else:
+                x_default = columns[0]
+                y_default = columns[1] if len(columns) > 1 else columns[0]
+                z_default = columns[2] if len(columns) > 2 else columns[0]
+        else:  # 1D mode
+            if plot_axes:
+                x_default = plot_axes[0]
+                y_default = plot_zs[0] if plot_zs else columns[0]
+            else:
+                x_default = columns[0]
+                y_default = columns[1] if len(columns) > 1 else columns[0]
+            z_default = columns[0]  # Not used in 1D mode
+
+        # Restore previous selections if available
         if previous_x and previous_x in columns:
             x_default = previous_x
         if previous_y and previous_y in columns:
             y_default = previous_y
-        self.plot_x_combo.setCurrentText(x_default)
-        self.plot_y_combo.setCurrentText(y_default)
+        if previous_z and previous_z in columns:
+            z_default = previous_z
+
+        self._x_column = x_default
+        self._y_column = y_default
+        self._z_column = z_default
+        self.plot_x_button.setText(x_default)
+        self.plot_y_button.setText(y_default)
+        self.plot_z_button.setText(z_default)
+        self.plot_mode_combo.setCurrentIndex(0 if auto_mode == "1d" else 1)
+
         self._suppress_updates = False
-        self.plot_x_combo.setEnabled(True)
-        self.plot_y_combo.setEnabled(True)
-        self._reset_marker_checkbox(enabled=True)
-        if self.plot_mode_combo.currentData() != "1d":
-            self.plot_status_label.setText("2D plotting is not available yet.")
+        self.plot_x_button.setEnabled(True)
+        self.plot_y_button.setEnabled(True)
+        self.plot_z_button.setEnabled(auto_mode == "2d")
+        self.plot_z_button.setVisible(auto_mode == "2d")
+        self.plot_z_label.setVisible(auto_mode == "2d")
+        self._reset_marker_checkbox(enabled=auto_mode == "1d")
+        self.plot_marker_checkbox.setVisible(auto_mode == "1d")
+
+        if defer_plot:
+            self._needs_refresh = True
+        else:
+            self.refresh_plot()
+
+    def _on_x_selected(self, column: str) -> None:
+        if self._suppress_updates:
             return
+        self._x_column = column
+        self.plot_x_button.setText(column)
+        self.refresh_plot()
+
+    def _on_y_selected(self, column: str) -> None:
+        if self._suppress_updates:
+            return
+        self._y_column = column
+        self.plot_y_button.setText(column)
+        self.refresh_plot()
+
+    def _on_z_selected(self, column: str) -> None:
+        if self._suppress_updates:
+            return
+        self._z_column = column
+        self.plot_z_button.setText(column)
         self.refresh_plot()
 
     def on_mode_changed(self, _index: int = -1) -> None:
         mode = self.plot_mode_combo.currentData()
         if mode == "1d":
-            self.plot_x_combo.setEnabled(self.plot_x_combo.count() > 0)
-            self.plot_y_combo.setEnabled(self.plot_y_combo.count() > 0)
-            self.plot_marker_checkbox.setEnabled(self.plot_x_combo.count() > 0)
+            self.plot_x_button.setEnabled(len(self._x_menu.actions()) > 0)
+            self.plot_y_button.setEnabled(len(self._y_menu.actions()) > 0)
+            self.plot_z_button.setEnabled(False)
+            self.plot_z_button.setVisible(False)
+            self.plot_z_label.setVisible(False)
+            self.plot_marker_checkbox.setEnabled(len(self._x_menu.actions()) > 0)
+            self.plot_marker_checkbox.setVisible(True)
             self.refresh_plot()
-        else:
-            self.plot_x_combo.setEnabled(False)
-            self.plot_y_combo.setEnabled(False)
-            self.plot_widget.clear()
-            self.plot_status_label.setText("2D plotting is not available yet.")
+        else:  # 2d mode
+            self.plot_x_button.setEnabled(len(self._x_menu.actions()) > 0)
+            self.plot_y_button.setEnabled(len(self._y_menu.actions()) > 0)
+            self.plot_z_button.setEnabled(len(self._z_menu.actions()) > 0)
+            self.plot_z_button.setVisible(True)
+            self.plot_z_label.setVisible(True)
             self._reset_marker_checkbox(enabled=False)
-
-    def on_selection_changed(self, _index: int = -1) -> None:
-        if self._suppress_updates or self.plot_mode_combo.currentData() != "1d":
-            return
-        self.refresh_plot()
+            self.plot_marker_checkbox.setVisible(False)
+            self.refresh_plot()
 
     def on_marker_toggled(self, _checked: bool) -> None:
         if self._suppress_updates or self.plot_mode_combo.currentData() != "1d":
@@ -661,14 +841,16 @@ class PlotManager:
         if self._suppress_updates:
             return
 
+        mode = self.plot_mode_combo.currentData()
+
+        if mode == "2d":
+            self._refresh_plot_2d()
+        else:
+            self._refresh_plot_1d()
+
+    def _refresh_plot_1d(self) -> None:
         def _disable_markers() -> None:
             self._reset_marker_checkbox(enabled=False)
-
-        if self.plot_mode_combo.currentData() != "1d":
-            self.plot_widget.clear()
-            self.plot_status_label.setText("2D plotting is not available yet.")
-            _disable_markers()
-            return
 
         record = self._plot_record
         if record is None:
@@ -683,8 +865,8 @@ class PlotManager:
             _disable_markers()
             return
 
-        x_column = self.plot_x_combo.currentText()
-        y_column = self.plot_y_combo.currentText()
+        x_column = self._x_column
+        y_column = self._y_column
         if not x_column or not y_column:
             self.plot_widget.clear()
             self.plot_status_label.setText("Select X and Y columns to plot.")
@@ -757,6 +939,160 @@ class PlotManager:
         extra = " (x treated as index)" if used_index else ""
         self.plot_status_label.setText(f"Plotted {plotted_points} rows{extra}.")
 
+    def _refresh_plot_2d(self) -> None:
+        """Refresh 2D scatter plot with color-coded rectangles.
+
+        Uses the same algorithm as plot2d_collection: calculate cell boundaries
+        and fill rectangles column-by-column for proper spacing.
+        """
+        record = self._plot_record
+        if record is None:
+            self.plot_widget.clear()
+            self.plot_status_label.setText("No log selected.")
+            return
+
+        frame = record.load_dataframe()
+        if frame is None or frame.empty:
+            self.plot_widget.clear()
+            self.plot_status_label.setText("No data to plot.")
+            return
+
+        x_column = self._x_column
+        y_column = self._y_column
+        z_column = self._z_column
+
+        if not x_column or not y_column or not z_column:
+            self.plot_widget.clear()
+            self.plot_status_label.setText("Select X, Y, and Z columns to plot.")
+            return
+
+        if (
+            x_column not in frame.columns
+            or y_column not in frame.columns
+            or z_column not in frame.columns
+        ):
+            self.plot_widget.clear()
+            self.plot_status_label.setText("Selected columns not in data.")
+            return
+
+        # Convert to numeric
+        x_values = pd.to_numeric(frame[x_column], errors="coerce")
+        y_values = pd.to_numeric(frame[y_column], errors="coerce")
+        z_values = pd.to_numeric(frame[z_column], errors="coerce")
+
+        if x_values.isna().all() or y_values.isna().all() or z_values.isna().all():
+            self.plot_widget.clear()
+            if x_values.isna().all():
+                self.plot_status_label.setText(
+                    f"X column '{x_column}' has no numeric values."
+                )
+            elif y_values.isna().all():
+                self.plot_status_label.setText(
+                    f"Y column '{y_column}' has no numeric values."
+                )
+            else:
+                self.plot_status_label.setText(
+                    f"Z column '{z_column}' has no numeric values."
+                )
+            return
+
+        # Remove NaN rows and create DataFrame
+        mask = (~x_values.isna()) & (~y_values.isna()) & (~z_values.isna())
+        if not mask.any():
+            self.plot_widget.clear()
+            self.plot_status_label.setText(
+                "No valid numeric rows after filtering NaN values."
+            )
+            return
+
+        # Create dataframe with valid data, sorted by x then y
+        df = pd.DataFrame(
+            {"x": x_values[mask], "y": y_values[mask], "z": z_values[mask]}
+        ).sort_values(["x", "y"])
+
+        # Remove x groups with only 1 point (can't compute height)
+        df_filtered = df.groupby("x").filter(lambda group: len(group) > 1)
+
+        if len(df_filtered) == 0:
+            self.plot_widget.clear()
+            x_counts = df.groupby("x").size()
+            single_point_x = x_counts[x_counts == 1]
+            if len(single_point_x) > 0:
+                self.plot_status_label.setText(
+                    f"2D plot requires at least 2 Y values per X value. "
+                    f"Found {len(single_point_x)} X values with only 1 point."
+                )
+            else:
+                self.plot_status_label.setText(
+                    "No valid data for 2D plot after filtering."
+                )
+            return
+
+        df = df_filtered
+
+        self.plot_widget.clear()
+
+        # Normalize z values to [0, 1] for colormap
+        z_min, z_max = df["z"].min(), df["z"].max()
+        if z_max > z_min:
+            z_normalized = (df["z"] - z_min) / (z_max - z_min)
+        else:
+            z_normalized = pd.Series(0.5, index=df.index)
+
+        colormap = pg.colormap.get("CET-D1")
+        # colormap = pg.colormap.get("CET-L12")  # Blues
+
+        def cut(cell_centers):
+            cell_centers = np.asarray(cell_centers)
+            dx = np.diff(cell_centers) / 2
+            cut_points = np.hstack(
+                [
+                    cell_centers[0] - dx[0],
+                    cell_centers[:-1] + dx,
+                    cell_centers[-1] + dx[-1],
+                ]
+            )
+            return cut_points
+
+        xunic = df["x"].unique()
+        xcut = cut(xunic)
+        df["width"] = df["x"].map({x: w for x, w in zip(xunic, np.diff(xcut))})
+        df["xshift"] = df["x"].map({x: s for x, s in zip(xunic, xcut[:-1])})
+
+        df["height"] = df.groupby("x")["y"].transform(lambda y: np.diff(cut(y)))
+        df["yshift"] = df.groupby("x")["y"].transform(lambda y: cut(y)[:-1])
+
+        # Disable auto-range during item addition to prevent repeated recalculations
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is not None:
+            plot_item.enableAutoRange(enable=False)
+
+        for idx, row in df.iterrows():
+            x_pos = row["xshift"]
+            y_pos = row["yshift"]
+            width = row["width"]
+            height = row["height"]
+            z_val = z_normalized.loc[idx]
+
+            color = colormap.map(z_val)
+
+            rect_item = pg.QtWidgets.QGraphicsRectItem(x_pos, y_pos, width, height)
+            rect_item.setBrush(pg.mkBrush(color))
+            rect_item.setPen(pg.mkPen(None))  # No border
+            self.plot_widget.addItem(rect_item)
+
+        self.plot_widget.setLabel("bottom", x_column)
+        self.plot_widget.setLabel("left", y_column)
+
+        # Re-enable auto-range and apply once after all items are added
+        if plot_item is not None:
+            plot_item.enableAutoRange(enable=True)
+            plot_item.autoRange()
+
+        self.plot_status_label.setText(
+            f"2D plot: {len(df)} points (z: {z_min:.3g} to {z_max:.3g})"
+        )
+
 
 class DataViewManager:
     INITIAL_PREVIEW_LIMIT = 100
@@ -764,13 +1100,65 @@ class DataViewManager:
 
     def __init__(
         self,
-        data_table: QTableView,
-        data_status_label: QLabel,
-        data_load_button: QPushButton,
+        parent: Optional[QWidget] = None,
+        load_more_callback=None,
+        plot_axes_changed_callback=None,
     ):
-        self.data_table = data_table
-        self.data_status_label = data_status_label
-        self.data_load_button = data_load_button
+        """Create data view manager with its own UI components.
+
+        Args:
+            parent: Parent widget
+            load_more_callback: Callback when "Show More Rows" is clicked
+            plot_axes_changed_callback: Callback(record, column_name, enabled) when plot axes toggled
+        """
+        self._load_more_callback = load_more_callback
+        self._plot_axes_changed_callback = plot_axes_changed_callback
+        self._current_record: Optional[LogRecord] = None
+
+        # Create UI components
+        self.widget = self._create_widget(parent)
+
+    def _create_widget(self, parent: Optional[QWidget] = None) -> QWidget:
+        """Create and return the data tab widget."""
+        data_tab = QWidget(parent)
+        data_layout = QVBoxLayout(data_tab)
+        data_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.data_table = QTableView()
+        self.data_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.data_table.setSortingEnabled(False)
+        self.data_table.setWordWrap(False)
+        self.data_table.horizontalHeader().setStretchLastSection(False)
+        self.data_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents
+        )
+        self.data_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        row_height = self.data_table.fontMetrics().height() + 6
+        self.data_table.verticalHeader().setDefaultSectionSize(row_height)
+
+        # Set up context menu
+        self.data_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.data_table.customContextMenuRequested.connect(self._open_context_menu)
+
+        data_layout.addWidget(self.data_table)
+
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        self.data_status_label = QLabel("")
+        self.data_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.data_status_label.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred
+        )
+        self.data_load_button = QPushButton("Show More Rows")
+        self.data_load_button.setEnabled(False)
+        if self._load_more_callback:
+            self.data_load_button.clicked.connect(self._load_more_callback)
+        controls.addWidget(self.data_status_label)
+        controls.addStretch(1)
+        controls.addWidget(self.data_load_button)
+        data_layout.addLayout(controls)
+
+        return data_tab
 
     def set_empty(self, message: str = "No data to display.") -> None:
         self.data_table.setModel(None)
@@ -778,6 +1166,7 @@ class DataViewManager:
         self.data_load_button.setEnabled(False)
 
     def show_data_table(self, record: LogRecord, preview_only: bool) -> None:
+        self._current_record = record
         dataframe = record.load_dataframe()
         if dataframe is None:
             message = (
@@ -817,6 +1206,63 @@ class DataViewManager:
         else:
             self.data_status_label.setText(f"Showing all {displayed_rows} rows.")
             self.data_load_button.setEnabled(False)
+
+    def _open_context_menu(self, point) -> None:
+        """Handle context menu on data table."""
+        record = self._current_record
+        model = self.data_table.model()
+        if record is None or model is None:
+            return
+
+        # Get column from click position
+        index = self.data_table.indexAt(point)
+        column = (
+            index.column()
+            if index.isValid()
+            else self.data_table.horizontalHeader().logicalIndexAt(point.x())
+        )
+        if column < 0:
+            return
+
+        column_name = str(model.headerData(column, Qt.Horizontal))
+        if not column_name:
+            return
+
+        # Create context menu
+        menu = QMenu(self.data_table)
+        is_tracked = column_name in record.meta.plot_axes
+        toggle_action = menu.addAction("Toggle Plot Axes")
+        toggle_action.setCheckable(True)
+        toggle_action.setChecked(is_tracked)
+
+        # Show menu and handle result
+        chosen = menu.exec(self.data_table.viewport().mapToGlobal(point))
+        if chosen == toggle_action:
+            self._toggle_plot_axes(record, column_name, not is_tracked)
+
+    def _toggle_plot_axes(
+        self, record: LogRecord, column_name: str, enable: bool
+    ) -> None:
+        """Toggle plot axes tracking for a column."""
+        column_name = str(column_name)
+        if not column_name:
+            return
+
+        updated = list(record.meta.plot_axes)
+        if enable:
+            if column_name in updated:
+                return
+            updated.append(column_name)
+        else:
+            if column_name not in updated:
+                return
+            updated = [item for item in updated if item != column_name]
+
+        record.meta.plot_axes = updated
+
+        # Notify parent via callback
+        if self._plot_axes_changed_callback:
+            self._plot_axes_changed_callback(record, column_name, enable)
 
     def load_more_data(self, record: LogRecord) -> None:
         model = self.data_table.model()
@@ -971,7 +1417,7 @@ class LogBrowserWindow(QMainWindow):
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(True)
         table.setSortingEnabled(True)
-        
+
         font_height = table.fontMetrics().height()
         table.verticalHeader().setDefaultSectionSize(font_height + 4)
 
@@ -979,15 +1425,14 @@ class LogBrowserWindow(QMainWindow):
         header.setSectionResizeMode(COL_ID, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(COL_TITLE, QHeaderView.Stretch)
         header.setSectionResizeMode(COL_ROWS, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_PLOT_AXES, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(COL_CREATE_TIME, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(COL_CREATE_MACHINE, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_PLOT_AXES, QHeaderView.ResizeToContents)
         header.setSectionsClickable(True)
-        header.setSortIndicatorShown(True)
+        header.setSortIndicatorShown(False)  # For compact view.
 
         table.setColumnHidden(COL_CREATE_TIME, True)
         table.setColumnHidden(COL_CREATE_MACHINE, True)
-        table.setColumnHidden(COL_PLOT_AXES, True)
 
         table.selectionModel().selectionChanged.connect(self._on_log_selection_changed)
         table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1017,112 +1462,23 @@ class LogBrowserWindow(QMainWindow):
         self.yaml_view.setReadOnly(True)
         self.tab_widget.addTab(self.yaml_view, "Const.")
 
-        data_tab = self._create_data_tab()
-        self.tab_widget.addTab(data_tab, "Data")
+        # Create data view manager and add its widget
+        self.data_view_manager = DataViewManager(
+            parent=detail_widget,
+            load_more_callback=self._on_load_data_clicked,
+            plot_axes_changed_callback=self._on_plot_axes_changed,
+        )
+        self.tab_widget.addTab(self.data_view_manager.widget, "Data")
 
-        plot_tab = self._create_plot_tab()
-        self.tab_widget.addTab(plot_tab, "Plot")
+        # Create plot manager and add its widget
+        self.plot_manager = PlotManager(parent=detail_widget)
+        self.tab_widget.addTab(self.plot_manager.widget, "Plot")
+
+        # Connect tab changed signal to refresh plot if needed
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
         detail_layout.addWidget(self.tab_widget)
         return detail_widget
-
-    def _create_data_tab(self) -> QWidget:
-        data_tab = QWidget()
-        data_layout = QVBoxLayout(data_tab)
-        data_layout.setContentsMargins(4, 4, 4, 4)
-        self.data_table = QTableView()
-        self.data_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.data_table.setSortingEnabled(False)
-        self.data_table.setWordWrap(False)
-        self.data_table.horizontalHeader().setStretchLastSection(False)
-        self.data_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeToContents
-        )
-        self.data_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        row_height = self.data_table.fontMetrics().height() + 6
-        self.data_table.verticalHeader().setDefaultSectionSize(row_height)
-        self.data_table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.data_table.customContextMenuRequested.connect(self._open_data_context_menu)
-        data_layout.addWidget(self.data_table)
-        controls = QHBoxLayout()
-        controls.setContentsMargins(0, 0, 0, 0)
-        self.data_status_label = QLabel("")
-        self.data_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.data_status_label.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Preferred
-        )
-        self.data_load_button = QPushButton("Show More Rows")
-        self.data_load_button.setEnabled(False)
-        self.data_load_button.clicked.connect(self._on_load_data_clicked)
-        controls.addWidget(self.data_status_label)
-        controls.addStretch(1)
-        controls.addWidget(self.data_load_button)
-        data_layout.addLayout(controls)
-
-        self.data_view_manager = DataViewManager(
-            self.data_table, self.data_status_label, self.data_load_button
-        )
-        return data_tab
-
-    def _create_plot_tab(self) -> QWidget:
-        plot_tab = QWidget()
-        plot_layout = QVBoxLayout(plot_tab)
-        plot_layout.setContentsMargins(4, 4, 4, 4)
-        plot_controls = QHBoxLayout()
-        plot_controls.setContentsMargins(0, 0, 0, 0)
-        self.plot_mode_combo = QComboBox()
-        self.plot_mode_combo.addItem("1D Plot", "1d")
-        self.plot_mode_combo.addItem("2D Plot", "2d")
-        self.plot_mode_combo.setCurrentIndex(0)
-        self.plot_x_combo = QComboBox()
-        self.plot_y_combo = QComboBox()
-        self.plot_x_combo.setEnabled(False)
-        self.plot_y_combo.setEnabled(False)
-        plot_controls.addWidget(QLabel("Mode:"))
-        plot_controls.addWidget(self.plot_mode_combo)
-        plot_controls.addSpacing(12)
-        plot_controls.addWidget(QLabel("X:"))
-        plot_controls.addWidget(self.plot_x_combo)
-        plot_controls.addSpacing(12)
-        plot_controls.addWidget(QLabel("Y:"))
-        plot_controls.addWidget(self.plot_y_combo)
-        plot_controls.addSpacing(12)
-        self.plot_marker_checkbox = QCheckBox("Show markers")
-        self.plot_marker_checkbox.setEnabled(False)
-        self.plot_marker_checkbox.setChecked(False)
-        plot_controls.addWidget(self.plot_marker_checkbox)
-        plot_controls.addStretch(1)
-        plot_layout.addLayout(plot_controls)
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground(None)
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
-        self.plot_widget.setMinimumHeight(220)
-        plot_layout.addWidget(self.plot_widget, stretch=1)
-        self.plot_status_label = QLabel("No data to plot.")
-        self.plot_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        plot_layout.addWidget(self.plot_status_label)
-
-        self.plot_manager = PlotManager(
-            self.plot_widget,
-            self.plot_x_combo,
-            self.plot_y_combo,
-            self.plot_mode_combo,
-            self.plot_marker_checkbox,
-            self.plot_status_label,
-        )
-
-        self.plot_mode_combo.currentIndexChanged.connect(
-            self.plot_manager.on_mode_changed
-        )
-        self.plot_x_combo.currentIndexChanged.connect(
-            self.plot_manager.on_selection_changed
-        )
-        self.plot_y_combo.currentIndexChanged.connect(
-            self.plot_manager.on_selection_changed
-        )
-        self.plot_marker_checkbox.toggled.connect(self.plot_manager.on_marker_toggled)
-
-        return plot_tab
 
     def _setup_shortcuts(self) -> None:
         for action in self._shortcuts:
@@ -1277,13 +1633,23 @@ class LogBrowserWindow(QMainWindow):
     def _load_log(self, record: LogRecord) -> None:
         self.detail_label.setText(f"#{record.log_id} - {record.path}")
         self.yaml_view.setPlainText(record.read_yaml_text())
-        self.data_status_label.setText("Loading data preview…")
-        self.data_load_button.setEnabled(False)
+        self.data_view_manager.data_status_label.setText("Loading data preview…")
+        self.data_view_manager.data_load_button.setEnabled(False)
         self.data_view_manager.show_data_table(record, preview_only=True)
         image_files = record.list_image_files()
         self._update_image_tabs(image_files)
-        self.plot_manager.update_plot_controls(record)
+
+        # Defer plot refresh if not on plot tab
+        current_tab = self.tab_widget.currentIndex()
+        defer_plot = current_tab != TAB_PLOT
+        self.plot_manager.update_plot_and_controls(record, defer_plot=defer_plot)
+
         self._update_detail_watcher(record)
+
+    def _on_tab_changed(self, index: int) -> None:
+        """Handle tab widget changes to trigger plot refresh if needed."""
+        if index == TAB_PLOT:
+            self.plot_manager.refresh_if_needed()
 
     def _clear_preview_panels(self) -> None:
         self.yaml_view.setPlainText("")
@@ -1375,6 +1741,9 @@ class LogBrowserWindow(QMainWindow):
         show_trash_action.setCheckable(True)
         show_trash_action.setChecked(self._show_trash)
         menu.addSeparator()
+        plot_axes_action = menu.addAction("Show Plot Axes Column")
+        plot_axes_action.setCheckable(True)
+        plot_axes_action.setChecked(not self.log_table.isColumnHidden(COL_PLOT_AXES))
         create_time_action = menu.addAction("Show Create Time Column")
         create_time_action.setCheckable(True)
         create_time_action.setChecked(
@@ -1385,9 +1754,6 @@ class LogBrowserWindow(QMainWindow):
         create_machine_action.setChecked(
             not self.log_table.isColumnHidden(COL_CREATE_MACHINE)
         )
-        plot_axes_action = menu.addAction("Show Plot Axes Column")
-        plot_axes_action.setCheckable(True)
-        plot_axes_action.setChecked(not self.log_table.isColumnHidden(COL_PLOT_AXES))
         menu.addSeparator()
         open_explorer = menu.addAction("Open in Explorer")
         if not records:
@@ -1425,30 +1791,12 @@ class LogBrowserWindow(QMainWindow):
         elif chosen == open_explorer and records:
             self._open_path_in_explorer(records[0].path, len(records) != 1)
 
-    def _open_data_context_menu(self, point) -> None:
-        record = self._current_record
-        model = self.data_table.model()
-        if record is None or model is None:
-            return
-        index = self.data_table.indexAt(point)
-        column = (
-            index.column()
-            if index.isValid()
-            else self.data_table.horizontalHeader().logicalIndexAt(point.x())
-        )
-        if column < 0:
-            return
-        column_name = str(model.headerData(column, Qt.Horizontal))
-        if not column_name:
-            return
-        menu = QMenu(self.data_table)
-        is_tracked = column_name in record.meta.plot_axes
-        toggle_action = menu.addAction("Toggle Plot Axes")
-        toggle_action.setCheckable(True)
-        toggle_action.setChecked(is_tracked)
-        chosen = menu.exec(self.data_table.viewport().mapToGlobal(point))
-        if chosen == toggle_action:
-            self._toggle_column_plot_axes(record, column_name, not is_tracked)
+    def _on_plot_axes_changed(
+        self, record: LogRecord, column_name: str, enabled: bool
+    ) -> None:
+        """Callback when plot axes is toggled in DataViewManager."""
+        self._update_ui_for_record(record)
+        self._load_log(record)
 
     def _toggle_column(self, column: int, visible: bool) -> None:
         self.log_table.setColumnHidden(column, not visible)
@@ -1510,25 +1858,6 @@ class LogBrowserWindow(QMainWindow):
             changed |= self._set_record_trash(record, value, refresh=False)
         if changed:
             self.refresh_logs()
-
-    def _toggle_column_plot_axes(
-        self, record: LogRecord, column: str, enable: bool
-    ) -> None:
-        column = str(column)
-        if not column:
-            return
-        updated = list(record.meta.plot_axes)
-        if enable:
-            if column in updated:
-                return
-            updated.append(column)
-        else:
-            if column not in updated:
-                return
-            updated = [item for item in updated if item != column]
-        record.meta.plot_axes = updated
-        self._update_ui_for_record(record)
-        self._load_log(record)
 
     def _update_ui_for_record(self, record: LogRecord) -> None:
         self.table_model.update_record(record)
