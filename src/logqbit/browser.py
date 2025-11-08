@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import numbers
 import subprocess
@@ -76,6 +77,20 @@ SETTINGS_THEME_KEY = "ui/theme"
 TAB_CONST = 0
 TAB_DATA = 1
 TAB_PLOT = 2
+
+
+def _load_window_icon() -> QIcon:
+    try:
+        icon_path = files("logqbit") / "assets" / "browser.svg"
+        icon = QIcon(str(icon_path))
+        if not icon.isNull():
+            return icon
+    except Exception as exc:
+        logger.debug(f"Failed to load window icon: {exc}")
+    return QIcon()  # Return null icon as fallback
+
+
+WINDOW_ICON = _load_window_icon()
 
 
 @dataclass
@@ -433,8 +448,11 @@ class SettingsManager:
         self._settings.setValue(
             SETTINGS_RECENT_DIRS_KEY, [str(path) for path in self._recent_directories]
         )
+        self._settings.sync()
 
     def update_recent_directories(self, path: Path) -> List[Path]:
+        self.load_recent_directories()
+        
         resolved = Path(path)
         entries = [resolved]
         for existing in self._recent_directories:
@@ -454,6 +472,7 @@ class SettingsManager:
 
     def save_theme_mode(self, mode: str) -> None:
         self._settings.setValue(SETTINGS_THEME_KEY, mode)
+        self._settings.sync()
 
 
 class ThemeManager:
@@ -996,19 +1015,16 @@ class PlotManager:
                 )
             return
 
-        # Remove NaN rows and create DataFrame
-        mask = (~x_values.isna()) & (~y_values.isna()) & (~z_values.isna())
-        if not mask.any():
+        df = pd.DataFrame({"x": x_values, "y": y_values, "z": z_values})
+        if df.empty:
             self.plot_widget.clear()
             self.plot_status_label.setText(
                 "No valid numeric rows after filtering NaN values."
             )
             return
-
-        # Create dataframe with valid data, sorted by x then y
-        df = pd.DataFrame(
-            {"x": x_values[mask], "y": y_values[mask], "z": z_values[mask]}
-        ).sort_values(["x", "y"])
+        
+        df.dropna(axis="index", how="any", inplace=True)
+        df.sort_values(["x", "y"], inplace=True, ignore_index=True)
 
         # Remove x groups with only 1 point (can't compute height)
         df_filtered = df.groupby("x").filter(lambda group: len(group) > 1)
@@ -1037,14 +1053,13 @@ class PlotManager:
         if z_max > z_min:
             z_normalized = (df["z"] - z_min) / (z_max - z_min)
         else:
-            z_normalized = pd.Series(0.5, index=df.index)
-
-        colormap = pg.colormap.get("CET-D1")
-        # colormap = pg.colormap.get("CET-L12")  # Blues
+            z_normalized = pd.Series(0.5, index=df.index)        
 
         def cut(cell_centers):
             cell_centers = np.asarray(cell_centers)
             dx = np.diff(cell_centers) / 2
+            if len(dx) == 0:
+                dx = [1.0]  # Default width if only one cell
             cut_points = np.hstack(
                 [
                     cell_centers[0] - dx[0],
@@ -1074,7 +1089,7 @@ class PlotManager:
             height = row["height"]
             z_val = z_normalized.loc[idx]
 
-            color = colormap.map(z_val)
+            color = self.cmap.map(z_val)
 
             rect_item = pg.QtWidgets.QGraphicsRectItem(x_pos, y_pos, width, height)
             rect_item.setBrush(pg.mkBrush(color))
@@ -1092,6 +1107,14 @@ class PlotManager:
         self.plot_status_label.setText(
             f"2D plot: {len(df)} points (z: {z_min:.3g} to {z_max:.3g})"
         )
+
+    @functools.cached_property
+    def cmap(self):
+        cmap = pg.colormap.get("RdBu_r", source="matplotlib")
+        if cmap is None:
+            cmap = pg.colormap.get("CET-D1")
+            # colormap = pg.colormap.get("CET-L12")  # Blues
+        return cmap
 
 
 class DataViewManager:
@@ -1302,9 +1325,8 @@ class LogBrowserWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Logqbit Log Browser")
-        self.setWindowIcon(
-            QIcon(QPixmap(str(files("logqbit") / "assets" / "browser.svg")))
-        )
+        if not WINDOW_ICON.isNull():
+            self.setWindowIcon(WINDOW_ICON)
         self.resize(1200, 700)
 
         self.settings_manager = SettingsManager()
@@ -1518,6 +1540,10 @@ class LogBrowserWindow(QMainWindow):
             self._directory_menu.addSeparator()
         open_action = self._directory_menu.addAction("Open Other Folder...")
         open_action.triggered.connect(self._open_directory_dialog)
+        new_window_action = self._directory_menu.addAction("New Window")
+        new_window_action.triggered.connect(
+            lambda: self._open_new_window(self._base_dir)
+        )
 
     def _update_theme_button(self) -> None:
         if not self.theme_manager:
@@ -1728,6 +1754,23 @@ class LogBrowserWindow(QMainWindow):
         chosen = QFileDialog.getExistingDirectory(self, "Select log directory", current)
         if chosen:
             self.set_directory(Path(chosen))
+
+    def _open_new_window(self, directory: Path) -> None:
+        """Launch a new browser window in a separate process."""
+        import subprocess
+        
+        try:
+            subprocess.Popen(
+                [sys.executable, "-m", "logqbit.browser", str(directory)],
+                cwd=Path.cwd(),
+                start_new_session=True,  # Detach from parent process
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Launch Error",
+                f"Failed to launch new window:\n{exc}",
+            )
 
     def _open_table_context_menu(self, point) -> None:
         records = self._get_selected_records()
