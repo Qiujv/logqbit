@@ -641,9 +641,18 @@ class PlotManager:
 
         # Plot widget
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground(None)
+        self.plot_widget.setBackground("w")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
         self.plot_widget.setMinimumHeight(220)
+        
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is not None:
+            plot_item.setDownsampling(auto=True, mode="subsample")
+            plot_item.getAxis("bottom").setTextPen("k")
+            plot_item.getAxis("left").setTextPen("k")
+            plot_item.getAxis("top").setTextPen("k")
+            plot_item.getAxis("right").setTextPen("k")
+        
         plot_layout.addWidget(self.plot_widget, stretch=1)
 
         # Status label
@@ -896,34 +905,30 @@ class PlotManager:
             self.plot_status_label.setText("Selected columns not in data.")
             _disable_markers()
             return
+        x_values = pd.to_numeric(frame[x_column], errors="coerce")
         y_values = pd.to_numeric(frame[y_column], errors="coerce")
+        if x_values.isna().all():
+            self.plot_widget.clear()
+            self.plot_status_label.setText(f"Column '{x_column}' is not numeric.")
+            _disable_markers()
+            return
         if y_values.isna().all():
             self.plot_widget.clear()
             self.plot_status_label.setText(f"Column '{y_column}' is not numeric.")
             _disable_markers()
             return
-        if x_column == y_column:
-            x_values = pd.Series(range(len(frame)), index=frame.index, dtype=float)
-            used_index = True
-        else:
-            x_series = frame[x_column]
-            x_values = pd.to_numeric(x_series, errors="coerce")
-            used_index = False
-            if x_values.isna().all():
-                x_values = pd.Series(range(len(frame)), index=frame.index, dtype=float)
-                used_index = True
-        mask = (~x_values.isna()) & (~y_values.isna())
-        if not mask.any():
+        df = pd.DataFrame({"x": x_values, "y": y_values})
+        df.dropna(axis="index", how="any", inplace=True)
+        if df.empty:
             self.plot_widget.clear()
-            self.plot_status_label.setText("No numeric rows available to plot.")
+            self.plot_status_label.setText(
+                "No valid numeric rows after filtering NaN values."
+            )
             _disable_markers()
             return
-        x_array = x_values[mask].to_numpy(dtype=float, copy=False)
-        y_array = y_values[mask].to_numpy(dtype=float, copy=False)
         show_markers = False
-        point_count = len(x_array)
         if self._marker_auto:
-            default_checked = point_count <= self.MARKER_AUTO_THRESHOLD
+            default_checked = len(df) <= self.MARKER_AUTO_THRESHOLD
             if self.plot_marker_checkbox.isChecked() != default_checked:
                 self.plot_marker_checkbox.blockSignals(True)
                 self.plot_marker_checkbox.setChecked(default_checked)
@@ -936,8 +941,8 @@ class PlotManager:
         plot_pen = pg.mkPen(color="#1E90FF", width=2)
         if show_markers:
             self.plot_widget.plot(
-                x_array,
-                y_array,
+                df['x'].values,
+                df['y'].values,
                 pen=plot_pen,
                 symbol="o",
                 symbolSize=6,
@@ -945,18 +950,15 @@ class PlotManager:
                 symbolBrush=pg.mkBrush("#FFFFFF"),
             )
         else:
-            self.plot_widget.plot(x_array, y_array, pen=plot_pen)
+            self.plot_widget.plot(df["x"].values, df["y"].values, pen=plot_pen)
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.enableAutoRange(axis="x", enable=True)
             plot_item.enableAutoRange(axis="y", enable=True)
             plot_item.autoRange()
-        bottom_label = x_column if not used_index else f"{x_column} (index)"
-        self.plot_widget.setLabel("bottom", bottom_label)
+        self.plot_widget.setLabel("bottom", x_column)
         self.plot_widget.setLabel("left", y_column)
-        plotted_points = point_count
-        extra = " (x treated as index)" if used_index else ""
-        self.plot_status_label.setText(f"Plotted {plotted_points} rows{extra}.")
+        self.plot_status_label.setText(f"Plotted {len(df)} rows.")
 
     def _refresh_plot_2d(self) -> None:
         """Refresh 2D scatter plot with color-coded rectangles.
@@ -994,7 +996,6 @@ class PlotManager:
             self.plot_status_label.setText("Selected columns not in data.")
             return
 
-        # Convert to numeric
         x_values = pd.to_numeric(frame[x_column], errors="coerce")
         y_values = pd.to_numeric(frame[y_column], errors="coerce")
         z_values = pd.to_numeric(frame[z_column], errors="coerce")
@@ -1016,6 +1017,7 @@ class PlotManager:
             return
 
         df = pd.DataFrame({"x": x_values, "y": y_values, "z": z_values})
+        df.dropna(axis="index", how="any", inplace=True)
         if df.empty:
             self.plot_widget.clear()
             self.plot_status_label.setText(
@@ -1023,7 +1025,6 @@ class PlotManager:
             )
             return
         
-        df.dropna(axis="index", how="any", inplace=True)
         df.sort_values(["x", "y"], inplace=True, ignore_index=True)
 
         # Remove x groups with only 1 point (can't compute height)
