@@ -47,6 +47,11 @@ class LogFolder:
         return Registry(self.path / "const.yaml", create=True)
 
     @property
+    def const(self) -> Registry:
+        """Alias for reg. Access the const.yaml registry."""
+        return self.reg
+
+    @property
     def df(self) -> pd.DataFrame:
         """Get the full dataframe, flushing all data rows."""
         return self._handler.get_df()

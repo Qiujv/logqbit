@@ -18,6 +18,9 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/Qiujv/logqbit"
 
+[project.scripts]
+logqbit = "logqbit.cli:main"
+
 [project.gui-scripts]
 logqbit-live-plotter = "logqbit.live_plotter:main"
 logqbit-browser = "logqbit.browser:main"
