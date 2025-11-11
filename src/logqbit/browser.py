@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from send2trash import send2trash
 
 try:  # pragma: no cover - fallback for direct execution
     from .metadata import LogMetadata
@@ -440,11 +441,11 @@ class SettingsManager:
                 continue
             if path not in recent_paths:
                 recent_paths.append(path)
-        self._recent_directories = recent_paths[:6]
+        self._recent_directories = recent_paths[:10]
         return self._recent_directories
 
     def save_recent_directories(self, directories: List[Path]) -> None:
-        self._recent_directories = directories[:6]
+        self._recent_directories = directories[:10]
         self._settings.setValue(
             SETTINGS_RECENT_DIRS_KEY, [str(path) for path in self._recent_directories]
         )
@@ -458,7 +459,7 @@ class SettingsManager:
         for existing in self._recent_directories:
             if existing != resolved:
                 entries.append(existing)
-            if len(entries) >= 6:
+            if len(entries) >= 10:
                 break
         self._recent_directories = entries
         self.save_recent_directories(self._recent_directories)
@@ -1325,7 +1326,6 @@ class LogBrowserWindow(QMainWindow):
         self, directory: Optional[Path] = None, parent: Optional[QWidget] = None
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Logqbit Log Browser")
         if not WINDOW_ICON.isNull():
             self.setWindowIcon(WINDOW_ICON)
         self.resize(1200, 700)
@@ -1367,6 +1367,7 @@ class LogBrowserWindow(QMainWindow):
         if self.theme_manager:
             self.theme_manager.apply_theme(self._theme_mode)
         self._update_theme_button()
+        self._update_window_title()
         self._sync_directory_watcher()
         self.refresh_logs()
 
@@ -1516,7 +1517,7 @@ class LogBrowserWindow(QMainWindow):
             self.addAction(action)
             self._shortcuts.append(action)
 
-        add_shortcut(Qt.Key_Delete, self._shortcut_mark_trash)
+        add_shortcut(Qt.Key_Delete, self._shortcut_send_to_recycle_bin)
         add_shortcut(Qt.Key_T, self._shortcut_toggle_trash)
         add_shortcut(Qt.Key_S, self._shortcut_toggle_star)
         add_shortcut(Qt.Key_F2, self._shortcut_rename_title)
@@ -1555,6 +1556,9 @@ class LogBrowserWindow(QMainWindow):
             self.theme_button.setText(emoji)
             self.theme_button.setToolTip(tooltip)
 
+    def _update_window_title(self) -> None:
+        self.setWindowTitle(f"{self._base_dir.name} - LogQbit Browser")
+
     def _sync_directory_watcher(self) -> None:
         try:
             if self._dir_watcher.directories():
@@ -1589,6 +1593,7 @@ class LogBrowserWindow(QMainWindow):
         if path != self._base_dir:
             self._base_dir = path
             self.directory_label.setText(str(self._base_dir))
+            self._update_window_title()
             self._sync_directory_watcher()
             self.refresh_logs()
         else:
@@ -1784,6 +1789,7 @@ class LogBrowserWindow(QMainWindow):
         show_trash_action = menu.addAction("Show Trashed Items")
         show_trash_action.setCheckable(True)
         show_trash_action.setChecked(self._show_trash)
+        send_to_recycle_action = menu.addAction("Send to Recycle Bin (Del)")
         menu.addSeparator()
         plot_axes_action = menu.addAction("Show Plot Axes Column")
         plot_axes_action.setCheckable(True)
@@ -1804,6 +1810,7 @@ class LogBrowserWindow(QMainWindow):
             rename_action.setEnabled(False)
             toggle_star_action.setEnabled(False)
             toggle_trash_action.setEnabled(False)
+            send_to_recycle_action.setEnabled(False)
             open_explorer.setEnabled(False)
         else:
             rename_action.setEnabled(len(records) == 1)
@@ -1813,6 +1820,7 @@ class LogBrowserWindow(QMainWindow):
             toggle_star_action.setChecked(all_starred)
             toggle_trash_action.setEnabled(True)
             toggle_trash_action.setChecked(all_trashed)
+            send_to_recycle_action.setEnabled(True)
         chosen = menu.exec(self.log_table.viewport().mapToGlobal(point))
         if chosen is None:
             return
@@ -1824,6 +1832,8 @@ class LogBrowserWindow(QMainWindow):
             )
         elif chosen == toggle_trash_action and records:
             self._set_records_trash(records, toggle_trash_action.isChecked())
+        elif chosen == send_to_recycle_action and records:
+            self._send_records_to_recycle_bin(records)
         elif chosen == show_trash_action:
             self._toggle_show_trash()
         elif chosen == create_time_action:
@@ -1928,6 +1938,54 @@ class LogBrowserWindow(QMainWindow):
                 self, "Open in Explorer", f"Failed to open file browser: {exc}"
             )
 
+    def _send_records_to_recycle_bin(self, records: Iterable[LogRecord]) -> None:
+        records_list = list(records)
+        if not records_list:
+            return
+
+        # Prepare confirmation message
+        if len(records_list) == 1:
+            message = f"Send log folder #{records_list[0].log_id} to Recycle Bin?\n\n"
+            message += f"Path: {records_list[0].path}\n\n"
+            message += "This operation can be undone from the Recycle Bin."
+        else:
+            message = f"Send {len(records_list)} log folders to Recycle Bin?\n\n"
+            message += "IDs: " + ", ".join(f"#{r.log_id}" for r in records_list[:10])
+            if len(records_list) > 10:
+                message += f", ... (+{len(records_list) - 10} more)"
+            message += "\n\nThis operation can be undone from the Recycle Bin."
+
+        # Show confirmation dialog
+        reply = QMessageBox.question(
+            self,
+            "Confirm Send to Recycle Bin",
+            message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Send to recycle bin
+        failed_paths = []
+        for record in records_list:
+            try:
+                send2trash(str(record.path))
+            except Exception as exc:
+                failed_paths.append(f"{record.path} ({exc})")
+
+        # Show results
+        if failed_paths:
+            error_msg = "Failed to send some folders to Recycle Bin:\n\n"
+            error_msg += "\n".join(failed_paths[:5])
+            if len(failed_paths) > 5:
+                error_msg += f"\n... and {len(failed_paths) - 5} more"
+            QMessageBox.warning(self, "Error", error_msg)
+        
+        # Refresh list
+        self.refresh_logs()
+
     def _shortcut_set_star(self, count: int) -> None:
         records = self._get_selected_records()
         if not records:
@@ -1946,6 +2004,12 @@ class LogBrowserWindow(QMainWindow):
         if not records:
             return
         self._set_records_trash(records, True)
+
+    def _shortcut_send_to_recycle_bin(self) -> None:
+        records = self._get_selected_records()
+        if not records:
+            return
+        self._send_records_to_recycle_bin(records)
 
     def _shortcut_toggle_trash(self) -> None:
         records = self._get_selected_records()

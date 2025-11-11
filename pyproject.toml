@@ -1,17 +1,17 @@
 [project]
 name = "logqbit"
-version = "0.2.0"
+version = "0.2.1"
 description = "Simple data logger and live plotter for lab-scale experiments."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "labcodes>=1.0.4",
     "numpy>=2.3.3",
     "pandas>=2.3.3",
     "pyarrow>=21.0.0",
     "pyqtgraph>=0.13.7",
     "pyside6>=6.9.3",
     "ruamel-yaml>=0.18.15",
+    "send2trash>=1.8.3",
     "tqdm>=4.67.1",
 ]
 

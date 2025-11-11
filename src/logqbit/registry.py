@@ -210,7 +210,7 @@ def _construct_labrad_value(loader: "BaseConstructor", node: "ScalarNode"):
     return magnitude * unit_obj
 
 
-def _represent_labrad_value(dumper: "BaseRepresenter", data: WithUnit):
+def _represent_labrad_value(dumper: "BaseRepresenter", data: "WithUnit"):
     unit_name = data.unit.name
     magnitude: float = data._value
     if magnitude.is_integer():
