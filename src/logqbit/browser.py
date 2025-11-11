@@ -264,7 +264,11 @@ class LogListTableModel(QAbstractTableModel):
             elif col == COL_CREATE_MACHINE:
                 return meta.create_machine
             elif col == COL_PLOT_AXES:
-                return ", ".join([i[:3] for i in meta.plot_axes]) if meta.plot_axes else ""
+                if meta.plot_axes:
+                    n_axes = len(meta.plot_axes)
+                    return f"{n_axes}, " + ", ".join([i[:3] for i in meta.plot_axes])
+                else:
+                    return ""
 
         # Font styling
         elif role == Qt.FontRole and col == COL_TITLE:
@@ -962,10 +966,13 @@ class PlotManager:
         self.plot_status_label.setText(f"Plotted {len(df)} rows.")
 
     def _refresh_plot_2d(self) -> None:
-        """Refresh 2D scatter plot with color-coded rectangles.
+        """Refresh 2D scatter plot with color-coded rectangles or image.
 
-        Uses the same algorithm as plot2d_collection: calculate cell boundaries
-        and fill rectangles column-by-column for proper spacing.
+        Uses two algorithms:
+        1. Image mode: If data forms a complete grid (nx * ny == total points),
+           reshape and display as ImageItem for fast rendering.
+        2. Rectangle mode: Otherwise, calculate cell boundaries and fill rectangles
+           (limited to first 20k points to prevent UI freezing).
         """
         record = self._plot_record
         if record is None:
@@ -1028,12 +1035,84 @@ class PlotManager:
         
         df.sort_values(["x", "y"], inplace=True, ignore_index=True)
 
+        # Check if data forms a complete grid for image mode
+        x_unique = df["x"].unique()
+        y_unique = df["y"].unique()
+        nx = len(x_unique)
+        ny = len(y_unique)
+        total_points = len(df)
+        
+        is_complete_grid = (nx * ny == total_points)
+        
+        if is_complete_grid:
+            # Use fast image rendering for complete grids
+            self._refresh_plot_2d_image(df, x_unique, y_unique, nx, ny, x_column, y_column, z_column)
+        else:
+            # Use rectangle rendering for incomplete grids
+            self._refresh_plot_2d_rectangles(df, x_column, y_column, z_column, total_points)
+
+    def _refresh_plot_2d_image(
+        self, df: pd.DataFrame, x_unique, y_unique, nx: int, ny: int,
+        x_column: str, y_column: str, z_column: str
+    ) -> None:
+        """Render 2D plot as image for complete grid data."""
+        self.plot_widget.clear()
+
+        z_grid = df["z"].values.reshape(nx, ny)
+        x_min, x_max = x_unique[0], x_unique[-1]
+        y_min, y_max = y_unique[0], y_unique[-1]
+        
+        # Create ImageItem with proper scaling
+        img_item = pg.ImageItem()
+        img_item.setImage(z_grid.T)  # Transpose for correct orientation
+        
+        # Set color map
+        img_item.setLookupTable(self.cmap.getLookupTable())
+        
+        # Calculate pixel size for proper positioning
+        if nx > 1:
+            dx = (x_max - x_min) / (nx - 1)
+        else:
+            dx = 1.0
+        if ny > 1:
+            dy = (y_max - y_min) / (ny - 1)
+        else:
+            dy = 1.0
+            
+        # Set image position and scale
+        # Offset by half pixel to center pixels on data points
+        img_item.setRect(x_min - dx/2, y_min - dy/2, x_max - x_min + dx, y_max - y_min + dy)
+        
+        self.plot_widget.addItem(img_item)
+        self.plot_widget.setLabel("bottom", x_column)
+        self.plot_widget.setLabel("left", y_column)
+        
+        # Auto-range to fit data
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is not None:
+            plot_item.enableAutoRange(enable=True)
+            plot_item.autoRange()
+        
+        z_min, z_max = df["z"].min(), df["z"].max()
+        self.plot_status_label.setText(
+            f"2D image plot: {nx}×{ny} grid ({len(df)} points, z: {z_min:.3g} to {z_max:.3g})"
+        )
+
+    def _refresh_plot_2d_rectangles(
+        self, df: pd.DataFrame, x_column: str, y_column: str, z_column: str,
+        total_points: int
+    ) -> None:
+        """Render 2D plot as rectangles for incomplete grid data."""
+        # Limit to 20k points to prevent UI freezing
+        MAX_RECT_POINTS = 20000
+        df_plot = df.head(MAX_RECT_POINTS) if len(df) > MAX_RECT_POINTS else df
+        
         # Remove x groups with only 1 point (can't compute height)
-        df_filtered = df.groupby("x").filter(lambda group: len(group) > 1)
+        df_filtered = df_plot.groupby("x").filter(lambda group: len(group) > 1)
 
         if len(df_filtered) == 0:
             self.plot_widget.clear()
-            x_counts = df.groupby("x").size()
+            x_counts = df_plot.groupby("x").size()
             single_point_x = x_counts[x_counts == 1]
             if len(single_point_x) > 0:
                 self.plot_status_label.setText(
@@ -1046,16 +1125,16 @@ class PlotManager:
                 )
             return
 
-        df = df_filtered
+        df_plot = df_filtered
 
         self.plot_widget.clear()
 
         # Normalize z values to [0, 1] for colormap
-        z_min, z_max = df["z"].min(), df["z"].max()
+        z_min, z_max = df_plot["z"].min(), df_plot["z"].max()
         if z_max > z_min:
-            z_normalized = (df["z"] - z_min) / (z_max - z_min)
+            z_normalized = (df_plot["z"] - z_min) / (z_max - z_min)
         else:
-            z_normalized = pd.Series(0.5, index=df.index)        
+            z_normalized = pd.Series(0.5, index=df_plot.index)        
 
         def cut(cell_centers):
             cell_centers = np.asarray(cell_centers)
@@ -1071,24 +1150,24 @@ class PlotManager:
             )
             return cut_points
 
-        xunic = df["x"].unique()
+        xunic = df_plot["x"].unique()
         xcut = cut(xunic)
-        df["width"] = df["x"].map({x: w for x, w in zip(xunic, np.diff(xcut))})
-        df["xshift"] = df["x"].map({x: s for x, s in zip(xunic, xcut[:-1])})
+        df_plot["w"] = df_plot["x"].map({x: w for x, w in zip(xunic, np.diff(xcut))})
+        df_plot["x"] = df_plot["x"].map({x: s for x, s in zip(xunic, xcut[:-1])})
 
-        df["height"] = df.groupby("x")["y"].transform(lambda y: np.diff(cut(y)))
-        df["yshift"] = df.groupby("x")["y"].transform(lambda y: cut(y)[:-1])
+        df_plot["h"] = df_plot.groupby("x")["y"].transform(lambda y: np.diff(cut(y)))
+        df_plot["y"] = df_plot.groupby("x")["y"].transform(lambda y: cut(y)[:-1])
 
         # Disable auto-range during item addition to prevent repeated recalculations
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.enableAutoRange(enable=False)
 
-        for idx, row in df.iterrows():
-            x_pos = row["xshift"]
-            y_pos = row["yshift"]
-            width = row["width"]
-            height = row["height"]
+        for idx, row in df_plot.iterrows():
+            x_pos = row["x"]
+            y_pos = row["y"]
+            width = row["w"]
+            height = row["h"]
             z_val = z_normalized.loc[idx]
 
             color = self.cmap.map(z_val)
@@ -1106,9 +1185,17 @@ class PlotManager:
             plot_item.enableAutoRange(enable=True)
             plot_item.autoRange()
 
-        self.plot_status_label.setText(
-            f"2D plot: {len(df)} points (z: {z_min:.3g} to {z_max:.3g})"
-        )
+        # Show status with warning if data was truncated
+        if len(df) > MAX_RECT_POINTS:
+            self.plot_status_label.setText(
+                f"2D plot: showing first {len(df_plot)} of {total_points} points "
+                f"(z: {z_min:.3g} to {z_max:.3g}). "
+                f"⚠ Data truncated to prevent UI freezing."
+            )
+        else:
+            self.plot_status_label.setText(
+                f"2D plot: {len(df_plot)} points (z: {z_min:.3g} to {z_max:.3g})"
+            )
 
     @functools.cached_property
     def cmap(self):
