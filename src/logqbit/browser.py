@@ -1064,7 +1064,7 @@ class PlotManager:
         
         # Create ImageItem with proper scaling
         img_item = pg.ImageItem()
-        img_item.setImage(z_grid.T)  # Transpose for correct orientation
+        img_item.setImage(z_grid)
         
         # Set color map
         img_item.setLookupTable(self.cmap.getLookupTable())
