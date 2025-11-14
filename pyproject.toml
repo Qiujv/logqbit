@@ -1,9 +1,9 @@
 [project]
 name = "logqbit"
-version = "0.2.3"
+version = "0.2.4"
 description = "Simple data logger and live plotter for lab-scale experiments."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.3.3",
     "pandas>=2.3.3",
@@ -13,6 +13,7 @@ dependencies = [
     "ruamel-yaml>=0.18.15",
     "send2trash>=1.8.3",
     "tqdm>=4.67.1",
+    "typing-extensions>=4.15.0",
 ]
 
 [project.urls]

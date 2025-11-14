@@ -236,7 +236,7 @@ class TestLogListTableModel:
         data = model.data(index, Qt.DisplayRole)
         
         # Should show first 3 characters of each axis
-        assert data == "x, y"  # "x" + "y"
+        assert data == "2, x, y"  # "x" + "y"
     
     def test_data_tooltip_plot_axes(self, sample_logfolder: Path) -> None:
         """Test tooltip showing full plot axes names."""
