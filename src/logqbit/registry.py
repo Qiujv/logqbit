@@ -127,6 +127,7 @@ class Registry:
             root = self.yaml.load(f)
         if root is None:
             root = CommentedMap()
+            root.fa.set_block_style()
         return root
 
     def save(self, path: str | Path | None = None):
