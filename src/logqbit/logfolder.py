@@ -3,14 +3,15 @@ import itertools
 import os
 import threading
 import weakref
+from collections.abc import Callable
 from functools import cached_property
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
+from typing_extensions import deprecated
 
 from .metadata import LogMetadata
 from .registry import Registry, get_parser
@@ -110,7 +111,7 @@ class LogFolder:
                 run_axs[k] = v
             else:
                 const_axs[k] = v
-        self.add_meta_to_head(
+        self.add_const_to_head(
             const=const_axs,
             dims={k: [min(a), max(a), len(a)] for k, a in run_axs.items()},
         )
@@ -123,20 +124,28 @@ class LogFolder:
                 ret_kws = func(**step_kws, **const_axs)
                 self.add_row(**step_kws, **ret_kws)
 
-    def add_meta(self, meta: dict = None, /, **kwargs):
+    def add_const(self, meta: dict = None, /, **kwargs):
         if meta is None:
             meta = {}
         meta.update(kwargs)
         self.reg.root.update(meta)
         self.reg.save()
 
-    def add_meta_to_head(self, meta: dict = None, /, **kwargs):
+    def add_const_to_head(self, meta: dict = None, /, **kwargs):
         if meta is None:
             meta = {}
         meta.update(kwargs)
         for i, (k, v) in enumerate(meta.items()):
             self.reg.root.insert(i, k, v)
         self.reg.save()
+
+    @deprecated("Use `add_const` instead.")
+    def add_meta(self, meta: dict = None, /, **kwargs):
+        return self.add_const(meta, **kwargs)
+    
+    @deprecated("Use `add_const_to_head` instead.")
+    def add_meta_to_head(self, meta: dict = None, /, **kwargs):
+        return self.add_const_to_head(meta, **kwargs)
 
     def flush(self) -> None:
         """Flash the pending data immediately, block until done."""

@@ -7,10 +7,10 @@ import logging
 import numbers
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
-from typing import Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -98,15 +98,15 @@ WINDOW_ICON = _load_window_icon()
 class LogRecord:
     log_id: int
     path: Path
-    data_path: Optional[Path] = None
-    yaml_path: Optional[Path] = None
+    data_path: Path | None = None
+    yaml_path: Path | None = None
 
     # Data metadata
     row_count: int = 0
-    columns: List[str] = field(default_factory=list)
+    columns: list[str] = field(default_factory=list)
 
     # Cached data
-    data_frame: Optional[pd.DataFrame] = field(default=None, repr=False)
+    data_frame: pd.DataFrame | None = field(default=None, repr=False)
 
     # Metadata accessor (always available)
     meta: LogMetadata = field(init=False, repr=False)
@@ -114,7 +114,7 @@ class LogRecord:
     def __post_init__(self):
         self.meta = LogMetadata(self.path / "metadata.json", create=True)
 
-    def load_dataframe(self) -> Optional[pd.DataFrame]:
+    def load_dataframe(self) -> pd.DataFrame | None:
         if self.data_frame is not None:
             return self.data_frame
         if not self.data_path:
@@ -138,8 +138,8 @@ class LogRecord:
             return f"Failed to read const.yaml: {exc}"
         return text if text.strip() else "(const.yaml is empty)"
 
-    def list_image_files(self) -> List[Path]:
-        files: List[Path] = []
+    def list_image_files(self) -> list[Path]:
+        files: list[Path] = []
         for child in self.path.iterdir():
             if child.is_file() and child.suffix.lower() in IMAGE_EXTENSIONS:
                 files.append(child)
@@ -147,8 +147,8 @@ class LogRecord:
         return files
 
     @staticmethod
-    def scan_directory(directory: Path) -> List["LogRecord"]:
-        records: List[LogRecord] = []
+    def scan_directory(directory: Path) -> list["LogRecord"]:
+        records: list[LogRecord] = []
         if not directory.exists() or not directory.is_dir():
             return records
 
@@ -166,7 +166,7 @@ class LogRecord:
 
             # Read feather summary if available
             row_count: int = 0
-            columns: List[str] = []
+            columns: list[str] = []
             if data_path:
                 try:
                     with pyarrow.ipc.open_file(data_path) as reader:
@@ -198,9 +198,9 @@ class LogRecord:
 
 
 class LogListTableModel(QAbstractTableModel):
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._records: List[LogRecord] = []
+        self._records: list[LogRecord] = []
         self._bold_font = QFont()
         self._bold_font.setBold(True)
         self._strikeout_font = QFont()
@@ -209,12 +209,12 @@ class LogListTableModel(QAbstractTableModel):
         self._bold_strikeout_font.setBold(True)
         self._bold_strikeout_font.setStrikeOut(True)
 
-    def set_records(self, records: List[LogRecord]) -> None:
+    def set_records(self, records: list[LogRecord]) -> None:
         self.beginResetModel()
         self._records = list(records)
         self.endResetModel()
 
-    def get_record(self, row: int) -> Optional[LogRecord]:
+    def get_record(self, row: int) -> LogRecord | None:
         if 0 <= row < len(self._records):
             return self._records[row]
         return None
@@ -249,7 +249,7 @@ class LogListTableModel(QAbstractTableModel):
             elif col == COL_TITLE:
                 star_count = max(int(meta.star), 0)
                 star_prefix = "⭐" * star_count
-                parts: List[str] = []
+                parts: list[str] = []
                 if meta.trash:
                     parts.append("🗑️")
                 if star_prefix:
@@ -316,9 +316,9 @@ class PandasTableModel(QAbstractTableModel):
     def __init__(
         self,
         frame: pd.DataFrame,
-        parent: Optional[QWidget] = None,
-        highlight_columns: Optional[Iterable[str]] = None,
-        preview_limit: Optional[int] = None,
+        parent: QWidget | None = None,
+        highlight_columns: Iterable[str] | None = None,
+        preview_limit: int | None = None,
     ) -> None:
         super().__init__(parent)
         self._df = frame
@@ -343,7 +343,7 @@ class PandasTableModel(QAbstractTableModel):
     def get_total_rows(self) -> int:
         return self._df.shape[0]
 
-    def set_preview_limit(self, limit: Optional[int]) -> None:
+    def set_preview_limit(self, limit: int | None) -> None:
         old_count = self.rowCount()
         self._preview_limit = limit
         new_count = self.rowCount()
@@ -387,9 +387,9 @@ class PandasTableModel(QAbstractTableModel):
 
 
 class ScaledImageLabel(QLabel):
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._pixmap: Optional[QPixmap] = None
+        self._pixmap: QPixmap | None = None
         self.setAlignment(Qt.AlignCenter)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(200, 200)
@@ -424,9 +424,9 @@ class SettingsManager:
         self._settings = QSettings(
             QSettings.IniFormat, QSettings.UserScope, SETTINGS_ORG, SETTINGS_APP
         )
-        self._recent_directories: List[Path] = []
+        self._recent_directories: list[Path] = []
 
-    def load_recent_directories(self) -> List[Path]:
+    def load_recent_directories(self) -> list[Path]:
         stored = self._settings.value(SETTINGS_RECENT_DIRS_KEY, [])
         if isinstance(stored, str):
             candidates = [stored]
@@ -434,7 +434,7 @@ class SettingsManager:
             candidates = list(stored)
         else:
             candidates = []
-        recent_paths: List[Path] = []
+        recent_paths: list[Path] = []
         for item in candidates:
             text = str(item)
             if not text:
@@ -448,16 +448,16 @@ class SettingsManager:
         self._recent_directories = recent_paths[:10]
         return self._recent_directories
 
-    def save_recent_directories(self, directories: List[Path]) -> None:
+    def save_recent_directories(self, directories: list[Path]) -> None:
         self._recent_directories = directories[:10]
         self._settings.setValue(
             SETTINGS_RECENT_DIRS_KEY, [str(path) for path in self._recent_directories]
         )
         self._settings.sync()
 
-    def update_recent_directories(self, path: Path) -> List[Path]:
+    def update_recent_directories(self, path: Path) -> list[Path]:
         self.load_recent_directories()
-        
+
         resolved = Path(path)
         entries = [resolved]
         for existing in self._recent_directories:
@@ -573,8 +573,8 @@ class ThemeManager:
 class PlotManager:
     MARKER_AUTO_THRESHOLD = 500  # Auto-enable markers when point count <= this value
 
-    def __init__(self, parent: Optional[QWidget] = None):
-        self._plot_record: Optional[LogRecord] = None
+    def __init__(self, parent: QWidget | None = None):
+        self._plot_record: LogRecord | None = None
         self._suppress_updates = False
         self._marker_auto = True
         self._needs_refresh = False
@@ -586,7 +586,7 @@ class PlotManager:
 
         self.widget = self._create_widget(parent)
 
-    def _create_widget(self, parent: Optional[QWidget] = None) -> QWidget:
+    def _create_widget(self, parent: QWidget | None = None) -> QWidget:
         """Create and return the plot tab widget."""
         plot_tab = QWidget(parent)
         plot_layout = QVBoxLayout(plot_tab)
@@ -649,7 +649,7 @@ class PlotManager:
         self.plot_widget.setBackground("w")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
         self.plot_widget.setMinimumHeight(220)
-        
+
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.setDownsampling(auto=True, mode="subsample")
@@ -657,7 +657,7 @@ class PlotManager:
             plot_item.getAxis("left").setTextPen("k")
             plot_item.getAxis("top").setTextPen("k")
             plot_item.getAxis("right").setTextPen("k")
-        
+
         plot_layout.addWidget(self.plot_widget, stretch=1)
 
         # Status label
@@ -946,8 +946,8 @@ class PlotManager:
         plot_pen = pg.mkPen(color="#1E90FF", width=2)
         if show_markers:
             self.plot_widget.plot(
-                df['x'].values,
-                df['y'].values,
+                df["x"].values,
+                df["y"].values,
                 pen=plot_pen,
                 symbol="o",
                 symbolSize=6,
@@ -1032,7 +1032,7 @@ class PlotManager:
                 "No valid numeric rows after filtering NaN values."
             )
             return
-        
+
         df.sort_values(["x", "y"], inplace=True, ignore_index=True)
 
         # Check if data forms a complete grid for image mode
@@ -1041,19 +1041,30 @@ class PlotManager:
         nx = len(x_unique)
         ny = len(y_unique)
         total_points = len(df)
-        
-        is_complete_grid = (nx * ny == total_points)
-        
+
+        is_complete_grid = nx * ny == total_points
+
         if is_complete_grid:
             # Use fast image rendering for complete grids
-            self._refresh_plot_2d_image(df, x_unique, y_unique, nx, ny, x_column, y_column, z_column)
+            self._refresh_plot_2d_image(
+                df, x_unique, y_unique, nx, ny, x_column, y_column, z_column
+            )
         else:
             # Use rectangle rendering for incomplete grids
-            self._refresh_plot_2d_rectangles(df, x_column, y_column, z_column, total_points)
+            self._refresh_plot_2d_rectangles(
+                df, x_column, y_column, z_column, total_points
+            )
 
     def _refresh_plot_2d_image(
-        self, df: pd.DataFrame, x_unique, y_unique, nx: int, ny: int,
-        x_column: str, y_column: str, z_column: str
+        self,
+        df: pd.DataFrame,
+        x_unique,
+        y_unique,
+        nx: int,
+        ny: int,
+        x_column: str,
+        y_column: str,
+        z_column: str,
     ) -> None:
         """Render 2D plot as image for complete grid data."""
         self.plot_widget.clear()
@@ -1061,14 +1072,14 @@ class PlotManager:
         z_grid = df["z"].values.reshape(nx, ny)
         x_min, x_max = x_unique[0], x_unique[-1]
         y_min, y_max = y_unique[0], y_unique[-1]
-        
+
         # Create ImageItem with proper scaling
         img_item = pg.ImageItem()
         img_item.setImage(z_grid)
-        
+
         # Set color map
         img_item.setLookupTable(self.cmap.getLookupTable())
-        
+
         # Calculate pixel size for proper positioning
         if nx > 1:
             dx = (x_max - x_min) / (nx - 1)
@@ -1078,35 +1089,41 @@ class PlotManager:
             dy = (y_max - y_min) / (ny - 1)
         else:
             dy = 1.0
-            
+
         # Set image position and scale
         # Offset by half pixel to center pixels on data points
-        img_item.setRect(x_min - dx/2, y_min - dy/2, x_max - x_min + dx, y_max - y_min + dy)
-        
+        img_item.setRect(
+            x_min - dx / 2, y_min - dy / 2, x_max - x_min + dx, y_max - y_min + dy
+        )
+
         self.plot_widget.addItem(img_item)
         self.plot_widget.setLabel("bottom", x_column)
         self.plot_widget.setLabel("left", y_column)
-        
+
         # Auto-range to fit data
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.enableAutoRange(enable=True)
             plot_item.autoRange()
-        
+
         z_min, z_max = df["z"].min(), df["z"].max()
         self.plot_status_label.setText(
             f"2D image plot: {nx}×{ny} grid ({len(df)} points, z: {z_min:.3g} to {z_max:.3g})"
         )
 
     def _refresh_plot_2d_rectangles(
-        self, df: pd.DataFrame, x_column: str, y_column: str, z_column: str,
-        total_points: int
+        self,
+        df: pd.DataFrame,
+        x_column: str,
+        y_column: str,
+        z_column: str,
+        total_points: int,
     ) -> None:
         """Render 2D plot as rectangles for incomplete grid data."""
         # Limit to 20k points to prevent UI freezing
         MAX_RECT_POINTS = 20000
         df_plot = df.head(MAX_RECT_POINTS) if len(df) > MAX_RECT_POINTS else df
-        
+
         # Remove x groups with only 1 point (can't compute height)
         df_filtered = df_plot.groupby("x").filter(lambda group: len(group) > 1)
 
@@ -1134,7 +1151,7 @@ class PlotManager:
         if z_max > z_min:
             z_normalized = (df_plot["z"] - z_min) / (z_max - z_min)
         else:
-            z_normalized = pd.Series(0.5, index=df_plot.index)        
+            z_normalized = pd.Series(0.5, index=df_plot.index)
 
         def cut(cell_centers):
             cell_centers = np.asarray(cell_centers)
@@ -1212,7 +1229,7 @@ class DataViewManager:
 
     def __init__(
         self,
-        parent: Optional[QWidget] = None,
+        parent: QWidget | None = None,
         load_more_callback=None,
         plot_axes_changed_callback=None,
     ):
@@ -1225,12 +1242,12 @@ class DataViewManager:
         """
         self._load_more_callback = load_more_callback
         self._plot_axes_changed_callback = plot_axes_changed_callback
-        self._current_record: Optional[LogRecord] = None
+        self._current_record: LogRecord | None = None
 
         # Create UI components
         self.widget = self._create_widget(parent)
 
-    def _create_widget(self, parent: Optional[QWidget] = None) -> QWidget:
+    def _create_widget(self, parent: QWidget | None = None) -> QWidget:
         """Create and return the data tab widget."""
         data_tab = QWidget(parent)
         data_layout = QVBoxLayout(data_tab)
@@ -1410,7 +1427,7 @@ class DataViewManager:
 
 class LogBrowserWindow(QMainWindow):
     def __init__(
-        self, directory: Optional[Path] = None, parent: Optional[QWidget] = None
+        self, directory: Path | None = None, parent: QWidget | None = None
     ) -> None:
         super().__init__(parent)
         if not WINDOW_ICON.isNull():
@@ -1421,10 +1438,10 @@ class LogBrowserWindow(QMainWindow):
 
         # State
         self._base_dir = Path(directory) if directory else Path.cwd()
-        self._current_record: Optional[LogRecord] = None
+        self._current_record: LogRecord | None = None
         self._show_trash = True
-        self._image_tab_indices: List[int] = []
-        self._shortcuts: List[QAction] = []
+        self._image_tab_indices: list[int] = []
+        self._shortcuts: list[QAction] = []
         self._list_refresh_pending = False
         self._detail_refresh_pending = False
 
@@ -1735,6 +1752,8 @@ class LogBrowserWindow(QMainWindow):
     def refresh_current_log(self) -> None:
         if not self._current_record:
             return
+        # Clear cached dataframe to force reload from disk
+        self._current_record.data_frame = None
         self._load_log(self._current_record)
 
     def _on_log_selection_changed(self) -> None:
@@ -1791,7 +1810,7 @@ class LogBrowserWindow(QMainWindow):
             self.tab_widget.removeTab(index)
         self._image_tab_indices.clear()
 
-    def _update_image_tabs(self, image_files: List[Path]) -> None:
+    def _update_image_tabs(self, image_files: list[Path]) -> None:
         self._clear_image_tabs()
         for image_path in image_files:
             widget = ScaledImageLabel()
@@ -1806,7 +1825,7 @@ class LogBrowserWindow(QMainWindow):
 
     def _update_detail_watcher(self, record: LogRecord) -> None:
         self._clear_detail_watcher()
-        watch_paths: List[str] = [str(record.path)]
+        watch_paths: list[str] = [str(record.path)]
         for extra in (record.yaml_path, record.data_path, record.meta.path):
             if extra and extra.exists():
                 watch_paths.append(str(extra))
@@ -1830,11 +1849,11 @@ class LogBrowserWindow(QMainWindow):
         self.settings_manager.save_theme_mode(self._theme_mode)
         self._update_theme_button()
 
-    def _get_selected_records(self) -> List[LogRecord]:
+    def _get_selected_records(self) -> list[LogRecord]:
         selection_model = self.log_table.selectionModel()
         if selection_model is None:
             return []
-        records: List[LogRecord] = []
+        records: list[LogRecord] = []
         for proxy_index in selection_model.selectedRows():
             source_index = self.table_proxy.mapToSource(proxy_index)
             record = self.table_model.get_record(source_index.row())
@@ -1851,7 +1870,7 @@ class LogBrowserWindow(QMainWindow):
     def _open_new_window(self, directory: Path) -> None:
         """Launch a new browser window in a separate process."""
         import subprocess
-        
+
         try:
             subprocess.Popen(
                 [sys.executable, "-m", "logqbit.browser", str(directory)],
@@ -2069,7 +2088,7 @@ class LogBrowserWindow(QMainWindow):
             if len(failed_paths) > 5:
                 error_msg += f"\n... and {len(failed_paths) - 5} more"
             QMessageBox.warning(self, "Error", error_msg)
-        
+
         # Refresh list
         self.refresh_logs()
 
@@ -2132,7 +2151,7 @@ def ensure_application() -> QApplication:
     return app
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     directory = Path(args[0]).expanduser().resolve() if args else None
     app = ensure_application()

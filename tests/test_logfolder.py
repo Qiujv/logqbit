@@ -49,8 +49,8 @@ def test_add_row_vector_creates_dataframe(tmp_path: Path) -> None:
 def test_add_meta_covers_existing_meta(tmp_path: Path) -> None:
     lf = LogFolder.new(tmp_path)
 
-    lf.add_meta({"experiment": {"name": "cooling"}})
-    lf.add_meta_to_head(run=1, experiment={"operator": "alice"})
+    lf.add_const({"experiment": {"name": "cooling"}})
+    lf.add_const_to_head(run=1, experiment={"operator": "alice"})
 
     with pytest.raises(KeyError):
         lf.reg["experiment"]["name"]
