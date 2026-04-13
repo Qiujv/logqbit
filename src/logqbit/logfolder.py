@@ -2,6 +2,8 @@ import inspect
 import itertools
 import os
 import threading
+import time
+import warnings
 import weakref
 from collections.abc import Callable
 from functools import cached_property
@@ -212,7 +214,23 @@ class _DataHandler:
             df = self.get_df(_clear=True)
             tmp = self.path.with_suffix(".tmp")
             df.to_feather(tmp)
-            tmp.replace(self.path)
+            
+            max_retries = 3
+            retry_delay = 0.1
+            for attempt in range(max_retries):
+                try:
+                    tmp.replace(self.path)
+                    break
+                except PermissionError as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        warnings.warn(
+                            f"Failed to replace {self.path} after {max_retries} attempts: {e}"
+                        )
+                        raise
+            
             self._flush_complete.set()
 
     def stop(self):
