@@ -5,10 +5,11 @@ description = "Simple data logger and live plotter for lab-scale experiments."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "numba>=0.65.0",
     "numpy>=2.3.3",
     "pandas>=2.3.3",
     "pyarrow>=21.0.0",
-    "pyqtgraph>=0.13.7",
+    "pyqtgraph>=0.14.0",
     "pyside6>=6.9.3",
     "ruamel-yaml>=0.18.15",
     "send2trash>=1.8.3",

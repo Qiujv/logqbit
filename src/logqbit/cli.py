@@ -305,9 +305,49 @@ def create_example_data() -> int:
         log2.const["frequency_unit"] = "GHz"
         log2.flush()
         
-        print(f"\n✓ Created 3 example log folders in: {example_dir}")
+        import pandas as pd
+
+        # Example 4: 1M-point 1D data (large scale demo)
+        print("  Creating example 3: 1M-point 1D signal (large scale)...")
+        log3_path = example_dir / "3"
+        log3 = LogFolder(log3_path, create=True)
+        log3.meta.title = "1M-Point 1D Signal"
+        log3.meta.star = 0
+        log3.meta.plot_axes = ["t"]
+        N1d = 1_000_000
+        t_arr = np.linspace(0, 100, N1d)
+        signal_arr = np.sin(2 * np.pi * 0.5 * t_arr) * np.exp(-t_arr / 50) + np.random.default_rng(42).normal(0, 0.05, N1d)
+        df1d = pd.DataFrame({"t": t_arr, "signal": signal_arr})
+        import pyarrow.feather as feather
+        import pyarrow as pa
+        log3_feather = log3_path / "data.feather"
+        feather.write_feather(pa.Table.from_pandas(df1d, preserve_index=False), log3_feather)
+        log3.const["description"] = "Damped sine, 1 million points"
+        log3.const["points"] = N1d
+        log3.flush()
+
+        # Example 5: 1M-point 2D scan (large scale demo)
+        print("  Creating example 4: 1M-point 2D scan (large scale)...")
+        log4_path = example_dir / "4"
+        log4 = LogFolder(log4_path, create=True)
+        log4.meta.title = "1M-Point 2D Scan"
+        log4.meta.star = 0
+        log4.meta.plot_axes = ["x", "y"]
+        nx2d, ny2d = 1000, 1000  # 1M total
+        x_arr = np.repeat(np.linspace(0, 1, nx2d), ny2d)
+        y_arr = np.tile(np.linspace(0, 1, ny2d), nx2d)
+        rng = np.random.default_rng(7)
+        z_arr = np.sin(4 * np.pi * x_arr) * np.cos(4 * np.pi * y_arr) + rng.normal(0, 0.05, nx2d * ny2d)
+        df2d = pd.DataFrame({"x": x_arr, "y": y_arr, "z": z_arr})
+        log4_feather = log4_path / "data.feather"
+        feather.write_feather(pa.Table.from_pandas(df2d, preserve_index=False), log4_feather)
+        log4.const["description"] = "sin(4πx)cos(4πy) + noise, 1000×1000 grid"
+        log4.const["points"] = nx2d * ny2d
+        log4.flush()
+
+        print(f"\n✓ Created 5 example log folders in: {example_dir}")
         print("\nLaunching browser...")
-        
+
         # Launch browser directly
         from logqbit.browser import main as browser_main
         return browser_main([str(example_dir)])

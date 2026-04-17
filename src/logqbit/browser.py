@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 import numbers
 import subprocess
@@ -12,10 +11,8 @@ from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pyarrow.ipc
-import pyqtgraph as pg
 from PySide6.QtCore import (
     QAbstractTableModel,
     QFileSystemWatcher,
@@ -28,8 +25,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
-    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -53,8 +48,10 @@ from send2trash import send2trash
 
 try:  # pragma: no cover - fallback for direct execution
     from .metadata import LogMetadata
+    from .plotter import PlotManager, PlotWindow
 except ImportError:  # pragma: no cover - fallback for direct execution
     from metadata import LogMetadata  # type: ignore
+    from plotter import PlotManager, PlotWindow  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -570,659 +567,6 @@ class ThemeManager:
         return tooltip_map.get(mode, "Follow system theme")
 
 
-class PlotManager:
-    MARKER_AUTO_THRESHOLD = 500  # Auto-enable markers when point count <= this value
-
-    def __init__(self, parent: QWidget | None = None):
-        self._plot_record: LogRecord | None = None
-        self._suppress_updates = False
-        self._marker_auto = True
-        self._needs_refresh = False
-
-        # Current selections
-        self._x_column: str = ""
-        self._y_column: str = ""
-        self._z_column: str = ""
-
-        self.widget = self._create_widget(parent)
-
-    def _create_widget(self, parent: QWidget | None = None) -> QWidget:
-        """Create and return the plot tab widget."""
-        plot_tab = QWidget(parent)
-        plot_layout = QVBoxLayout(plot_tab)
-        plot_layout.setContentsMargins(4, 4, 4, 4)
-
-        # Plot controls
-        plot_controls = QHBoxLayout()
-        plot_controls.setContentsMargins(0, 0, 0, 0)
-
-        self.plot_mode_combo = QComboBox()
-        self.plot_mode_combo.addItem("1D", "1d")
-        self.plot_mode_combo.addItem("2D", "2d")
-        self.plot_mode_combo.setCurrentIndex(0)
-
-        # Use QToolButton with popup menu for column selection
-        self.plot_x_button = QToolButton()
-        self.plot_y_button = QToolButton()
-        self.plot_z_button = QToolButton()
-        self.plot_x_button.setText("(none)")
-        self.plot_y_button.setText("(none)")
-        self.plot_z_button.setText("(none)")
-        self.plot_x_button.setEnabled(False)
-        self.plot_y_button.setEnabled(False)
-        self.plot_z_button.setEnabled(False)
-
-        # Menus for buttons
-        self._x_menu = QMenu()
-        self._y_menu = QMenu()
-        self._z_menu = QMenu()
-        self.plot_x_button.setMenu(self._x_menu)
-        self.plot_y_button.setMenu(self._y_menu)
-        self.plot_z_button.setMenu(self._z_menu)
-        self.plot_x_button.setPopupMode(QToolButton.InstantPopup)
-        self.plot_y_button.setPopupMode(QToolButton.InstantPopup)
-        self.plot_z_button.setPopupMode(QToolButton.InstantPopup)
-
-        plot_controls.addWidget(QLabel("Mode:"))
-        plot_controls.addWidget(self.plot_mode_combo)
-        plot_controls.addSpacing(6)
-        plot_controls.addWidget(QLabel("X:"))
-        plot_controls.addWidget(self.plot_x_button)
-        plot_controls.addSpacing(6)
-        plot_controls.addWidget(QLabel("Y:"))
-        plot_controls.addWidget(self.plot_y_button)
-        plot_controls.addSpacing(6)
-        self.plot_z_label = QLabel("Z:")
-        plot_controls.addWidget(self.plot_z_label)
-        plot_controls.addWidget(self.plot_z_button)
-        plot_controls.addSpacing(6)
-
-        self.plot_marker_checkbox = QCheckBox("Show markers")
-        self.plot_marker_checkbox.setEnabled(False)
-        self.plot_marker_checkbox.setChecked(False)
-        plot_controls.addWidget(self.plot_marker_checkbox)
-        plot_controls.addStretch(1)
-        plot_layout.addLayout(plot_controls)
-
-        # Plot widget
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground("w")
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
-        self.plot_widget.setMinimumHeight(220)
-
-        plot_item = self.plot_widget.getPlotItem()
-        if plot_item is not None:
-            plot_item.setDownsampling(auto=True, mode="subsample")
-            plot_item.getAxis("bottom").setTextPen("k")
-            plot_item.getAxis("left").setTextPen("k")
-            plot_item.getAxis("top").setTextPen("k")
-            plot_item.getAxis("right").setTextPen("k")
-
-        plot_layout.addWidget(self.plot_widget, stretch=1)
-
-        # Status label
-        self.plot_status_label = QLabel("No data to plot.")
-        self.plot_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        plot_layout.addWidget(self.plot_status_label)
-
-        # Connect signals
-        self.plot_mode_combo.currentIndexChanged.connect(self.on_mode_changed)
-        self.plot_marker_checkbox.toggled.connect(self.on_marker_toggled)
-
-        return plot_tab
-
-    def reset_plot_state(self, message: str = "No data to plot.") -> None:
-        """Reset plot to empty state."""
-        self._plot_record = None
-        self._suppress_updates = True
-        self._x_column = ""
-        self._y_column = ""
-        self._z_column = ""
-        self._x_menu.clear()
-        self._y_menu.clear()
-        self._z_menu.clear()
-        self.plot_x_button.setText("(none)")
-        self.plot_y_button.setText("(none)")
-        self.plot_z_button.setText("(none)")
-        self._suppress_updates = False
-        self.plot_x_button.setEnabled(False)
-        self.plot_y_button.setEnabled(False)
-        self.plot_z_button.setEnabled(False)
-        self._reset_marker_checkbox(enabled=False)
-        self.plot_widget.clear()
-        self.plot_status_label.setText(message)
-        self._needs_refresh = False
-
-    def _reset_marker_checkbox(self, enabled: bool) -> None:
-        """Reset marker checkbox to unchecked state."""
-        self._marker_auto = True
-        self.plot_marker_checkbox.blockSignals(True)
-        self.plot_marker_checkbox.setChecked(False)
-        self.plot_marker_checkbox.blockSignals(False)
-        self.plot_marker_checkbox.setEnabled(enabled)
-
-    def mark_needs_refresh(self) -> None:
-        self._needs_refresh = True
-
-    def refresh_if_needed(self) -> None:
-        if self._needs_refresh:
-            self._needs_refresh = False
-            self.refresh_plot()
-
-    def update_plot_and_controls(
-        self, record: LogRecord, defer_plot: bool = False
-    ) -> None:
-        same_record = record is self._plot_record
-        previous_x = self._x_column if same_record else ""
-        previous_y = self._y_column if same_record else ""
-        previous_z = self._z_column if same_record else ""
-        previous_mode = self.plot_mode_combo.currentData() if same_record else None
-        self._plot_record = record
-
-        frame = record.load_dataframe()
-
-        if frame is None or frame.empty or not len(frame.columns):
-            self._suppress_updates = True
-            self._x_column = ""
-            self._y_column = ""
-            self._z_column = ""
-            self._x_menu.clear()
-            self._y_menu.clear()
-            self._z_menu.clear()
-            self.plot_x_button.setText("(none)")
-            self.plot_y_button.setText("(none)")
-            self.plot_z_button.setText("(none)")
-            self._suppress_updates = False
-            self.plot_x_button.setEnabled(False)
-            self.plot_y_button.setEnabled(False)
-            self.plot_z_button.setEnabled(False)
-            self._reset_marker_checkbox(enabled=False)
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No columns available to plot.")
-            self._needs_refresh = False
-            return
-
-        columns = frame.columns
-        plot_axes = [col for col in record.meta.plot_axes if col in columns]
-        plot_zs = [col for col in columns if col not in plot_axes]
-
-        # Populate menus
-        self._suppress_updates = True
-        self._x_menu.clear()
-        self._y_menu.clear()
-        self._z_menu.clear()
-
-        for name in columns:
-            x_action = self._x_menu.addAction(name)
-            x_action.triggered.connect(
-                lambda checked=False, col=name: self._on_x_selected(col)
-            )
-            y_action = self._y_menu.addAction(name)
-            y_action.triggered.connect(
-                lambda checked=False, col=name: self._on_y_selected(col)
-            )
-            z_action = self._z_menu.addAction(name)
-            z_action.triggered.connect(
-                lambda checked=False, col=name: self._on_z_selected(col)
-            )
-
-        auto_mode = "2d" if len(plot_axes) >= 2 else "1d"
-        if previous_mode:
-            auto_mode = previous_mode  # Keep user's choice
-
-        if auto_mode == "2d":
-            if len(plot_axes) >= 2:
-                x_default = plot_axes[0]
-                y_default = plot_axes[1]
-                z_default = plot_zs[0] if plot_zs else columns[0]
-            elif len(plot_axes) == 1:
-                x_default = plot_axes[0]
-                y_default = plot_zs[0] if plot_zs else columns[0]
-                z_default = plot_zs[1] if len(plot_zs) > 1 else columns[0]
-            else:
-                x_default = columns[0]
-                y_default = columns[1] if len(columns) > 1 else columns[0]
-                z_default = columns[2] if len(columns) > 2 else columns[0]
-        else:  # 1D mode
-            if plot_axes:
-                x_default = plot_axes[0]
-                y_default = plot_zs[0] if plot_zs else columns[0]
-            else:
-                x_default = columns[0]
-                y_default = columns[1] if len(columns) > 1 else columns[0]
-            z_default = columns[0]  # Not used in 1D mode
-
-        # Restore previous selections if available
-        if previous_x and previous_x in columns:
-            x_default = previous_x
-        if previous_y and previous_y in columns:
-            y_default = previous_y
-        if previous_z and previous_z in columns:
-            z_default = previous_z
-
-        self._x_column = x_default
-        self._y_column = y_default
-        self._z_column = z_default
-        self.plot_x_button.setText(x_default)
-        self.plot_y_button.setText(y_default)
-        self.plot_z_button.setText(z_default)
-        self.plot_mode_combo.setCurrentIndex(0 if auto_mode == "1d" else 1)
-
-        self._suppress_updates = False
-        self.plot_x_button.setEnabled(True)
-        self.plot_y_button.setEnabled(True)
-        self.plot_z_button.setEnabled(auto_mode == "2d")
-        self.plot_z_button.setVisible(auto_mode == "2d")
-        self.plot_z_label.setVisible(auto_mode == "2d")
-        self._reset_marker_checkbox(enabled=auto_mode == "1d")
-        self.plot_marker_checkbox.setVisible(auto_mode == "1d")
-
-        if defer_plot:
-            self._needs_refresh = True
-        else:
-            self.refresh_plot()
-
-    def _on_x_selected(self, column: str) -> None:
-        if self._suppress_updates:
-            return
-        self._x_column = column
-        self.plot_x_button.setText(column)
-        self.refresh_plot()
-
-    def _on_y_selected(self, column: str) -> None:
-        if self._suppress_updates:
-            return
-        self._y_column = column
-        self.plot_y_button.setText(column)
-        self.refresh_plot()
-
-    def _on_z_selected(self, column: str) -> None:
-        if self._suppress_updates:
-            return
-        self._z_column = column
-        self.plot_z_button.setText(column)
-        self.refresh_plot()
-
-    def on_mode_changed(self, _index: int = -1) -> None:
-        mode = self.plot_mode_combo.currentData()
-        if mode == "1d":
-            self.plot_x_button.setEnabled(len(self._x_menu.actions()) > 0)
-            self.plot_y_button.setEnabled(len(self._y_menu.actions()) > 0)
-            self.plot_z_button.setEnabled(False)
-            self.plot_z_button.setVisible(False)
-            self.plot_z_label.setVisible(False)
-            self.plot_marker_checkbox.setEnabled(len(self._x_menu.actions()) > 0)
-            self.plot_marker_checkbox.setVisible(True)
-            self.refresh_plot()
-        else:  # 2d mode
-            self.plot_x_button.setEnabled(len(self._x_menu.actions()) > 0)
-            self.plot_y_button.setEnabled(len(self._y_menu.actions()) > 0)
-            self.plot_z_button.setEnabled(len(self._z_menu.actions()) > 0)
-            self.plot_z_button.setVisible(True)
-            self.plot_z_label.setVisible(True)
-            self._reset_marker_checkbox(enabled=False)
-            self.plot_marker_checkbox.setVisible(False)
-            self.refresh_plot()
-
-    def on_marker_toggled(self, _checked: bool) -> None:
-        if self._suppress_updates or self.plot_mode_combo.currentData() != "1d":
-            return
-        self._marker_auto = False
-        self.refresh_plot()
-
-    def refresh_plot(self) -> None:
-        if self._suppress_updates:
-            return
-
-        mode = self.plot_mode_combo.currentData()
-
-        if mode == "2d":
-            self._refresh_plot_2d()
-        else:
-            self._refresh_plot_1d()
-
-    def _refresh_plot_1d(self) -> None:
-        def _disable_markers() -> None:
-            self._reset_marker_checkbox(enabled=False)
-
-        record = self._plot_record
-        if record is None:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No log selected.")
-            _disable_markers()
-            return
-        frame = record.load_dataframe()
-        if frame is None or frame.empty:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No data to plot.")
-            _disable_markers()
-            return
-
-        x_column = self._x_column
-        y_column = self._y_column
-        if not x_column or not y_column:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("Select X and Y columns to plot.")
-            _disable_markers()
-            return
-        if x_column not in frame.columns or y_column not in frame.columns:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("Selected columns not in data.")
-            _disable_markers()
-            return
-        x_values = pd.to_numeric(frame[x_column], errors="coerce")
-        y_values = pd.to_numeric(frame[y_column], errors="coerce")
-        if x_values.isna().all():
-            self.plot_widget.clear()
-            self.plot_status_label.setText(f"Column '{x_column}' is not numeric.")
-            _disable_markers()
-            return
-        if y_values.isna().all():
-            self.plot_widget.clear()
-            self.plot_status_label.setText(f"Column '{y_column}' is not numeric.")
-            _disable_markers()
-            return
-        df = pd.DataFrame({"x": x_values, "y": y_values})
-        df.dropna(axis="index", how="any", inplace=True)
-        if df.empty:
-            self.plot_widget.clear()
-            self.plot_status_label.setText(
-                "No valid numeric rows after filtering NaN values."
-            )
-            _disable_markers()
-            return
-        show_markers = False
-        if self._marker_auto:
-            default_checked = len(df) <= self.MARKER_AUTO_THRESHOLD
-            if self.plot_marker_checkbox.isChecked() != default_checked:
-                self.plot_marker_checkbox.blockSignals(True)
-                self.plot_marker_checkbox.setChecked(default_checked)
-                self.plot_marker_checkbox.blockSignals(False)
-            show_markers = default_checked
-        else:
-            show_markers = self.plot_marker_checkbox.isChecked()
-        self.plot_marker_checkbox.setEnabled(True)
-        self.plot_widget.clear()
-        plot_pen = pg.mkPen(color="#1E90FF", width=2)
-        if show_markers:
-            self.plot_widget.plot(
-                df["x"].values,
-                df["y"].values,
-                pen=plot_pen,
-                symbol="o",
-                symbolSize=6,
-                symbolPen=pg.mkPen(color="#1E90FF"),
-                symbolBrush=pg.mkBrush("#FFFFFF"),
-            )
-        else:
-            self.plot_widget.plot(df["x"].values, df["y"].values, pen=plot_pen)
-        plot_item = self.plot_widget.getPlotItem()
-        if plot_item is not None:
-            plot_item.enableAutoRange(axis="x", enable=True)
-            plot_item.enableAutoRange(axis="y", enable=True)
-            plot_item.autoRange()
-        self.plot_widget.setLabel("bottom", x_column)
-        self.plot_widget.setLabel("left", y_column)
-        self.plot_status_label.setText(f"Plotted {len(df)} rows.")
-
-    def _refresh_plot_2d(self) -> None:
-        """Refresh 2D scatter plot with color-coded rectangles or image.
-
-        Uses two algorithms:
-        1. Image mode: If data forms a complete grid (nx * ny == total points),
-           reshape and display as ImageItem for fast rendering.
-        2. Rectangle mode: Otherwise, calculate cell boundaries and fill rectangles
-           (limited to first 20k points to prevent UI freezing).
-        """
-        record = self._plot_record
-        if record is None:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No log selected.")
-            return
-
-        frame = record.load_dataframe()
-        if frame is None or frame.empty:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No data to plot.")
-            return
-
-        x_column = self._x_column
-        y_column = self._y_column
-        z_column = self._z_column
-
-        if not x_column or not y_column or not z_column:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("Select X, Y, and Z columns to plot.")
-            return
-
-        if (
-            x_column not in frame.columns
-            or y_column not in frame.columns
-            or z_column not in frame.columns
-        ):
-            self.plot_widget.clear()
-            self.plot_status_label.setText("Selected columns not in data.")
-            return
-
-        x_values = pd.to_numeric(frame[x_column], errors="coerce")
-        y_values = pd.to_numeric(frame[y_column], errors="coerce")
-        z_values = pd.to_numeric(frame[z_column], errors="coerce")
-
-        if x_values.isna().all() or y_values.isna().all() or z_values.isna().all():
-            self.plot_widget.clear()
-            if x_values.isna().all():
-                self.plot_status_label.setText(
-                    f"X column '{x_column}' has no numeric values."
-                )
-            elif y_values.isna().all():
-                self.plot_status_label.setText(
-                    f"Y column '{y_column}' has no numeric values."
-                )
-            else:
-                self.plot_status_label.setText(
-                    f"Z column '{z_column}' has no numeric values."
-                )
-            return
-
-        df = pd.DataFrame({"x": x_values, "y": y_values, "z": z_values})
-        df.dropna(axis="index", how="any", inplace=True)
-        if df.empty:
-            self.plot_widget.clear()
-            self.plot_status_label.setText(
-                "No valid numeric rows after filtering NaN values."
-            )
-            return
-
-        df.sort_values(["x", "y"], inplace=True, ignore_index=True)
-
-        # Check if data forms a complete grid for image mode
-        x_unique = df["x"].unique()
-        y_unique = df["y"].unique()
-        nx = len(x_unique)
-        ny = len(y_unique)
-        total_points = len(df)
-
-        is_complete_grid = nx * ny == total_points
-
-        if is_complete_grid:
-            # Use fast image rendering for complete grids
-            self._refresh_plot_2d_image(
-                df, x_unique, y_unique, nx, ny, x_column, y_column, z_column
-            )
-        else:
-            # Use rectangle rendering for incomplete grids
-            self._refresh_plot_2d_rectangles(
-                df, x_column, y_column, z_column, total_points
-            )
-
-    def _refresh_plot_2d_image(
-        self,
-        df: pd.DataFrame,
-        x_unique,
-        y_unique,
-        nx: int,
-        ny: int,
-        x_column: str,
-        y_column: str,
-        z_column: str,
-    ) -> None:
-        """Render 2D plot as image for complete grid data."""
-        self.plot_widget.clear()
-
-        z_grid = df["z"].values.reshape(nx, ny)
-        x_min, x_max = x_unique[0], x_unique[-1]
-        y_min, y_max = y_unique[0], y_unique[-1]
-
-        # Create ImageItem with proper scaling
-        img_item = pg.ImageItem()
-        img_item.setImage(z_grid)
-
-        # Set color map
-        img_item.setLookupTable(self.cmap.getLookupTable())
-
-        # Calculate pixel size for proper positioning
-        if nx > 1:
-            dx = (x_max - x_min) / (nx - 1)
-        else:
-            dx = 1.0
-        if ny > 1:
-            dy = (y_max - y_min) / (ny - 1)
-        else:
-            dy = 1.0
-
-        # Set image position and scale
-        # Offset by half pixel to center pixels on data points
-        img_item.setRect(
-            x_min - dx / 2, y_min - dy / 2, x_max - x_min + dx, y_max - y_min + dy
-        )
-
-        self.plot_widget.addItem(img_item)
-        self.plot_widget.setLabel("bottom", x_column)
-        self.plot_widget.setLabel("left", y_column)
-
-        # Auto-range to fit data
-        plot_item = self.plot_widget.getPlotItem()
-        if plot_item is not None:
-            plot_item.enableAutoRange(enable=True)
-            plot_item.autoRange()
-
-        z_min, z_max = df["z"].min(), df["z"].max()
-        self.plot_status_label.setText(
-            f"2D image plot: {nx}×{ny} grid ({len(df)} points, z: {z_min:.3g} to {z_max:.3g})"
-        )
-
-    def _refresh_plot_2d_rectangles(
-        self,
-        df: pd.DataFrame,
-        x_column: str,
-        y_column: str,
-        z_column: str,
-        total_points: int,
-    ) -> None:
-        """Render 2D plot as rectangles for incomplete grid data."""
-        # Limit to 20k points to prevent UI freezing
-        MAX_RECT_POINTS = 20000
-        df_plot = df.head(MAX_RECT_POINTS) if len(df) > MAX_RECT_POINTS else df
-
-        # Remove x groups with only 1 point (can't compute height)
-        df_filtered = df_plot.groupby("x").filter(lambda group: len(group) > 1)
-
-        if len(df_filtered) == 0:
-            self.plot_widget.clear()
-            x_counts = df_plot.groupby("x").size()
-            single_point_x = x_counts[x_counts == 1]
-            if len(single_point_x) > 0:
-                self.plot_status_label.setText(
-                    f"2D plot requires at least 2 Y values per X value. "
-                    f"Found {len(single_point_x)} X values with only 1 point."
-                )
-            else:
-                self.plot_status_label.setText(
-                    "No valid data for 2D plot after filtering."
-                )
-            return
-
-        df_plot = df_filtered
-
-        self.plot_widget.clear()
-
-        # Normalize z values to [0, 1] for colormap
-        z_min, z_max = df_plot["z"].min(), df_plot["z"].max()
-        if z_max > z_min:
-            z_normalized = (df_plot["z"] - z_min) / (z_max - z_min)
-        else:
-            z_normalized = pd.Series(0.5, index=df_plot.index)
-
-        def cut(cell_centers):
-            cell_centers = np.asarray(cell_centers)
-            dx = np.diff(cell_centers) / 2
-            if len(dx) == 0:
-                dx = [1.0]  # Default width if only one cell
-            cut_points = np.hstack(
-                [
-                    cell_centers[0] - dx[0],
-                    cell_centers[:-1] + dx,
-                    cell_centers[-1] + dx[-1],
-                ]
-            )
-            return cut_points
-
-        xunic = df_plot["x"].unique()
-        xcut = cut(xunic)
-        df_plot["w"] = df_plot["x"].map({x: w for x, w in zip(xunic, np.diff(xcut))})
-        df_plot["x"] = df_plot["x"].map({x: s for x, s in zip(xunic, xcut[:-1])})
-
-        df_plot["h"] = df_plot.groupby("x")["y"].transform(lambda y: np.diff(cut(y)))
-        df_plot["y"] = df_plot.groupby("x")["y"].transform(lambda y: cut(y)[:-1])
-
-        # Disable auto-range during item addition to prevent repeated recalculations
-        plot_item = self.plot_widget.getPlotItem()
-        if plot_item is not None:
-            plot_item.enableAutoRange(enable=False)
-
-        for idx, row in df_plot.iterrows():
-            x_pos = row["x"]
-            y_pos = row["y"]
-            width = row["w"]
-            height = row["h"]
-            z_val = z_normalized.loc[idx]
-
-            color = self.cmap.map(z_val)
-
-            rect_item = pg.QtWidgets.QGraphicsRectItem(x_pos, y_pos, width, height)
-            rect_item.setBrush(pg.mkBrush(color))
-            rect_item.setPen(pg.mkPen(None))  # No border
-            self.plot_widget.addItem(rect_item)
-
-        self.plot_widget.setLabel("bottom", x_column)
-        self.plot_widget.setLabel("left", y_column)
-
-        # Re-enable auto-range and apply once after all items are added
-        if plot_item is not None:
-            plot_item.enableAutoRange(enable=True)
-            plot_item.autoRange()
-
-        # Show status with warning if data was truncated
-        if len(df) > MAX_RECT_POINTS:
-            self.plot_status_label.setText(
-                f"2D plot: showing first {len(df_plot)} of {total_points} points "
-                f"(z: {z_min:.3g} to {z_max:.3g}). "
-                f"⚠ Data truncated to prevent UI freezing."
-            )
-        else:
-            self.plot_status_label.setText(
-                f"2D plot: {len(df_plot)} points (z: {z_min:.3g} to {z_max:.3g})"
-            )
-
-    @functools.cached_property
-    def cmap(self):
-        cmap = pg.colormap.get("RdBu_r", source="matplotlib")
-        if cmap is None:
-            cmap = pg.colormap.get("CET-D1")
-            # colormap = pg.colormap.get("CET-L12")  # Blues
-        return cmap
-
-
 class DataViewManager:
     INITIAL_PREVIEW_LIMIT = 100
     PREVIEW_INCREMENT = 1000
@@ -1563,6 +907,7 @@ class LogBrowserWindow(QMainWindow):
         table.setColumnHidden(COL_CREATE_MACHINE, True)
 
         table.selectionModel().selectionChanged.connect(self._on_log_selection_changed)
+        table.doubleClicked.connect(self._on_log_double_clicked)
         table.setContextMenuPolicy(Qt.CustomContextMenu)
         table.customContextMenuRequested.connect(self._open_table_context_menu)
 
@@ -1755,6 +1100,27 @@ class LogBrowserWindow(QMainWindow):
         # Clear cached dataframe to force reload from disk
         self._current_record.data_frame = None
         self._load_log(self._current_record)
+
+    def _on_log_double_clicked(self, proxy_index) -> None:
+        """Open a standalone PlotWindow for the double-clicked log record."""
+        source_index = self.table_proxy.mapToSource(proxy_index)
+        record = self.table_model.get_record(source_index.row())
+        if record is None:
+            return
+        window = PlotWindow(record, parent=None)
+        window.setAttribute(Qt.WA_DeleteOnClose, True)
+        if not WINDOW_ICON.isNull():
+            window.setWindowIcon(WINDOW_ICON)
+        # Keep a reference so the window isn't garbage-collected
+        if not hasattr(self, "_plot_windows"):
+            self._plot_windows: list[PlotWindow] = []
+        self._plot_windows.append(window)
+        window.destroyed.connect(
+            lambda: self._plot_windows.remove(window)
+            if window in self._plot_windows
+            else None
+        )
+        window.show()
 
     def _on_log_selection_changed(self) -> None:
         selected = self.log_table.selectionModel().selectedRows()
