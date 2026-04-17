@@ -1116,9 +1116,11 @@ class LogBrowserWindow(QMainWindow):
             self._plot_windows: list[PlotWindow] = []
         self._plot_windows.append(window)
         window.destroyed.connect(
-            lambda: self._plot_windows.remove(window)
-            if window in self._plot_windows
-            else None
+            lambda: (
+                self._plot_windows.remove(window)
+                if window in self._plot_windows
+                else None
+            )
         )
         window.show()
 

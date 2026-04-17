@@ -1,15 +1,12 @@
-import errno
+from __future__ import annotations
 import json
 import os
 import socket
-import time
+import tempfile
 from datetime import datetime
 from pathlib import Path
-
-if os.name == "nt":
-    import msvcrt
-else:
-    import fcntl
+from typing import Generic, TypeVar, overload
+from collections.abc import Callable
 
 try:
     from .registry import FileSnap
@@ -17,7 +14,41 @@ except ImportError:
     from registry import FileSnap  # type: ignore
 
 
+_T = TypeVar("_T")
+
+
+class _MetaField(Generic[_T]):
+    """Descriptor for a single key in LogMetadata.root."""
+
+    def __init__(self, key: str, default: _T, cast: Callable[..., _T]):
+        self.key = key
+        self.default = default
+        self.cast = cast
+
+    @overload
+    def __get__(self, obj: None, objtype: type) -> _MetaField[_T]: ...
+    @overload
+    def __get__(self, obj: LogMetadata, objtype: type) -> _T: ...
+
+    def __get__(self, obj: LogMetadata | None, objtype: type) -> _T | _MetaField[_T]:
+        if obj is None:
+            return self
+        obj.reload()
+        return self.cast(obj.root.get(self.key, self.default))
+
+    def __set__(self, obj: LogMetadata, value: _T) -> None:
+        obj[self.key] = self.cast(value)
+
+
 class LogMetadata:
+    title = _MetaField("title", "untitled", str)
+    star = _MetaField("star", 0, int)
+    trash = _MetaField("trash", False, bool)
+    plot_axes = _MetaField("plot_axes", [], lambda v: [str(i) for i in v])
+    plot_fields = _MetaField("plot_fields", [], lambda v: [str(i) for i in v])
+    create_time = _MetaField("create_time", "", str)
+    create_machine = _MetaField("create_machine", "", str)
+
     def __init__(self, path: str | Path, title: str = "untitled", create: bool = True):
         path = Path(path)
         if path.exists():
@@ -30,6 +61,7 @@ class LogMetadata:
                         "star": 0,
                         "trash": False,
                         "plot_axes": [],
+                        "plot_fields": [],
                         "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "create_machine": socket.gethostname(),
                     },
@@ -52,14 +84,12 @@ class LogMetadata:
             root = json.load(f)
         return root
 
-    def save(self, path: str | Path | None = None, timeout=0.1):
+    def save(self, path: str | Path | None = None) -> None:
         path = self.path if path is None else Path(path)
-        tmp = path.with_suffix(".tmp")
-
-        with FileLock(path, timeout=timeout):
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.root, f)
-            tmp.replace(path)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.stem, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(self.root, f)
+        Path(tmp).replace(path)
 
     def __getitem__(self, key: str):
         self.reload()
@@ -69,116 +99,3 @@ class LogMetadata:
         self.reload()
         self.root[key] = value
         self.save()
-
-    @property
-    def title(self) -> str:
-        return self["title"]
-
-    @title.setter
-    def title(self, value: str):
-        self["title"] = str(value)
-
-    @property
-    def star(self) -> int:
-        return int(self["star"])
-
-    @star.setter
-    def star(self, value: int):
-        self["star"] = int(value)
-
-    @property
-    def trash(self) -> bool:
-        return bool(self["trash"])
-
-    @trash.setter
-    def trash(self, value: bool):
-        self["trash"] = bool(value)
-
-    @property
-    def plot_axes(self) -> list[str]:
-        axes = self["plot_axes"]
-        if isinstance(axes, list):
-            return [str(item) for item in axes]
-        return []
-
-    @plot_axes.setter
-    def plot_axes(self, value: list[str]):
-        if not isinstance(value, list):
-            raise TypeError("plot_axes must be a list of strings")
-        self["plot_axes"] = [str(item) for item in value]
-
-    @property
-    def create_time(self) -> str:
-        """Get creation time."""
-        value = self["create_time"]
-        return str(value) if value is not None else ""
-
-    @property
-    def create_machine(self) -> str:
-        """Get creation machine."""
-        value = self["create_machine"]
-        return str(value) if value is not None else ""
-
-
-class FileLock:
-    def __init__(
-        self,
-        path: str | Path,
-        timeout: float = 0.5,
-        delete_on_release: bool = True,
-    ):
-        self.path = Path(path).with_suffix(".lock")
-        self.timeout = timeout
-        self.delete_on_release = delete_on_release
-        self._file = None
-
-    def acquire(self):
-        lock_path = self.path
-        self._file = open(lock_path, "a+b")
-
-        deadline = time.time() + self.timeout
-        while True:
-            try:
-                if os.name == "nt":
-                    # Windows: 非阻塞锁定前 1 字节
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    # Unix: 非阻塞独占锁
-                    fcntl.flock(self._file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return  # 成功获取锁
-            except (OSError, BlockingIOError) as e:
-                # 检查是否为"资源被占用"错误
-                if getattr(e, "errno", None) not in (errno.EACCES, errno.EAGAIN):
-                    raise
-                if time.time() > deadline:
-                    raise TimeoutError(f"Timeout while waiting for lock: {lock_path}")
-                time.sleep(0.02)
-
-    def release(self):
-        if not self._file:
-            return
-
-        try:
-            if os.name == "nt":
-                self._file.seek(0)
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(self._file, fcntl.LOCK_UN)
-        finally:
-            try:
-                self._file.close()
-            finally:
-                if self.delete_on_release:
-                    try:
-                        if self.path.exists():
-                            self.path.unlink()
-                    except OSError:
-                        pass
-                self._file = None
-
-    def __enter__(self):
-        self.acquire()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.release()

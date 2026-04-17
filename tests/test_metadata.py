@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from logqbit.metadata import FileLock, LogMetadata
+from logqbit.metadata import LogMetadata
 
 
 def test_logmetadata_creates_defaults(tmp_path: Path) -> None:
@@ -35,7 +35,6 @@ def test_logmetadata_persists_updates(tmp_path: Path) -> None:
     assert reloaded.star == 3
     assert reloaded.trash is True
     assert reloaded.plot_axes == ["x", "y"]
-    assert not meta_path.with_suffix(".lock").exists()
 
 
 def test_logmetadata_detects_external_change(tmp_path: Path) -> None:
@@ -54,32 +53,3 @@ def test_logmetadata_create_false(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         LogMetadata(missing, create=False)
 
-
-def test_filelock_context_cleans_up(tmp_path: Path) -> None:
-    target = tmp_path / "artifact.json"
-    lock_path = target.with_suffix(".lock")
-
-    with FileLock(target, timeout=0.2, delete_on_release=True):
-        assert lock_path.exists()
-
-    assert not lock_path.exists()
-
-
-def test_filelock_timeout_when_held(tmp_path: Path) -> None:
-    target = tmp_path / "resource.json"
-    lock1 = FileLock(target, timeout=0.5, delete_on_release=False)
-    lock1.acquire()
-    try:
-        lock2 = FileLock(target, timeout=0.05, delete_on_release=False)
-        with pytest.raises(TimeoutError):
-            lock2.acquire()
-        if getattr(lock2, "_file", None):
-            try:
-                lock2._file.close()  # type: ignore[attr-defined]
-            finally:
-                lock2._file = None  # type: ignore[attr-defined]
-    finally:
-        lock1.release()
-        lingering = target.with_suffix(".lock")
-        if lingering.exists():
-            lingering.unlink()

@@ -79,9 +79,7 @@ def _is_lexsorted(x: np.ndarray, y: np.ndarray) -> bool:
 
 
 @njit(parallel=True, cache=True)
-def _build_grids_rect(
-    ys, zs, col_starts, col_sizes, max_ny, nx_col, top_y, step_c
-):
+def _build_grids_rect(ys, zs, col_starts, col_sizes, max_ny, nx_col, top_y, step_c):
     """Build rect-separated z/y arrays for PColorMeshItem using parallel columns.
 
     Each data column occupies an even index (c*2) in the output; odd indices are
@@ -203,10 +201,9 @@ class PlotManager:
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.setDownsampling(auto=True, mode="subsample")
-            plot_item.getAxis("bottom").setTextPen("k")
-            plot_item.getAxis("left").setTextPen("k")
-            plot_item.getAxis("top").setTextPen("k")
-            plot_item.getAxis("right").setTextPen("k")
+            for axis in ["left", "bottom", "top", "right"]:
+                plot_item.getAxis(axis).setTextPen("k")
+                plot_item.getAxis(axis).enableAutoSIPrefix(False)
 
         plot_layout.addWidget(self.plot_widget, stretch=1)
 
@@ -557,7 +554,7 @@ class PlotManager:
             self.plot_widget.clear()
             self.plot_status_label.setText("No numeric data to plot.")
             return
-        
+
         filtered = arr[mask]
         x_data = filtered[:, 0]
         y_data = filtered[:, 1]
@@ -615,15 +612,14 @@ class PlotManager:
             plot_item.enableAutoRange(enable=True)
             plot_item.autoRange()
 
-        self.plot_status_label.setText(
-            f"2D plot: {N} points → {nx_col}×{max_ny} mesh"
-        )
+        self.plot_status_label.setText(f"2D plot: {N} points → {nx_col}×{max_ny} mesh")
 
     @functools.cached_property
     def cmap(self):
-        cmap = pg.colormap.get("viridis", source="matplotlib")
+        cmap = pg.colormap.get("RdBu_r", source="matplotlib")
         if cmap is None:
-            cmap = pg.colormap.get("CET-L1")
+            cmap = pg.colormap.get("CET-D1")
+            # cmap = pg.colormap.get("CET-L12")  # Blues
         return cmap
 
 

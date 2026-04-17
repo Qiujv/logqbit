@@ -825,7 +825,6 @@ wheels = [
 
 [[package]]
 name = "logqbit"
-version = "0.2.6"
 source = { editable = "." }
 dependencies = [
     { name = "numba" },

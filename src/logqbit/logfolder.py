@@ -1,6 +1,7 @@
 import inspect
 import itertools
 import os
+import tempfile
 import threading
 import time
 import warnings
@@ -115,8 +116,9 @@ class LogFolder:
                 const_axs[k] = v
         self.add_const_to_head(
             const=const_axs,
-            dims={k: [min(a), max(a), len(a)] for k, a in run_axs.items()},
+            dims={k: len(a) for k, a in run_axs.items()},
         )
+        self.meta.plot_axes = list(run_axs.keys())
 
         step_table = list(itertools.product(*run_axs.values()))
 
@@ -144,7 +146,7 @@ class LogFolder:
     @deprecated("Use `add_const` instead.")
     def add_meta(self, meta: dict = None, /, **kwargs):
         return self.add_const(meta, **kwargs)
-    
+
     @deprecated("Use `add_const_to_head` instead.")
     def add_meta_to_head(self, meta: dict = None, /, **kwargs):
         return self.add_const_to_head(meta, **kwargs)
@@ -212,25 +214,26 @@ class _DataHandler:
             if self._skip_debounce.wait(self.save_delay_secs):
                 self._skip_debounce.clear()
             df = self.get_df(_clear=True)
-            tmp = self.path.with_suffix(".tmp")
+            path = self.path
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.stem, suffix=".tmp")
             df.to_feather(tmp)
-            
+
             max_retries = 3
             retry_delay = 0.1
             for attempt in range(max_retries):
                 try:
-                    tmp.replace(self.path)
+                    Path(tmp).replace(path)
                     break
-                except PermissionError as e:
+                except PermissionError:
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
                         retry_delay *= 2  # Exponential backoff
                     else:
                         warnings.warn(
-                            f"Failed to replace {self.path} after {max_retries} attempts: {e}"
+                            f"Failed to replace {path} after {max_retries} attempts"
                         )
                         raise
-            
+
             self._flush_complete.set()
 
     def stop(self):

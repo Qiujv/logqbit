@@ -1,5 +1,7 @@
+import os
 import re
 import sys
+import tempfile
 import warnings
 from collections.abc import Mapping, Sequence, Set
 from pathlib import Path
@@ -61,10 +63,10 @@ class Registry:
         if path.exists():
             pass
         elif create:
-            path.touch()  # TODO: delay the file creation on first save. 
+            path.touch()  # TODO: delay the file creation on first save.
         else:
             raise FileNotFoundError(f"Registry file at '{path}' does not exist.")
-        
+
         self.path = path
         self.yaml = get_parser()
         self.root: CommentedMap = self.load()
@@ -132,10 +134,10 @@ class Registry:
 
     def save(self, path: str | Path | None = None):
         path = self.path if path is None else path
-        tmp = path.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.stem, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             self.yaml.dump(self.root, f)
-        tmp.replace(path)
+        Path(tmp).replace(path)
 
     @deprecated("For backward compatibility only.")
     def copy(self) -> dict:

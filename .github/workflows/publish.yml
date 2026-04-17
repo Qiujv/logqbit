@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - v*
+  workflow_dispatch:
 
 jobs:
   run:
@@ -28,5 +29,6 @@ jobs:
       # - name: Smoke test (source distribution)
       #   run: uv run --isolated --no-project --with dist/*.tar.gz tests/smoke_test.py
       - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v')
         run: uv publish
   
