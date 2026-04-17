@@ -1,8 +1,8 @@
 import inspect
 import itertools
 import os
-import tempfile
 import threading
+import uuid
 import time
 import warnings
 import weakref
@@ -28,7 +28,6 @@ class LogFolder:
         path: str | Path,
         title: str = "untitled",
         create: bool = True,
-        save_delay_secs: float = 1.0,
     ):
         path = Path(path)
         if path.exists() and path.is_dir():
@@ -42,7 +41,7 @@ class LogFolder:
         # File created anyway.
         self.meta = LogMetadata(path / "metadata.json", title, create=True)
         # File create on setting values.
-        self._handler = _DataHandler(path / "data.feather", save_delay_secs)
+        self._handler = _DataHandler(path / "data.feather")
         weakref.finalize(self, self._handler.stop)
 
     @cached_property
@@ -157,14 +156,13 @@ class LogFolder:
 
 
 class _DataHandler:
-    def __init__(self, path: str | Path, save_delay_secs: float):
+    def __init__(self, path: str | Path):
         self.path = Path(path)
         self._segs: list[pd.DataFrame] = []
         if self.path.exists():
             self._segs.append(pd.read_feather(self.path))
         self._records: list[dict[str, float | int | str]] = []
 
-        self.save_delay_secs = save_delay_secs
         self._should_stop = False
         self._skip_debounce = threading.Event()
         self._dirty = threading.Event()
@@ -207,22 +205,23 @@ class _DataHandler:
                 self._dirty.set()
 
     def _run(self):
+        save_delay_secs = 0.2
+        max_retries = 3
+        retry_delay = 0.1
+
         while not self._should_stop:
             self._dirty.wait()
             if self._should_stop:
                 break
-            if self._skip_debounce.wait(self.save_delay_secs):
+            if self._skip_debounce.wait(save_delay_secs):
                 self._skip_debounce.clear()
             df = self.get_df(_clear=True)
-            path = self.path
-            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.stem, suffix=".tmp")
+            tmp = self.path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
             df.to_feather(tmp)
 
-            max_retries = 3
-            retry_delay = 0.1
             for attempt in range(max_retries):
                 try:
-                    Path(tmp).replace(path)
+                    tmp.replace(self.path)
                     break
                 except PermissionError:
                     if attempt < max_retries - 1:
@@ -230,11 +229,20 @@ class _DataHandler:
                         retry_delay *= 2  # Exponential backoff
                     else:
                         warnings.warn(
-                            f"Failed to replace {path} after {max_retries} attempts"
+                            f"Failed to replace {self.path} after {max_retries} attempts"
                         )
                         raise
 
             self._flush_complete.set()
+
+            if df.shape[0] < 1000:
+                save_delay_secs = 0.1
+            elif df.shape[0] < 10000:
+                save_delay_secs = 0.2
+            elif df.shape[0] < 100000:
+                save_delay_secs = 0.5
+            else:
+                save_delay_secs = 1.0
 
     def stop(self):
         try:
