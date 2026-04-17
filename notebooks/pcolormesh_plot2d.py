@@ -6,57 +6,77 @@ import time
 
 import numpy as np
 import pyqtgraph as pg
-from numba import njit
+from numba import njit, prange
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QWidget
 
 
 @njit(cache=True)
 def is_lexsorted(x, y):
+    """x 全局升序；y 在每列内单调（升或降均可，各列独立）。"""
     N = len(x)
     prev_x = x[0]
     prev_y = y[0]
+    y_dir = 0  # 0=未确定, 1=升序, -1=降序；每列重置
     for i in range(1, N):
         xi = x[i]
         if xi < prev_x:
             return False
-        if xi == prev_x and y[i] < prev_y:
-            return False
-        prev_x = xi
-        prev_y = y[i]
+        if xi == prev_x:
+            yi = y[i]
+            if yi > prev_y:
+                if y_dir == -1:
+                    return False
+                y_dir = 1
+            elif yi < prev_y:
+                if y_dir == 1:
+                    return False
+                y_dir = -1
+            prev_y = yi
+        else:
+            y_dir = 0  # 新列，重置方向
+            prev_x = xi
+            prev_y = y[i]
     return True
 
 
-@njit(cache=True)
-def _build_grids(xs, ys, zs, col_starts, col_sizes, max_ny, nx_col,
-                top_y, step_c, typical_dy):
-    """按列顺序填充 z_grid / y_corners（stride-1 写入，cache 友好）。"""
-    z_grid = np.full((max_ny, nx_col), np.nan)
-    y_corners = np.full((max_ny + 1, nx_col + 1), np.nan)
+@njit(parallel=True, cache=True)
+def _build_grids_rect(ys, zs, col_starts, col_sizes, max_ny, nx_col,
+                      top_y, step_c):
+    """各列独立并行，直接构建矩形色块的最终数组。
+    z_final: (max_ny, 2*nx_col-1)  奇数列为分隔列，保持 NaN 不渲染
+    y_final: (max_ny+1, 2*nx_col)  每数据列左右角点取相同 y → 上下边水平 → 矩形
+    """
+    z_final = np.full((max_ny, 2 * nx_col - 1), np.nan)
+    y_final = np.empty((max_ny + 1, 2 * nx_col))
 
-    for c in range(nx_col):
+    for c in prange(nx_col):
         s = col_starts[c]
         n = col_sizes[c]
+        c2 = c + c  # 偶数列索引
+
         for r in range(n):
-            z_grid[r, c] = zs[s + r]
-            y_corners[r, c] = ys[s + r]
-        y_corners[n, c] = top_y[c]
-        # 外推填充不完整列（OpenGL 路径不容忍 NaN 顶点）
+            z_final[r, c2] = zs[s + r]
+            yv = ys[s + r]
+            y_final[r, c2] = yv
+            y_final[r, c2 + 1] = yv
+
+        top = top_y[c]
+        y_final[n, c2] = top
+        y_final[n, c2 + 1] = top
+
+        sc = step_c[c]
         for r in range(n + 1, max_ny + 1):
-            y_corners[r, c] = top_y[c] + (r - n) * step_c[c]
+            val = top + (r - n) * sc
+            y_final[r, c2] = val
+            y_final[r, c2 + 1] = val
 
-    y_corners[:, nx_col] = y_corners[:, nx_col - 1]
-    return z_grid, y_corners
+    return z_final, y_final
 
-data_shape = (1000, 10000)  # 准备1.425s，总计1.762s
-# data_shape = (1000, 1000)  # 准备0.100s，总计0.370s
-# data_shape = (1000, 100)  # 准备 0.015s，总计0.299s
+data_shape = (1000, 10000)  # sort(SKIP): 0.010s | col_grp: 0.014s | extrap: 0.000s | build_rect(nb): 0.137s | TOTAL: 0.162s
+# data_shape = (1000, 1000)  # sort(SKIP): 0.001s | col_grp: 0.002s | extrap: 0.000s | build_rect(nb): 0.010s | TOTAL: 0.013s
+# data_shape = (1000, 100)  # sort(SKIP): 0.000s | col_grp: 0.000s | extrap: 0.000s | build_rect(nb): 0.001s | TOTAL: 0.001s
 
-# 步骤	优化前	优化后
-# sort/lexsort	0.773s	0.095s (SKIP)
-# col_group	0.073s	0.082s
-# grid+corners	0.424s	0.246s
-# nan_fill	(含上面)	0.000s
-# 总计	1.34s	0.43s
+# Sorting time: 0.772, 0.056, 0.005 seconds for 10M, 1M, 100K points respectively.
 
 class PlotWidget(QWidget):
     def __init__(self):
@@ -80,7 +100,7 @@ class PlotWidget(QWidget):
         QApplication.processEvents()
 
         x = np.linspace(0, 10, nx)
-        y = np.linspace(0, 10, ny)
+        y = np.linspace(0, 10, ny)[::-1]
         xx, yy = np.meshgrid(x, y)
         yy = yy + 0.5 * xx + 0.1
 
@@ -122,7 +142,9 @@ class PlotWidget(QWidget):
         xu = xs[change]
         col_starts = np.flatnonzero(change)
         nx_col = len(xu)
-        col_ends = np.append(col_starts[1:], N)
+        col_ends = np.empty(nx_col, dtype=col_starts.dtype)
+        col_ends[:-1] = col_starts[1:]
+        col_ends[-1] = N
         col_sizes = col_ends - col_starts
         max_ny = int(col_sizes.max())
 
@@ -137,28 +159,29 @@ class PlotWidget(QWidget):
         step_c = np.where(col_sizes > 1, last_y - ys[prev_idx], typical_dy)
         top_y = last_y + step_c
 
-        # x corners
+        # x corners（zero-copy broadcast，仅需 1D 数组）
         x_edges = np.empty(nx_col + 1)
         x_edges[:nx_col] = xu
         x_edges[-1] = xu[-1] + (xu[-1] - xu[-2] if nx_col > 1 else 1.0)
-        x_corners = np.broadcast_to(x_edges, (max_ny + 1, nx_col + 1)).copy()
+        x_edges_rect = np.repeat(x_edges, 2)[1:-1]          # shape (2*nx_col,)
+        final_x = np.broadcast_to(x_edges_rect, (max_ny + 1, 2 * nx_col))
         t3 = t()
 
-        # ── 3. numba: 填充 z_grid / y_corners（列优先，cache 友好）──
-        z_grid, y_corners = _build_grids(
-            xs, ys, zs, col_starts, col_sizes, max_ny, nx_col,
-            top_y, step_c, typical_dy)
+        # ── 3. numba: 一次遍历直接构建矩形网格的最终 z / y 数组 ──
+        final_z, final_y = _build_grids_rect(
+            ys, zs, col_starts, col_sizes, max_ny, nx_col,
+            top_y, step_c)
         t4 = t()
 
         prepare_time = time.time() - start_time
         skipped = "SKIP" if is_sorted else "SORT"
         print(f"  sort({skipped}): {t1-t0:.3f}s | col_grp: {t2-t1:.3f}s | "
-              f"extrap: {t3-t2:.3f}s | build_grids(nb): {t4-t3:.3f}s | "
+              f"extrap: {t3-t2:.3f}s | build_rect(nb): {t4-t3:.3f}s | "
               f"TOTAL: {prepare_time:.3f}s")
 
         # ── 4. 创建 PColorMeshItem ──
         cmap = pg.colormap.get('viridis', source='matplotlib')
-        pcm = pg.PColorMeshItem(x_corners, y_corners, z_grid, colorMap=cmap)
+        pcm = pg.PColorMeshItem(final_x, final_y, final_z, colorMap=cmap)
         self.plot_widget.addItem(pcm)
 
         plot_item = self.plot_widget.getPlotItem()
@@ -170,6 +193,7 @@ class PlotWidget(QWidget):
             f"PColorMesh 完成：{num_points:,} 点 → {nx_col}×{max_ny} mesh，"
             f"准备 {prepare_time:.3f}s，总计 {elapsed:.3f}s"
         )
+
 
 
 class MainWindow(QMainWindow):

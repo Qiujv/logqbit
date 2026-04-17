@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from numba import njit
+from numba import njit, prange
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -47,42 +47,76 @@ WINDOW_ICON = _load_window_icon()
 
 @njit(cache=True)
 def _is_lexsorted(x: np.ndarray, y: np.ndarray) -> bool:
-    """Return True if (x, y) pairs are already lex-sorted (x asc, then y asc)."""
+    """Return True if x is globally ascending and y is monotonic within each x-column.
+
+    Unlike a strict lex-sort, y may be either ascending or descending within a
+    column; the only requirement is that it doesn't reverse direction mid-column.
+    """
     N = len(x)
     prev_x = x[0]
     prev_y = y[0]
+    y_dir = 0  # 0=undetermined, 1=ascending, -1=descending; reset per column
     for i in range(1, N):
         xi = x[i]
         if xi < prev_x:
             return False
-        if xi == prev_x and y[i] < prev_y:
-            return False
-        prev_x = xi
-        prev_y = y[i]
+        if xi == prev_x:
+            yi = y[i]
+            if yi > prev_y:
+                if y_dir == -1:
+                    return False
+                y_dir = 1
+            elif yi < prev_y:
+                if y_dir == 1:
+                    return False
+                y_dir = -1
+            prev_y = yi
+        else:
+            y_dir = 0  # new column — reset direction
+            prev_x = xi
+            prev_y = y[i]
     return True
 
 
-@njit(cache=True)
-def _build_grids(
-    xs, ys, zs, col_starts, col_sizes, max_ny, nx_col, top_y, step_c, typical_dy
+@njit(parallel=True, cache=True)
+def _build_grids_rect(
+    ys, zs, col_starts, col_sizes, max_ny, nx_col, top_y, step_c
 ):
-    """Fill z_grid and y_corners arrays for PColorMeshItem (column-major, cache-friendly)."""
-    z_grid = np.full((max_ny, nx_col), np.nan)
-    y_corners = np.full((max_ny + 1, nx_col + 1), np.nan)
+    """Build rect-separated z/y arrays for PColorMeshItem using parallel columns.
 
-    for c in range(nx_col):
+    Each data column occupies an even index (c*2) in the output; odd indices are
+    NaN separator columns so adjacent columns share no edges.  Left and right y
+    corners of each cell are identical → perfectly horizontal top/bottom edges.
+
+    Returns:
+        z_final : shape (max_ny, 2*nx_col-1)   — NaN at odd (separator) columns
+        y_final : shape (max_ny+1, 2*nx_col)   — paired left/right y per column
+    """
+    z_final = np.full((max_ny, 2 * nx_col - 1), np.nan)
+    y_final = np.empty((max_ny + 1, 2 * nx_col))
+
+    for c in prange(nx_col):
         s = col_starts[c]
         n = col_sizes[c]
-        for r in range(n):
-            z_grid[r, c] = zs[s + r]
-            y_corners[r, c] = ys[s + r]
-        y_corners[n, c] = top_y[c]
-        # Extrapolate to fill incomplete columns (PColorMeshItem can't have NaN vertices)
-        for r in range(n + 1, max_ny + 1):
-            y_corners[r, c] = top_y[c] + (r - n) * step_c[c]
+        c2 = c + c  # even column index
 
-    y_corners[:, nx_col] = y_corners[:, nx_col - 1]
-    return z_grid, y_corners
+        for r in range(n):
+            z_final[r, c2] = zs[s + r]
+            yv = ys[s + r]
+            y_final[r, c2] = yv
+            y_final[r, c2 + 1] = yv
+
+        top = top_y[c]
+        y_final[n, c2] = top
+        y_final[n, c2 + 1] = top
+
+        sc = step_c[c]
+        for r in range(n + 1, max_ny + 1):
+            val = top + (r - n) * sc
+            y_final[r, c2] = val
+            y_final[r, c2 + 1] = val
+
+    return z_final, y_final
 
 
 class PlotManager:
@@ -558,15 +592,16 @@ class PlotManager:
         step_c = np.where(col_sizes > 1, last_y - y_data[prev_idx], typical_dy)
         top_y = last_y + step_c
 
-        # x corners (shared across all rows)
+        # x corners — rect format: each column gets a left+right edge pair
         x_edges = np.empty(nx_col + 1)
         x_edges[:nx_col] = xu
         x_edges[-1] = xu[-1] + (xu[-1] - xu[-2] if nx_col > 1 else 1.0)
-        x_corners = np.broadcast_to(x_edges, (max_ny + 1, nx_col + 1)).copy()
+        x_edges_rect = np.repeat(x_edges, 2)[1:-1]  # shape (2*nx_col,)
+        x_corners = np.broadcast_to(x_edges_rect, (max_ny + 1, 2 * nx_col))
 
-        z_grid, y_corners = _build_grids(
-            x_data, y_data, z_data, col_starts, col_sizes, max_ny, nx_col,
-            top_y, step_c, typical_dy,
+        z_grid, y_corners = _build_grids_rect(
+            y_data, z_data, col_starts, col_sizes, max_ny, nx_col,
+            top_y, step_c,
         )
 
         self.plot_widget.clear()
