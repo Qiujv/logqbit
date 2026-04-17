@@ -48,10 +48,10 @@ from send2trash import send2trash
 
 try:  # pragma: no cover - fallback for direct execution
     from .metadata import LogMetadata
-    from .plotter import PlotManager, PlotWindow
+    from .plotter import PlotManager
 except ImportError:  # pragma: no cover - fallback for direct execution
     from metadata import LogMetadata  # type: ignore
-    from plotter import PlotManager, PlotWindow  # type: ignore
+    from plotter import PlotManager  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,11 @@ class LogRecord:
 
     def list_image_files(self) -> list[Path]:
         files: list[Path] = []
-        for child in self.path.iterdir():
+        try:
+            children = list(self.path.iterdir())
+        except OSError:
+            return files
+        for child in children:
             if child.is_file() and child.suffix.lower() in IMAGE_EXTENSIONS:
                 files.append(child)
         files.sort()
@@ -769,6 +773,76 @@ class DataViewManager:
             self.data_load_button.setEnabled(False)
 
 
+class RecordDetailWindow(QMainWindow):
+    """Standalone window showing the full detail panel for a single log record."""
+
+    def __init__(self, record: LogRecord, initial_tab: int = TAB_CONST, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        if not WINDOW_ICON.isNull():
+            self.setWindowIcon(WINDOW_ICON)
+        self.resize(900, 600)
+        self._record: LogRecord | None = None
+        self._image_tab_indices: list[int] = []
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(6)
+
+        self._tab_widget = QTabWidget()
+
+        self._yaml_view = QPlainTextEdit()
+        self._yaml_view.setReadOnly(True)
+        self._tab_widget.addTab(self._yaml_view, "Const.")
+
+        self._data_view_manager = DataViewManager(
+            parent=container,
+            load_more_callback=self._on_load_more,
+        )
+        self._tab_widget.addTab(self._data_view_manager.widget, "Data")
+
+        self._plot_manager = PlotManager(parent=container)
+        self._tab_widget.addTab(self._plot_manager.widget, "Plot")
+
+        self._tab_widget.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self._tab_widget)
+        self.setCentralWidget(container)
+
+        self.load_record(record)
+        self._tab_widget.setCurrentIndex(initial_tab)
+
+    def load_record(self, record: LogRecord) -> None:
+        self._record = record
+        title = record.meta.title or "(untitled)"
+        self.setWindowTitle(f"#{record.log_id} {title}")
+        self._yaml_view.setPlainText(record.read_yaml_text())
+        self._data_view_manager.show_data_table(record, preview_only=True)
+        self._update_image_tabs(record.list_image_files())
+        defer_plot = self._tab_widget.currentIndex() != TAB_PLOT
+        self._plot_manager.update_plot_and_controls(record, defer_plot=defer_plot)
+
+    def _on_tab_changed(self, index: int) -> None:
+        if index == TAB_PLOT:
+            self._plot_manager.refresh_if_needed()
+
+    def _on_load_more(self) -> None:
+        if self._record:
+            self._data_view_manager.load_more_data(self._record)
+
+    def _update_image_tabs(self, image_files: list[Path]) -> None:
+        for index in sorted(self._image_tab_indices, reverse=True):
+            self._tab_widget.removeTab(index)
+        self._image_tab_indices.clear()
+        for image_path in image_files:
+            widget = ScaledImageLabel()
+            widget.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            widget.setWordWrap(True)
+            widget.setToolTip(str(image_path))
+            widget.load_image(image_path)
+            index = self._tab_widget.addTab(widget, image_path.name)
+            self._image_tab_indices.append(index)
+
+
 class LogBrowserWindow(QMainWindow):
     def __init__(
         self, directory: Path | None = None, parent: QWidget | None = None
@@ -788,6 +862,7 @@ class LogBrowserWindow(QMainWindow):
         self._shortcuts: list[QAction] = []
         self._list_refresh_pending = False
         self._detail_refresh_pending = False
+        self._detail_windows: list[RecordDetailWindow] = []
 
         # Theme management
         app = QApplication.instance()
@@ -1102,23 +1177,19 @@ class LogBrowserWindow(QMainWindow):
         self._load_log(self._current_record)
 
     def _on_log_double_clicked(self, proxy_index) -> None:
-        """Open a standalone PlotWindow for the double-clicked log record."""
+        """Open a standalone detail window for the double-clicked log record."""
         source_index = self.table_proxy.mapToSource(proxy_index)
         record = self.table_model.get_record(source_index.row())
         if record is None:
             return
-        window = PlotWindow(record, parent=None)
+        initial_tab = self.tab_widget.currentIndex()
+        window = RecordDetailWindow(record, initial_tab=initial_tab, parent=None)
         window.setAttribute(Qt.WA_DeleteOnClose, True)
-        if not WINDOW_ICON.isNull():
-            window.setWindowIcon(WINDOW_ICON)
-        # Keep a reference so the window isn't garbage-collected
-        if not hasattr(self, "_plot_windows"):
-            self._plot_windows: list[PlotWindow] = []
-        self._plot_windows.append(window)
+        self._detail_windows.append(window)
         window.destroyed.connect(
             lambda: (
-                self._plot_windows.remove(window)
-                if window in self._plot_windows
+                self._detail_windows.remove(window)
+                if window in self._detail_windows
                 else None
             )
         )
@@ -1237,8 +1308,6 @@ class LogBrowserWindow(QMainWindow):
 
     def _open_new_window(self, directory: Path) -> None:
         """Launch a new browser window in a separate process."""
-        import subprocess
-
         try:
             subprocess.Popen(
                 [sys.executable, "-m", "logqbit.browser", str(directory)],
@@ -1472,12 +1541,6 @@ class LogBrowserWindow(QMainWindow):
             return
         all_starred = all(rec.meta.star > 0 for rec in records)
         self._set_records_star_count(records, 0 if all_starred else 1)
-
-    def _shortcut_mark_trash(self) -> None:
-        records = self._get_selected_records()
-        if not records:
-            return
-        self._set_records_trash(records, True)
 
     def _shortcut_send_to_recycle_bin(self) -> None:
         records = self._get_selected_records()
