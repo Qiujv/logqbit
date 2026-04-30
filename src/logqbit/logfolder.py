@@ -23,6 +23,15 @@ yaml = get_parser()
 
 
 class LogFolder:
+    """Directory-backed experiment log with data, metadata, and constants.
+
+    A ``LogFolder`` manages three files under one directory:
+
+    - ``data.feather`` for tabular records
+    - ``metadata.json`` for lightweight metadata
+    - ``const.yaml`` for constant parameters and configuration
+    """
+
     def __init__(
         self,
         path: str | Path,
@@ -61,10 +70,12 @@ class LogFolder:
 
     @property
     def df_path(self) -> Path:
+        """Path to the backing ``data.feather`` file."""
         return self._handler.path
 
     @classmethod
     def new(cls, parent_path: Path, title: str = "untitled") -> "LogFolder":
+        """Create the next numeric log directory under ``parent_path``."""
         # TODO: add locking or something.
         parent_path = Path(parent_path)
         max_index = max(
@@ -102,6 +113,7 @@ class LogFolder:
         func: Callable[[float], dict[str, float | list[float]]],
         axes: list[float | list[float]] | dict[str, float | list[float]],
     ):
+        """Run a parameter sweep and append returned rows to this log."""
         if not isinstance(axes, dict):  # Assumes isinstance(axes, list)
             fsig = inspect.signature(func)
             axes = dict(zip(fsig.parameters.keys(), axes))
@@ -128,6 +140,7 @@ class LogFolder:
                 self.add_row(**step_kws, **ret_kws)
 
     def add_const(self, meta: dict = None, /, **kwargs):
+        """Append constant values to ``const.yaml`` and save immediately."""
         if meta is None:
             meta = {}
         meta.update(kwargs)
@@ -135,6 +148,7 @@ class LogFolder:
         self.reg.save()
 
     def add_const_to_head(self, meta: dict = None, /, **kwargs):
+        """Insert constant values at the top of ``const.yaml`` and save."""
         if meta is None:
             meta = {}
         meta.update(kwargs)

@@ -5,13 +5,31 @@ repo_name: Qiujv/logqbit
 docs_dir: docs
 theme:
   name: mkdocs
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - src
+          options:
+            filters:
+              - "!^_"
+            inherited_members: false
+            merge_init_into_class: true
+            parameter_headings: true
+            separate_signature: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_root_toc_entry: false
+            show_signature_annotations: true
+            show_source: false
 nav:
   - 首页: index.md
   - 安装: install.md
-  - 核心用法: core_usage.md
   - 命令行工具: cli.md
   - LabRAD 迁移: migration_guide.md
-  - 开发者文档: development.md
+  - Python API: api.md
 markdown_extensions:
   - admonition
   - tables

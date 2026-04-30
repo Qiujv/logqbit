@@ -41,6 +41,12 @@ class _MetaField(Generic[_T]):
 
 
 class LogMetadata:
+    """JSON-backed metadata helper for a log folder.
+
+    Common fields such as ``title``, ``star``, and ``plot_axes`` are exposed as
+    descriptors and synchronized to ``metadata.json`` on assignment.
+    """
+
     title = _MetaField("title", "untitled", str)
     star = _MetaField("star", 0, int)
     trash = _MetaField("trash", False, bool)

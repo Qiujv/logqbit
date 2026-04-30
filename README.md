@@ -1,11 +1,11 @@
 # LogQbit
 
-LogQbit 是一个面向实验室场景的轻量数据记录工具包，适合记录中小规模实验数据，并提供日志目录、元数据、常量配置和可选的 GUI 浏览/实时绘图能力。
+LogQbit 是一个面向实验室场景的轻量数据记录工具包，适合记录中小规模实验数据。
 
 它的核心设计目标是：
 
-- 用尽量少的样板代码记录结构化实验数据。
-- 让 `LogFolder` 和 `Registry` 这类核心接口保持简单直接。
+- 用简单的接口和运行逻辑实验数据。
+- 基于目录的实验数据组织，用通用可读的格式储存数据。
 - 在需要时再启用浏览器和实时绘图等 GUI 能力。
 
 完整文档见：https://qiujv.github.io/logqbit/
@@ -38,10 +38,7 @@ from pathlib import Path
 
 from logqbit.logfolder import LogFolder
 
-project_folder = Path("test")
-project_folder.mkdir(exist_ok=True)
-
-lf = LogFolder.new(project_folder, title="My Experiment")
+lf = LogFolder.new("./demo_data", title="My Experiment")
 
 lf.add_row(x=0.0, y=1.2)
 lf.add_row(x=1.0, y=1.8)
@@ -53,17 +50,25 @@ lf.const["temperature"] = "300 K"
 print(lf.df)
 ```
 
-### 用例 2：快速生成示例数据并打开浏览器
+### 用例 2：打开数据查看器
+
+```bash
+logqbit browser
+```
+
+或者也可以通过 `logqbit shortcuts` 创建桌面快捷方式（仅 Windows 可用）。
+
+### 用例 3：快速生成示例数据并打开浏览器
 
 ```bash
 logqbit browser-demo
 ```
 
-这个命令会在当前目录创建 `logqbit_example/`，生成多组示例数据，并尝试启动图形化浏览器。
+这会在当前目录创建 `logqbit_example/`，生成多组示例数据，并启动图形化浏览器。
 
 更多内容：
 
 - 文档首页：https://qiujv.github.io/logqbit/
-- 核心用法：https://qiujv.github.io/logqbit/core_usage/
 - 命令行工具：https://qiujv.github.io/logqbit/cli/
 - LabRAD 迁移：https://qiujv.github.io/logqbit/migration_guide/
+- Python API：https://qiujv.github.io/logqbit/api/

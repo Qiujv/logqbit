@@ -10,10 +10,9 @@ LogQbit 是一个面向实验室实验流程的数据记录工具包，核心能
 文档目录：
 
 - [安装](install.md)
-- [核心用法](core_usage.md)
 - [命令行工具](cli.md)
 - [LabRAD 迁移](migration_guide.md)
-- [开发者文档](development.md)
+- [Python API](api.md)
 
 项目主页：
 

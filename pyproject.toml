@@ -51,6 +51,7 @@ dev = [
     "ipywidgets>=8.1.7",
     "matplotlib>=3.10.7",
     "mkdocs>=1.6.1",
+    "mkdocstrings[python]>=0.29.1",
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
 ]

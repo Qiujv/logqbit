@@ -8,24 +8,12 @@
 uv pip install logqbit
 ```
 
-如果你在当前仓库中本地开发：
-
-```bash
-uv pip install -e .
-```
-
 ## 不解析依赖的安装方式
 
 如果你已有一个稳定环境，不希望安装 logqbit 时触发依赖升级、降级或重新解析，可以使用：
 
 ```bash
 uv pip install --no-deps logqbit
-```
-
-或者在当前仓库里：
-
-```bash
-uv pip install --no-deps -e .
 ```
 
 这会跳过依赖安装，只安装 logqbit 本体。
@@ -57,7 +45,3 @@ uv pip install --no-deps -e .
 ```bash
 uv pip install pyside6 pyqtgraph
 ```
-
-## 文档与开发
-
-文档构建、本地预览和 GitHub Pages 发布方式见 [开发者文档](development.md)。

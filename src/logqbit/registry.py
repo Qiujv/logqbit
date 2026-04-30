@@ -21,6 +21,8 @@ _sentinel = object()
 
 
 class FileSnap:
+    """Track a file's modification time and size for cheap change detection."""
+
     __slots__ = ("path", "mtime", "size")
 
     def __init__(self, path: Path):
