@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-import numbers
+import shutil
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -22,7 +22,7 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPalette, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -34,12 +34,10 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSplitter,
     QTableView,
-    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -47,16 +45,29 @@ from PySide6.QtWidgets import (
 from send2trash import send2trash
 
 try:  # pragma: no cover - fallback for direct execution
+    from .detail_view import (
+        PandasTableModel,
+        RecordDetailView,
+        RecordDetailWindow,
+        record_watch_paths,
+    )
+    from .logfolder import LogFolder
     from .metadata import LogMetadata
-    from .plotter import PlotManager
 except ImportError:  # pragma: no cover - fallback for direct execution
+    from detail_view import (  # type: ignore
+        PandasTableModel,
+        RecordDetailView,
+        RecordDetailWindow,
+        record_watch_paths,
+    )
+    from logfolder import LogFolder  # type: ignore
     from metadata import LogMetadata  # type: ignore
-    from plotter import PlotManager  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 # Constants
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+KNOWN_RECORD_FILENAMES = {"const.yaml", "data.feather", "metadata.json"}
 REFRESH_DEBOUNCE_MS = 250
 
 COL_ID = 0
@@ -71,12 +82,6 @@ SETTINGS_APP = "LogBrowser"
 SETTINGS_RECENT_DIRS_KEY = "recent/directories"
 SETTINGS_THEME_KEY = "ui/theme"
 
-# Tab indices for detail panel
-TAB_CONST = 0
-TAB_DATA = 1
-TAB_PLOT = 2
-
-
 def _load_window_icon() -> QIcon:
     try:
         icon_path = files("logqbit") / "assets" / "browser.svg"
@@ -89,6 +94,37 @@ def _load_window_icon() -> QIcon:
 
 
 WINDOW_ICON = _load_window_icon()
+
+
+def _next_export_logfolder_path(parent_path: Path) -> Path:
+    parent_path = Path(parent_path)
+    max_index = max(
+        (
+            int(entry.name)
+            for entry in parent_path.iterdir()
+            if entry.is_dir() and entry.name.isdecimal()
+        ),
+        default=-1,
+    )
+    next_index = max_index + 1
+    while (parent_path / str(next_index)).exists():
+        next_index += 1
+    return parent_path / str(next_index)
+
+
+def export_records(records: Iterable["LogRecord"], destination_parent: Path) -> list[Path]:
+    destination_parent = Path(destination_parent)
+    destination_parent.mkdir(parents=True, exist_ok=True)
+    exported_paths: list[Path] = []
+    for record in sorted(records, key=lambda item: item.log_id):
+        target_path = _next_export_logfolder_path(destination_parent)
+        target_path.mkdir(parents=True, exist_ok=False)
+        shutil.copytree(record.path, target_path, dirs_exist_ok=True)
+        import_from_path = target_path / "import_from"
+        if not import_from_path.exists():
+            import_from_path.write_text(str(record.path), encoding="utf-8")
+        exported_paths.append(target_path)
+    return exported_paths
 
 
 @dataclass
@@ -144,6 +180,23 @@ class LogRecord:
         for child in children:
             if child.is_file() and child.suffix.lower() in IMAGE_EXTENSIONS:
                 files.append(child)
+        files.sort()
+        return files
+
+    def list_other_files(self) -> list[Path]:
+        files: list[Path] = []
+        try:
+            children = list(self.path.iterdir())
+        except OSError:
+            return files
+        for child in children:
+            if not child.is_file():
+                continue
+            if child.name in KNOWN_RECORD_FILENAMES:
+                continue
+            if child.suffix.lower() in IMAGE_EXTENSIONS:
+                continue
+            files.append(child)
         files.sort()
         return files
 
@@ -311,115 +364,6 @@ class LogListTableModel(QAbstractTableModel):
         return None
 
 
-class PandasTableModel(QAbstractTableModel):
-    """Table model for displaying pandas DataFrames with optional preview limit."""
-
-    def __init__(
-        self,
-        frame: pd.DataFrame,
-        parent: QWidget | None = None,
-        highlight_columns: Iterable[str] | None = None,
-        preview_limit: int | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self._df = frame
-        self._preview_limit = preview_limit
-        self._highlight = (
-            {str(name) for name in highlight_columns} if highlight_columns else set()
-        )
-        self._bold_font = QFont(parent.font()) if parent else QFont()
-        self._bold_font.setBold(True)
-
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
-        if parent.isValid():
-            return 0
-        total_rows = self._df.shape[0]
-        if self._preview_limit is not None and self._preview_limit > 0:
-            return min(total_rows, self._preview_limit)
-        return total_rows
-
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
-        return 0 if parent.isValid() else len(self._df.columns)
-
-    def get_total_rows(self) -> int:
-        return self._df.shape[0]
-
-    def set_preview_limit(self, limit: int | None) -> None:
-        old_count = self.rowCount()
-        self._preview_limit = limit
-        new_count = self.rowCount()
-        if new_count != old_count:
-            self.beginResetModel()
-            self.endResetModel()
-
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):  # noqa: D401
-        if not index.isValid():
-            return None
-        column_name = str(self._df.columns[index.column()])
-        if role == Qt.FontRole and column_name in self._highlight:
-            return self._bold_font
-        if role not in (Qt.DisplayRole, Qt.EditRole):
-            return None
-        value = self._df.iat[index.row(), index.column()]
-        if pd.isna(value):
-            return ""
-        if isinstance(value, numbers.Real) and not isinstance(value, bool):
-            try:
-                return format(value, ".6g")
-            except (TypeError, ValueError):
-                return str(value)
-        return str(value)
-
-    def headerData(  # noqa: N802
-        self,
-        section: int,
-        orientation: Qt.Orientation,
-        role: int = Qt.DisplayRole,
-    ):
-        if role == Qt.FontRole and orientation == Qt.Horizontal:
-            column_name = str(self._df.columns[section])
-            if column_name in self._highlight:
-                return self._bold_font
-        if role != Qt.DisplayRole:
-            return None
-        if orientation == Qt.Horizontal:
-            return str(self._df.columns[section])
-        return str(self._df.index[section])
-
-
-class ScaledImageLabel(QLabel):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._pixmap: QPixmap | None = None
-        self.setAlignment(Qt.AlignCenter)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setMinimumSize(200, 200)
-
-    def load_image(self, path: Path) -> bool:
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            self._pixmap = None
-            self.setText(f"Failed to load {path.name}")
-            return False
-        self._pixmap = pixmap
-        self.setText("")
-        self._update_scaled_pixmap()
-        return True
-
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override naming
-        super().resizeEvent(event)
-        self._update_scaled_pixmap()
-
-    def _update_scaled_pixmap(self) -> None:
-        if not self._pixmap or self._pixmap.isNull():
-            return
-        size = self.size()
-        if size.width() <= 0 or size.height() <= 0:
-            return
-        scaled = self._pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        super().setPixmap(scaled)
-
-
 class SettingsManager:
     def __init__(self):
         self._settings = QSettings(
@@ -571,278 +515,6 @@ class ThemeManager:
         return tooltip_map.get(mode, "Follow system theme")
 
 
-class DataViewManager:
-    INITIAL_PREVIEW_LIMIT = 100
-    PREVIEW_INCREMENT = 1000
-
-    def __init__(
-        self,
-        parent: QWidget | None = None,
-        load_more_callback=None,
-        plot_axes_changed_callback=None,
-    ):
-        """Create data view manager with its own UI components.
-
-        Args:
-            parent: Parent widget
-            load_more_callback: Callback when "Show More Rows" is clicked
-            plot_axes_changed_callback: Callback(record, column_name, enabled) when plot axes toggled
-        """
-        self._load_more_callback = load_more_callback
-        self._plot_axes_changed_callback = plot_axes_changed_callback
-        self._current_record: LogRecord | None = None
-
-        # Create UI components
-        self.widget = self._create_widget(parent)
-
-    def _create_widget(self, parent: QWidget | None = None) -> QWidget:
-        """Create and return the data tab widget."""
-        data_tab = QWidget(parent)
-        data_layout = QVBoxLayout(data_tab)
-        data_layout.setContentsMargins(4, 4, 4, 4)
-
-        self.data_table = QTableView()
-        self.data_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.data_table.setSortingEnabled(False)
-        self.data_table.setWordWrap(False)
-        self.data_table.horizontalHeader().setStretchLastSection(False)
-        self.data_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeToContents
-        )
-        self.data_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        row_height = self.data_table.fontMetrics().height() + 6
-        self.data_table.verticalHeader().setDefaultSectionSize(row_height)
-
-        # Set up context menu
-        self.data_table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.data_table.customContextMenuRequested.connect(self._open_context_menu)
-
-        data_layout.addWidget(self.data_table)
-
-        controls = QHBoxLayout()
-        controls.setContentsMargins(0, 0, 0, 0)
-        self.data_status_label = QLabel("")
-        self.data_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.data_status_label.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Preferred
-        )
-        self.data_load_button = QPushButton("Show More Rows")
-        self.data_load_button.setEnabled(False)
-        if self._load_more_callback:
-            self.data_load_button.clicked.connect(self._load_more_callback)
-        controls.addWidget(self.data_status_label)
-        controls.addStretch(1)
-        controls.addWidget(self.data_load_button)
-        data_layout.addLayout(controls)
-
-        return data_tab
-
-    def set_empty(self, message: str = "No data to display.") -> None:
-        self.data_table.setModel(None)
-        self.data_status_label.setText(message)
-        self.data_load_button.setEnabled(False)
-
-    def show_data_table(self, record: LogRecord, preview_only: bool) -> None:
-        self._current_record = record
-        dataframe = record.load_dataframe()
-        if dataframe is None:
-            message = (
-                "Data file not found."
-                if not record.data_path or not record.data_path.exists()
-                else "Failed to load data."
-            )
-            self.set_empty(message)
-            return None
-
-        total_rows = len(dataframe)
-        preview_limit = None
-        if preview_only and total_rows > self.INITIAL_PREVIEW_LIMIT:
-            preview_limit = self.INITIAL_PREVIEW_LIMIT
-
-        # Create model with preview limit
-        model = PandasTableModel(
-            dataframe,
-            self.data_table,
-            highlight_columns=record.meta.plot_axes,
-            preview_limit=preview_limit,
-        )
-        self.data_table.setModel(model)
-        self.data_table.resizeColumnsToContents()
-        row_height = self.data_table.fontMetrics().height() + 6
-        self.data_table.verticalHeader().setDefaultSectionSize(row_height)
-
-        # Update status and button
-        displayed_rows = model.rowCount()
-        has_more = displayed_rows < total_rows
-
-        if has_more:
-            self.data_status_label.setText(
-                f"Showing first {displayed_rows} rows. Total: {total_rows}."
-            )
-            self.data_load_button.setEnabled(True)
-        else:
-            self.data_status_label.setText(f"Showing all {displayed_rows} rows.")
-            self.data_load_button.setEnabled(False)
-
-    def _open_context_menu(self, point) -> None:
-        """Handle context menu on data table."""
-        record = self._current_record
-        model = self.data_table.model()
-        if record is None or model is None:
-            return
-
-        # Get column from click position
-        index = self.data_table.indexAt(point)
-        column = (
-            index.column()
-            if index.isValid()
-            else self.data_table.horizontalHeader().logicalIndexAt(point.x())
-        )
-        if column < 0:
-            return
-
-        column_name = str(model.headerData(column, Qt.Horizontal))
-        if not column_name:
-            return
-
-        # Create context menu
-        menu = QMenu(self.data_table)
-        is_tracked = column_name in record.meta.plot_axes
-        toggle_action = menu.addAction("Toggle Plot Axes")
-        toggle_action.setCheckable(True)
-        toggle_action.setChecked(is_tracked)
-
-        # Show menu and handle result
-        chosen = menu.exec(self.data_table.viewport().mapToGlobal(point))
-        if chosen == toggle_action:
-            self._toggle_plot_axes(record, column_name, not is_tracked)
-
-    def _toggle_plot_axes(
-        self, record: LogRecord, column_name: str, enable: bool
-    ) -> None:
-        """Toggle plot axes tracking for a column."""
-        column_name = str(column_name)
-        if not column_name:
-            return
-
-        updated = list(record.meta.plot_axes)
-        if enable:
-            if column_name in updated:
-                return
-            updated.append(column_name)
-        else:
-            if column_name not in updated:
-                return
-            updated = [item for item in updated if item != column_name]
-
-        record.meta.plot_axes = updated
-
-        # Notify parent via callback
-        if self._plot_axes_changed_callback:
-            self._plot_axes_changed_callback(record, column_name, enable)
-
-    def load_more_data(self, record: LogRecord) -> None:
-        model = self.data_table.model()
-        if not isinstance(model, PandasTableModel):
-            # No preview active, show all data
-            self.show_data_table(record, preview_only=False)
-            return
-
-        total_rows = model.get_total_rows()
-        current_limit = model.rowCount()
-
-        if current_limit >= total_rows:
-            # Already showing all data
-            return
-
-        # Increase limit
-        new_limit = min(current_limit + self.PREVIEW_INCREMENT, total_rows)
-        model.set_preview_limit(new_limit)
-
-        # Update status
-        displayed_rows = model.rowCount()
-        has_more = displayed_rows < total_rows
-
-        if has_more:
-            self.data_status_label.setText(
-                f"Showing first {displayed_rows} rows. Total: {total_rows}."
-            )
-            self.data_load_button.setEnabled(True)
-        else:
-            self.data_status_label.setText(f"Showing all {displayed_rows} rows.")
-            self.data_load_button.setEnabled(False)
-
-
-class RecordDetailWindow(QMainWindow):
-    """Standalone window showing the full detail panel for a single log record."""
-
-    def __init__(self, record: LogRecord, initial_tab: int = TAB_CONST, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        if not WINDOW_ICON.isNull():
-            self.setWindowIcon(WINDOW_ICON)
-        self.resize(900, 600)
-        self._record: LogRecord | None = None
-        self._image_tab_indices: list[int] = []
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(6)
-
-        self._tab_widget = QTabWidget()
-
-        self._yaml_view = QPlainTextEdit()
-        self._yaml_view.setReadOnly(True)
-        self._tab_widget.addTab(self._yaml_view, "Const.")
-
-        self._data_view_manager = DataViewManager(
-            parent=container,
-            load_more_callback=self._on_load_more,
-        )
-        self._tab_widget.addTab(self._data_view_manager.widget, "Data")
-
-        self._plot_manager = PlotManager(parent=container)
-        self._tab_widget.addTab(self._plot_manager.widget, "Plot")
-
-        self._tab_widget.currentChanged.connect(self._on_tab_changed)
-        layout.addWidget(self._tab_widget)
-        self.setCentralWidget(container)
-
-        self.load_record(record)
-        self._tab_widget.setCurrentIndex(initial_tab)
-
-    def load_record(self, record: LogRecord) -> None:
-        self._record = record
-        title = record.meta.title or "(untitled)"
-        self.setWindowTitle(f"#{record.log_id} {title}")
-        self._yaml_view.setPlainText(record.read_yaml_text())
-        self._data_view_manager.show_data_table(record, preview_only=True)
-        self._update_image_tabs(record.list_image_files())
-        defer_plot = self._tab_widget.currentIndex() != TAB_PLOT
-        self._plot_manager.update_plot_and_controls(record, defer_plot=defer_plot)
-
-    def _on_tab_changed(self, index: int) -> None:
-        if index == TAB_PLOT:
-            self._plot_manager.refresh_if_needed()
-
-    def _on_load_more(self) -> None:
-        if self._record:
-            self._data_view_manager.load_more_data(self._record)
-
-    def _update_image_tabs(self, image_files: list[Path]) -> None:
-        for index in sorted(self._image_tab_indices, reverse=True):
-            self._tab_widget.removeTab(index)
-        self._image_tab_indices.clear()
-        for image_path in image_files:
-            widget = ScaledImageLabel()
-            widget.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            widget.setWordWrap(True)
-            widget.setToolTip(str(image_path))
-            widget.load_image(image_path)
-            index = self._tab_widget.addTab(widget, image_path.name)
-            self._image_tab_indices.append(index)
-
-
 class LogBrowserWindow(QMainWindow):
     def __init__(
         self, directory: Path | None = None, parent: QWidget | None = None
@@ -858,7 +530,6 @@ class LogBrowserWindow(QMainWindow):
         self._base_dir = Path(directory) if directory else Path.cwd()
         self._current_record: LogRecord | None = None
         self._show_trash = True
-        self._image_tab_indices: list[int] = []
         self._shortcuts: list[QAction] = []
         self._list_refresh_pending = False
         self._detail_refresh_pending = False
@@ -991,42 +662,13 @@ class LogBrowserWindow(QMainWindow):
         return table, model, proxy
 
     def _create_detail_panel(self, parent: QWidget) -> QWidget:
-        detail_widget = QWidget(parent)
-        detail_layout = QVBoxLayout(detail_widget)
-        detail_layout.setContentsMargins(0, 0, 0, 0)
-        detail_layout.setSpacing(6)
-
-        detail_top = QHBoxLayout()
-        self.detail_label = QLabel("No log selected.")
-        self.detail_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.detail_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        detail_top.addWidget(self.detail_label)
-        detail_top.addStretch(1)
-        detail_layout.addLayout(detail_top)
-
-        self.tab_widget = QTabWidget(detail_widget)
-
-        self.yaml_view = QPlainTextEdit()
-        self.yaml_view.setReadOnly(True)
-        self.tab_widget.addTab(self.yaml_view, "Const.")
-
-        # Create data view manager and add its widget
-        self.data_view_manager = DataViewManager(
-            parent=detail_widget,
-            load_more_callback=self._on_load_data_clicked,
-            plot_axes_changed_callback=self._on_plot_axes_changed,
+        self.detail_view = RecordDetailView(
+            parent=parent,
+            record_changed_callback=self._update_ui_for_record,
+            watch_toggled_callback=self._on_detail_watch_toggled,
+            enable_tab_shortcuts=False,
         )
-        self.tab_widget.addTab(self.data_view_manager.widget, "Data")
-
-        # Create plot manager and add its widget
-        self.plot_manager = PlotManager(parent=detail_widget)
-        self.tab_widget.addTab(self.plot_manager.widget, "Plot")
-
-        # Connect tab changed signal to refresh plot if needed
-        self.tab_widget.currentChanged.connect(self._on_tab_changed)
-
-        detail_layout.addWidget(self.tab_widget)
-        return detail_widget
+        return self.detail_view
 
     def _setup_shortcuts(self) -> None:
         for action in self._shortcuts:
@@ -1049,6 +691,8 @@ class LogBrowserWindow(QMainWindow):
         add_shortcut(Qt.Key_1, lambda: self._shortcut_set_star(1))
         add_shortcut(Qt.Key_2, lambda: self._shortcut_set_star(2))
         add_shortcut(Qt.Key_3, lambda: self._shortcut_set_star(3))
+        add_shortcut(Qt.Key_Left, lambda: self.detail_view.switch_tab(-1))
+        add_shortcut(Qt.Key_Right, lambda: self.detail_view.switch_tab(1))
 
     def _rebuild_directory_menu(self) -> None:
         if self._directory_menu is None:
@@ -1139,7 +783,7 @@ class LogBrowserWindow(QMainWindow):
 
         row_count = self.table_proxy.rowCount()
         if row_count:
-            self.detail_label.setText("Select a log to preview.")
+            self.detail_view.clear("Select a log to preview.")
             if previous_id is not None:
                 # Try to select previous log
                 found = False
@@ -1161,12 +805,11 @@ class LogBrowserWindow(QMainWindow):
                 self.log_table.selectRow(0)
         else:
             if all_records:
-                self.detail_label.setText("No logs to display.")
+                self.detail_view.clear("No logs to display.")
             else:
-                self.detail_label.setText("No logs found.")
+                self.detail_view.clear("No logs found.")
             self._current_record = None
             self.log_table.clearSelection()
-            self._clear_preview_panels()
             self._clear_detail_watcher()
 
     def refresh_current_log(self) -> None:
@@ -1182,7 +825,7 @@ class LogBrowserWindow(QMainWindow):
         record = self.table_model.get_record(source_index.row())
         if record is None:
             return
-        initial_tab = self.tab_widget.currentIndex()
+        initial_tab = self.detail_view.current_tab_index()
         window = RecordDetailWindow(record, initial_tab=initial_tab, parent=None)
         window.setAttribute(Qt.WA_DeleteOnClose, True)
         self._detail_windows.append(window)
@@ -1208,31 +851,11 @@ class LogBrowserWindow(QMainWindow):
         self._load_log(record)
 
     def _load_log(self, record: LogRecord) -> None:
-        self.detail_label.setText(f"#{record.log_id} - {record.path}")
-        self.yaml_view.setPlainText(record.read_yaml_text())
-        self.data_view_manager.data_status_label.setText("Loading data preview…")
-        self.data_view_manager.data_load_button.setEnabled(False)
-        self.data_view_manager.show_data_table(record, preview_only=True)
-        image_files = record.list_image_files()
-        self._update_image_tabs(image_files)
-
-        # Defer plot refresh if not on plot tab
-        current_tab = self.tab_widget.currentIndex()
-        defer_plot = current_tab != TAB_PLOT
-        self.plot_manager.update_plot_and_controls(record, defer_plot=defer_plot)
-
+        self.detail_view.load_record(record)
         self._update_detail_watcher(record)
 
-    def _on_tab_changed(self, index: int) -> None:
-        """Handle tab widget changes to trigger plot refresh if needed."""
-        if index == TAB_PLOT:
-            self.plot_manager.refresh_if_needed()
-
     def _clear_preview_panels(self) -> None:
-        self.yaml_view.setPlainText("")
-        self.data_view_manager.set_empty("")
-        self._clear_image_tabs()
-        self.plot_manager.reset_plot_state("")
+        self.detail_view.clear()
 
     def _clear_detail_watcher(self) -> None:
         try:
@@ -1242,38 +865,20 @@ class LogBrowserWindow(QMainWindow):
         except Exception:  # pragma: no cover - defensive
             pass
 
-    def _clear_image_tabs(self) -> None:
-        if not self._image_tab_indices:
-            return
-        for index in sorted(self._image_tab_indices, reverse=True):
-            self.tab_widget.removeTab(index)
-        self._image_tab_indices.clear()
-
-    def _update_image_tabs(self, image_files: list[Path]) -> None:
-        self._clear_image_tabs()
-        for image_path in image_files:
-            widget = ScaledImageLabel()
-            widget.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            widget.setWordWrap(True)
-            widget.setToolTip(str(image_path))
-            success = widget.load_image(image_path)
-            if not success:
-                widget.setWordWrap(True)
-            index = self.tab_widget.addTab(widget, image_path.name)
-            self._image_tab_indices.append(index)
-
     def _update_detail_watcher(self, record: LogRecord) -> None:
         self._clear_detail_watcher()
-        watch_paths: list[str] = [str(record.path)]
-        for extra in (record.yaml_path, record.data_path, record.meta.path):
-            if extra and extra.exists():
-                watch_paths.append(str(extra))
+        if not self.detail_view.watch_enabled:
+            return
+        watch_paths = record_watch_paths(record)
         if watch_paths:
             self._detail_watcher.addPaths(watch_paths)
 
-    def _on_load_data_clicked(self) -> None:
-        if self._current_record:
-            self.data_view_manager.load_more_data(self._current_record)
+    def _on_detail_watch_toggled(self, enabled: bool) -> None:
+        if not enabled:
+            self._clear_detail_watcher()
+            return
+        if self._current_record is not None:
+            self._update_detail_watcher(self._current_record)
 
     def _on_refresh_clicked(self) -> None:
         self.refresh_logs()
@@ -1349,12 +954,14 @@ class LogBrowserWindow(QMainWindow):
         )
         menu.addSeparator()
         open_explorer = menu.addAction("Open in Explorer")
+        export_action = menu.addAction("Export...")
         if not records:
             rename_action.setEnabled(False)
             toggle_star_action.setEnabled(False)
             toggle_trash_action.setEnabled(False)
             send_to_recycle_action.setEnabled(False)
             open_explorer.setEnabled(False)
+            export_action.setEnabled(False)
         else:
             rename_action.setEnabled(len(records) == 1)
             all_starred = all(rec.meta.star > 0 for rec in records)
@@ -1364,6 +971,7 @@ class LogBrowserWindow(QMainWindow):
             toggle_trash_action.setEnabled(True)
             toggle_trash_action.setChecked(all_trashed)
             send_to_recycle_action.setEnabled(True)
+            export_action.setEnabled(True)
         chosen = menu.exec(self.log_table.viewport().mapToGlobal(point))
         if chosen is None:
             return
@@ -1387,13 +995,8 @@ class LogBrowserWindow(QMainWindow):
             self._toggle_column(COL_PLOT_AXES, plot_axes_action.isChecked())
         elif chosen == open_explorer and records:
             self._open_path_in_explorer(records[0].path, len(records) != 1)
-
-    def _on_plot_axes_changed(
-        self, record: LogRecord, column_name: str, enabled: bool
-    ) -> None:
-        """Callback when plot axes is toggled in DataViewManager."""
-        self._update_ui_for_record(record)
-        self._load_log(record)
+        elif chosen == export_action and records:
+            self._export_records(records)
 
     def _toggle_column(self, column: int, visible: bool) -> None:
         self.log_table.setColumnHidden(column, not visible)
@@ -1480,6 +1083,39 @@ class LogBrowserWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Open in Explorer", f"Failed to open file browser: {exc}"
             )
+
+    def _export_records(self, records: Iterable[LogRecord]) -> None:
+        records_list = list(records)
+        if not records_list:
+            return
+
+        chosen = QFileDialog.getExistingDirectory(
+            self,
+            "Select new parent folder for export",
+            str(self._base_dir.parent if self._base_dir.parent.exists() else self._base_dir),
+        )
+        if not chosen:
+            return
+
+        destination_parent = Path(chosen)
+        try:
+            exported_paths = export_records(records_list, destination_parent)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Export Failed",
+                f"Failed to export selected log folders:\n{exc}",
+            )
+            return
+
+        if len(exported_paths) == 1:
+            message = f"Exported 1 log folder to:\n{exported_paths[0]}"
+        else:
+            message = (
+                f"Exported {len(exported_paths)} log folders to parent folder:\n"
+                f"{destination_parent}"
+            )
+        QMessageBox.information(self, "Export Complete", message)
 
     def _send_records_to_recycle_bin(self, records: Iterable[LogRecord]) -> None:
         records_list = list(records)

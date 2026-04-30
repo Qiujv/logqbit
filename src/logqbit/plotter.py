@@ -277,7 +277,7 @@ class PlotManager:
 
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
-            plot_item.setDownsampling(auto=True, mode="subsample")
+            # plot_item.setDownsampling(auto=True, mode="subsample")
             for axis in ["left", "bottom", "top", "right"]:
                 plot_item.getAxis(axis).setTextPen("k")
                 plot_item.getAxis(axis).enableAutoSIPrefix(False)

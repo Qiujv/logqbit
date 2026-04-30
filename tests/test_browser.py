@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 
 from logqbit.browser import (
     COL_CREATE_MACHINE,
@@ -13,10 +14,14 @@ from logqbit.browser import (
     COL_PLOT_AXES,
     COL_ROWS,
     COL_TITLE,
+    LogBrowserWindow,
     LogListTableModel,
     LogRecord,
     PandasTableModel,
+    ensure_application,
+    export_records,
 )
+from logqbit.detail_view import RecordDetailView, RecordDetailWindow, record_watch_paths
 from logqbit.logfolder import LogFolder
 
 
@@ -151,6 +156,74 @@ class TestLogRecord:
         
         assert len(images) == 2
         assert all(img.suffix.lower() in {".png", ".jpg"} for img in images)
+
+    def test_list_other_files(self, sample_logfolder: Path) -> None:
+        """Test listing non-standard files in a log folder."""
+        records = LogRecord.scan_directory(sample_logfolder)
+        record = records[0]
+
+        extra_text = record.path / "notes.txt"
+        extra_binary = record.path / "snapshot.bin"
+        ignored_image = record.path / "plot.webp"
+        extra_text.write_text("hello", encoding="utf-8")
+        extra_binary.write_bytes(b"123")
+        ignored_image.touch()
+
+        other_files = record.list_other_files()
+
+        assert [path.name for path in other_files] == ["notes.txt", "snapshot.bin"]
+
+    def test_record_watch_paths_include_extra_files(self, sample_logfolder: Path) -> None:
+        """Test watch path helper tracks record files beyond the standard trio."""
+        records = LogRecord.scan_directory(sample_logfolder)
+        record = records[0]
+
+        extra_file = record.path / "notes.txt"
+        extra_file.write_text("watch me", encoding="utf-8")
+
+        watch_paths = set(record_watch_paths(record))
+
+        assert str(record.path) in watch_paths
+        assert str(record.meta.path) in watch_paths
+        assert str(extra_file) in watch_paths
+
+    def test_export_records_copies_selected_logs_in_id_order(self, tmp_path: Path) -> None:
+        source_parent = tmp_path / "source"
+        source_parent.mkdir()
+
+        low = LogFolder.new(source_parent, title="low")
+        low.add_row(x=1, y=2)
+        low.flush()
+        (low.path / "note.txt").write_text("low-note", encoding="utf-8")
+
+        high = LogFolder.new(source_parent, title="high")
+        high.add_row(x=10, y=20)
+        high.flush()
+        (high.path / "snapshot.bin").write_bytes(b"abc")
+        (high.path / "import_from").write_text("preserve-me", encoding="utf-8")
+
+        records = LogRecord.scan_directory(source_parent)
+        record_by_title = {record.meta.title: record for record in records}
+
+        destination_parent = tmp_path / "exported"
+        destination_parent.mkdir()
+        (destination_parent / "0").mkdir()
+
+        exported_paths = export_records(
+            [record_by_title["high"], record_by_title["low"]],
+            destination_parent,
+        )
+
+        assert [path.name for path in exported_paths] == ["1", "2"]
+        assert (exported_paths[0] / "note.txt").read_text(encoding="utf-8") == "low-note"
+        assert (exported_paths[1] / "snapshot.bin").read_bytes() == b"abc"
+        assert (exported_paths[0] / "import_from").read_text(encoding="utf-8") == str(record_by_title["low"].path)
+        assert (exported_paths[1] / "import_from").read_text(encoding="utf-8") == "preserve-me"
+
+        exported_records = LogRecord.scan_directory(destination_parent)
+        exported_titles = {record.log_id: record.meta.title for record in exported_records}
+        assert exported_titles[1] == "low"
+        assert exported_titles[2] == "high"
 
 
 class TestLogListTableModel:
@@ -394,3 +467,145 @@ class TestPandasTableModel:
         # Non-highlighted column header should have no special font
         font_y = model.headerData(1, Qt.Horizontal, Qt.FontRole)
         assert font_y is None
+
+
+class TestRecordDetailWidgets:
+    def test_detail_view_shows_extra_files_tab(self, sample_logfolder: Path) -> None:
+        app = ensure_application()
+        record = LogRecord.scan_directory(sample_logfolder)[0]
+        extra_file = record.path / "notes.txt"
+        extra_file.write_text("hello", encoding="utf-8")
+        opened_paths: list[Path] = []
+
+        view = RecordDetailView(file_open_callback=opened_paths.append)
+        view.load_record(record)
+        view.show()
+        app.processEvents()
+        try:
+            tab_names = [view.tab_widget.tabText(i) for i in range(view.tab_widget.count())]
+            assert "Files" in tab_names
+
+            files_index = tab_names.index("Files")
+            files_widget = view.tab_widget.widget(files_index)
+            assert files_widget is not None
+            assert files_widget.count() == 1
+            assert files_widget.item(0).text() == "notes.txt"
+
+            files_widget.itemClicked.emit(files_widget.item(0))
+            assert opened_paths == [extra_file]
+        finally:
+            view.close()
+
+    def test_detail_window_watch_toggle_controls_watcher(
+        self, sample_logfolder: Path
+    ) -> None:
+        app = ensure_application()
+        record = LogRecord.scan_directory(sample_logfolder)[0]
+        window = RecordDetailWindow(record)
+        window.show()
+        app.processEvents()
+        try:
+            assert window.detail_view.watch_enabled
+            assert window._detail_watcher.directories()
+
+            window.detail_view.set_watch_enabled(False)
+            app.processEvents()
+            assert not window._detail_watcher.directories()
+            assert not window._detail_watcher.files()
+
+            window.detail_view.set_watch_enabled(True)
+            app.processEvents()
+            assert str(record.path) in set(window._detail_watcher.directories())
+        finally:
+            window.close()
+
+    def test_detail_window_has_file_watcher_and_tab_shortcuts(
+        self, sample_logfolder: Path
+    ) -> None:
+        app = ensure_application()
+        record = LogRecord.scan_directory(sample_logfolder)[0]
+        extra_file = record.path / "notes.txt"
+        extra_file.write_text("hello", encoding="utf-8")
+
+        window = RecordDetailWindow(record)
+        window.show()
+        app.processEvents()
+        try:
+            assert str(record.path) in set(window._detail_watcher.directories())
+            watched_files = set(window._detail_watcher.files())
+            assert str(record.meta.path) in watched_files
+            assert str(extra_file) in watched_files
+
+            window.detail_view.yaml_view.setFocus()
+            QTest.keyClick(window.detail_view.yaml_view, Qt.Key_Right)
+            app.processEvents()
+            assert window.detail_view.current_tab_index() == 1
+
+            window.detail_view.data_view_manager.data_table.setFocus()
+            QTest.keyClick(window.detail_view.data_view_manager.data_table, Qt.Key_Left)
+            app.processEvents()
+            assert window.detail_view.current_tab_index() == 0
+        finally:
+            window.close()
+
+    def test_browser_window_detail_shortcuts(self, sample_logfolder: Path) -> None:
+        app = ensure_application()
+        window = LogBrowserWindow(sample_logfolder)
+        window.show()
+        app.processEvents()
+        try:
+            assert window.detail_view.current_record is not None
+
+            window.detail_view.yaml_view.setFocus()
+            QTest.keyClick(window.detail_view.yaml_view, Qt.Key_Right)
+            app.processEvents()
+            assert window.detail_view.current_tab_index() == 1
+
+            window.detail_view.data_view_manager.data_table.setFocus()
+            QTest.keyClick(window.detail_view.data_view_manager.data_table, Qt.Key_Left)
+            app.processEvents()
+            assert window.detail_view.current_tab_index() == 0
+        finally:
+            window.close()
+
+    def test_browser_window_watch_toggle_controls_watcher(
+        self, sample_logfolder: Path
+    ) -> None:
+        app = ensure_application()
+        window = LogBrowserWindow(sample_logfolder)
+        window.show()
+        app.processEvents()
+        try:
+            record = window.detail_view.current_record
+            assert record is not None
+            assert str(record.path) in set(window._detail_watcher.directories())
+
+            window.detail_view.set_watch_enabled(False)
+            app.processEvents()
+            assert not window._detail_watcher.directories()
+            assert not window._detail_watcher.files()
+
+            window.detail_view.set_watch_enabled(True)
+            app.processEvents()
+            assert str(record.path) in set(window._detail_watcher.directories())
+        finally:
+            window.close()
+
+    def test_browser_window_log_table_focus_can_switch_detail_tabs(
+        self, sample_logfolder: Path
+    ) -> None:
+        app = ensure_application()
+        window = LogBrowserWindow(sample_logfolder)
+        window.show()
+        app.processEvents()
+        try:
+            window.log_table.setFocus()
+            QTest.keyClick(window.log_table, Qt.Key_Right)
+            app.processEvents()
+            assert window.detail_view.current_tab_index() == 1
+
+            QTest.keyClick(window.log_table, Qt.Key_Left)
+            app.processEvents()
+            assert window.detail_view.current_tab_index() == 0
+        finally:
+            window.close()
