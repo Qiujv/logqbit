@@ -1,0 +1,19 @@
+site_name: LogQbit
+site_url: https://qiujv.github.io/logqbit/
+repo_url: https://github.com/Qiujv/logqbit
+repo_name: Qiujv/logqbit
+docs_dir: docs
+theme:
+  name: mkdocs
+nav:
+  - 首页: index.md
+  - 安装: install.md
+  - 核心用法: core_usage.md
+  - 命令行工具: cli.md
+  - LabRAD 迁移: migration_guide.md
+  - 开发者文档: development.md
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
