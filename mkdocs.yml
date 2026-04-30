@@ -4,7 +4,7 @@ repo_url: https://github.com/Qiujv/logqbit
 repo_name: Qiujv/logqbit
 docs_dir: docs
 theme:
-  name: mkdocs
+  name: readthedocs
 plugins:
   - search
   - mkdocstrings:
