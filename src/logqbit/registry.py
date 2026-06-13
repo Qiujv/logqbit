@@ -1,8 +1,10 @@
+import copy
 import os
 import re
 import sys
 import tempfile
 import warnings
+from collections import deque
 from collections.abc import Mapping, Sequence, Set
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,7 +16,7 @@ from typing_extensions import deprecated
 
 if TYPE_CHECKING:
     from ruamel.yaml.constructor import BaseConstructor
-    from ruamel.yaml.nodes import ScalarNode, SequenceNode
+    from ruamel.yaml.nodes import ScalarNode
     from ruamel.yaml.representer import BaseRepresenter
 
 _sentinel = object()
@@ -60,7 +62,7 @@ class Registry:
     NOTE: Local operations is useful for batch update without frequent file I/O.
     """
 
-    def __init__(self, path: str | Path, create: bool = True):
+    def __init__(self, path: str | Path, create: bool = True, history_size: int = 2):
         path = Path(path)
         if path.exists():
             pass
@@ -73,6 +75,9 @@ class Registry:
         self.yaml = get_parser()
         self.root: CommentedMap = self.load()
         self._snap = FileSnap(self.path)
+
+        self._undo_stack: deque[CommentedMap] = deque(maxlen=history_size)
+        self._redo_stack: deque[CommentedMap] = deque(maxlen=history_size)
 
     def __getitem__(self, key: str):
         return self.get(key)
@@ -121,12 +126,14 @@ class Registry:
         """Reloads the file if it has changed since the last load."""
         if self._snap.changed():
             self.root = self.load()
+            self._undo_stack.clear()
+            self._redo_stack.clear()
 
     def load(self, path: str | Path | None = None) -> CommentedMap:
         # NOTE: `yaml.load` also returns `CommentedSeq`, `float`, `str`, `None`
         # or other build-in types depending on the top-level YAML content. But
         # only `CommentedMap` is legal for the use case of this class.
-        path = self.path if path is None else path
+        path = self.path if path is None else Path(path)
         with open(path, "r", encoding="utf-8") as f:
             root = self.yaml.load(f)
         if root is None:
@@ -134,12 +141,18 @@ class Registry:
             root.fa.set_block_style()
         return root
 
-    def save(self, path: str | Path | None = None):
-        path = self.path if path is None else path
+    def save(self, path: str | Path | None = None, *, record_history: bool = True):
+        path = self.path if path is None else Path(path)
+        is_primary_path = path == self.path
+        if record_history and is_primary_path:
+            self._undo_stack.append(self.load(path))
+            self._redo_stack.clear()
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.stem, suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             self.yaml.dump(self.root, f)
         Path(tmp).replace(path)
+        if is_primary_path:
+            self._snap = FileSnap(self.path)
 
     @deprecated("For backward compatibility only.")
     def copy(self) -> dict:
@@ -149,6 +162,22 @@ class Registry:
     @deprecated("For backward compatibility only.")
     def cwd(self) -> str:
         return self["data_folder"]
+
+    def undo(self) -> bool:
+        if not self._undo_stack:
+            return False
+        self._redo_stack.append(copy.deepcopy(self.root))
+        self.root = self._undo_stack.pop()
+        self.save(record_history=False)
+        return True
+
+    def redo(self) -> bool:
+        if not self._redo_stack:
+            return False
+        self._undo_stack.append(copy.deepcopy(self.root))
+        self.root = self._redo_stack.pop()
+        self.save(record_history=False)
+        return True
 
 
 def get_parser() -> YAML:

@@ -73,6 +73,80 @@ def test_reload_detects_external_change(temp_yaml):
     assert reg.get("period_ns") == 12345
 
 
+def test_undo_redo_for_set(temp_yaml):
+    reg = Registry(temp_yaml)
+
+    reg["period_ns"] = 12345
+    assert reg.get("period_ns") == 12345
+
+    assert reg.undo()
+    assert reg.get("period_ns") == 50000
+    assert Registry(temp_yaml).get("period_ns") == 50000
+
+    assert reg.redo()
+    assert reg.get("period_ns") == 12345
+    assert Registry(temp_yaml).get("period_ns") == 12345
+
+
+def test_undo_redo_for_manual_root_save(temp_yaml):
+    reg = Registry(temp_yaml)
+
+    reg.root["local_only"] = "temp"
+    reg.save()
+    assert reg.get("local_only") == "temp"
+
+    assert reg.undo()
+    with pytest.raises(KeyError):
+        reg.get("local_only")
+    with pytest.raises(KeyError):
+        Registry(temp_yaml).get("local_only")
+
+    assert reg.redo()
+    assert reg.get("local_only") == "temp"
+    assert Registry(temp_yaml).get("local_only") == "temp"
+
+
+def test_undo_history_limit(temp_yaml):
+    reg = Registry(temp_yaml, history_size=2)
+
+    reg["period_ns"] = 1
+    reg["period_ns"] = 2
+    reg["period_ns"] = 3
+
+    assert reg.undo()
+    assert reg.get("period_ns") == 2
+    assert reg.undo()
+    assert reg.get("period_ns") == 1
+    assert not reg.undo()
+
+
+def test_save_to_other_path_does_not_record_history(temp_yaml, tmp_path):
+    reg = Registry(temp_yaml)
+    export_path = tmp_path / "export.yaml"
+
+    reg.save(export_path)
+
+    assert export_path.exists()
+    assert not reg.undo()
+
+
+def test_undo_restores_external_file_state_before_save(temp_yaml):
+    reg = Registry(temp_yaml)
+    text = temp_yaml.read_text(encoding="utf-8")
+    temp_yaml.write_text(text.replace("50_000", "12345"), encoding="utf-8")
+
+    reg.root["local_only"] = "temp"
+    reg.save()
+
+    assert reg.get("period_ns") == 50000
+    assert reg.get("local_only") == "temp"
+
+    assert reg.undo()
+    assert reg.get("period_ns") == 12345
+    with pytest.raises(KeyError):
+        reg.get("local_only")
+
+
 def test_create_false_raises(tmp_path):
     path = tmp_path / "missing.yaml"
     with pytest.raises(FileNotFoundError):
