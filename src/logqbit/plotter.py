@@ -14,7 +14,6 @@ from numba import njit, prange
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QHBoxLayout,
     QLabel,
     QListView,
@@ -115,6 +114,20 @@ def _build_grids_rect(ys, zs, col_starts, col_sizes, max_ny, nx_col, top_y, step
             y_final[r, c2 + 1] = val
 
     return z_final, y_final
+
+
+def warmup_plotter_jit() -> None:
+    """Compile numba-backed 2D plotting helpers before the first real plot."""
+    x = np.array([0.0, 0.0, 1.0, 1.0], dtype=np.float64)
+    y = np.array([0.0, 1.0, 0.0, 1.0], dtype=np.float64)
+    z = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
+    col_starts = np.array([0, 2], dtype=np.int64)
+    col_sizes = np.array([2, 2], dtype=np.int64)
+    top_y = np.array([2.0, 2.0], dtype=np.float64)
+    step_c = np.array([1.0, 1.0], dtype=np.float64)
+
+    _is_lexsorted(x, y)
+    _build_grids_rect(y, z, col_starts, col_sizes, 2, 2, top_y, step_c)
 
 
 class TagBar(QWidget):
@@ -513,6 +526,4 @@ class PlotManager:
         if cmap is None:
             cmap = pg.colormap.get("CET-D1")
         return cmap
-
-
 

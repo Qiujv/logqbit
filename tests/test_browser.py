@@ -8,8 +8,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
 from logqbit.browser import (
-    COL_CREATE_MACHINE,
-    COL_CREATE_TIME,
     COL_ID,
     COL_PLOT_AXES,
     COL_ROWS,
@@ -18,6 +16,7 @@ from logqbit.browser import (
     LogListTableModel,
     LogRecord,
     PandasTableModel,
+    SettingsManager,
     ensure_application,
     export_records,
 )
@@ -369,6 +368,19 @@ class TestLogListTableModel:
         
         expected = ["ID", "Title", "Rows", "Axes", "Create Time", "Create Machine"]
         assert headers == expected
+
+
+class TestSettingsManager:
+    def test_update_recent_directories_can_be_disabled(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("LOGQBIT_BROWSER_DISABLE_RECENT_DIRS", "1")
+        manager = SettingsManager()
+        original = list(manager.load_recent_directories())
+
+        manager.update_recent_directories(tmp_path)
+
+        assert manager.load_recent_directories() == original
 
 
 class TestPandasTableModel:

@@ -1,7 +1,6 @@
 """Command-line interface for logqbit utilities."""
 
 import argparse
-import shutil
 import subprocess
 import sys
 from importlib.resources import files
@@ -51,8 +50,8 @@ def copy_template(template_name: str, output_path: Path | None = None) -> int:
             output_path.write_bytes(src.read())
         
         print(f"✓ Template copied to: {output_path}")
-        print(f"\nNext steps:")
-        print(f"  1. Edit the file to configure your paths")
+        print("\nNext steps:")
+        print("  1. Edit the file to configure your paths")
         print(f"  2. Run: python {output_path.name}")
         
         return 0
@@ -60,6 +59,19 @@ def copy_template(template_name: str, output_path: Path | None = None) -> int:
     except Exception as exc:
         print(f"Error copying template: {exc}", file=sys.stderr)
         return 1
+
+
+def _windows_gui_python_executable() -> Path:
+    exe = Path(sys.executable)
+    if sys.platform == "win32" and exe.name.lower() != "pythonw.exe":
+        pythonw = exe.with_name("pythonw.exe")
+        if pythonw.exists():
+            return pythonw
+    return exe
+
+
+def _powershell_single_quoted(value: object) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def create_shortcuts(output_dir: Path | None = None) -> int:
@@ -75,20 +87,8 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
         Exit code (0 for success, 1 for error)
     """
     try:
-        # Find executable paths
-        browser_exe = shutil.which("logqbit-browser")
-        plotter_exe = shutil.which("logqbit-live-plotter")
-        
-        if not browser_exe:
-            print("Error: logqbit-browser.exe not found in PATH", file=sys.stderr)
-            print("Please ensure logqbit is installed.", file=sys.stderr)
-            return 1
-        
-        if not plotter_exe:
-            print("Error: logqbit-live-plotter.exe not found in PATH", file=sys.stderr)
-            print("Please ensure logqbit is installed.", file=sys.stderr)
-            return 1
-        
+        gui_python = _windows_gui_python_executable()
+
         # Get icon paths from package
         assets_dir = files("logqbit") / "assets"
         browser_svg = assets_dir / "browser.svg"
@@ -126,7 +126,7 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
                     try:
                         svg_to_ico(svg_str, ico_str)
                         print(f"  ✓ Created: {ico_path}")
-                    except (PermissionError, OSError) as e:
+                    except (PermissionError, OSError):
                         # Package directory might be read-only, try user's local data dir
                         import tempfile
                         temp_ico = Path(tempfile.gettempdir()) / f"logqbit_{name}.ico"
@@ -174,13 +174,15 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
         shortcuts = [
             {
                 "name": "LogQbit Browser",
-                "target": browser_exe,
+                "target": gui_python,
+                "arguments": "-m logqbit.browser",
                 "icon": str(browser_ico),
                 "output": output_dir / "LogQbit Browser.lnk"
             },
             {
                 "name": "LogQbit Live Plotter",
-                "target": plotter_exe,
+                "target": gui_python,
+                "arguments": "-m logqbit.live_plotter",
                 "icon": str(plotter_ico),
                 "output": output_dir / "LogQbit Live Plotter.lnk"
             }
@@ -190,9 +192,10 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
             # PowerShell script to create shortcut with icon
             ps_script = f"""
 $WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut("{sc['output']}")
-$Shortcut.TargetPath = "{sc['target']}"
-$Shortcut.IconLocation = "{sc['icon']}"
+$Shortcut = $WshShell.CreateShortcut({_powershell_single_quoted(sc['output'])})
+$Shortcut.TargetPath = {_powershell_single_quoted(sc['target'])}
+$Shortcut.Arguments = {_powershell_single_quoted(sc['arguments'])}
+$Shortcut.IconLocation = {_powershell_single_quoted(sc['icon'])}
 $Shortcut.Save()
 """
             
@@ -400,7 +403,7 @@ def main() -> int:
     )
     
     # browser-demo command
-    demo_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "browser-demo",
         help="Create example data and launch browser",
     )

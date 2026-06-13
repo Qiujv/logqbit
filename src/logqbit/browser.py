@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from importlib.resources import files
@@ -53,15 +55,17 @@ try:  # pragma: no cover - fallback for direct execution
     )
     from .logfolder import LogFolder
     from .metadata import LogMetadata
+    from .plotter import warmup_plotter_jit
 except ImportError:  # pragma: no cover - fallback for direct execution
+    from detail_view import PandasTableModel  # type: ignore  # noqa: F401
     from detail_view import (  # type: ignore
-        PandasTableModel,
         RecordDetailView,
         RecordDetailWindow,
         record_watch_paths,
     )
-    from logfolder import LogFolder  # type: ignore
+    from logfolder import LogFolder  # type: ignore  # noqa: F401
     from metadata import LogMetadata  # type: ignore
+    from plotter import warmup_plotter_jit  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +85,10 @@ SETTINGS_ORG = "LogQbit"
 SETTINGS_APP = "LogBrowser"
 SETTINGS_RECENT_DIRS_KEY = "recent/directories"
 SETTINGS_THEME_KEY = "ui/theme"
+DISABLE_RECENT_DIRS_ENV = "LOGQBIT_BROWSER_DISABLE_RECENT_DIRS"
+DISABLE_JIT_WARMUP_ENV = "LOGQBIT_BROWSER_DISABLE_JIT_WARMUP"
+
+_plotter_jit_warmup_started = False
 
 def _load_window_icon() -> QIcon:
     try:
@@ -94,6 +102,28 @@ def _load_window_icon() -> QIcon:
 
 
 WINDOW_ICON = _load_window_icon()
+
+
+def _start_plotter_jit_warmup() -> None:
+    global _plotter_jit_warmup_started
+    if _plotter_jit_warmup_started:
+        return
+    if os.environ.get(DISABLE_JIT_WARMUP_ENV):
+        return
+    _plotter_jit_warmup_started = True
+
+    def run_warmup() -> None:
+        try:
+            warmup_plotter_jit()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to warm up plotter JIT: %s", exc)
+
+    thread = threading.Thread(
+        target=run_warmup,
+        name="logqbit-plotter-jit-warmup",
+        daemon=True,
+    )
+    thread.start()
 
 
 def _next_export_logfolder_path(parent_path: Path) -> Path:
@@ -401,6 +431,9 @@ class SettingsManager:
         self._settings.sync()
 
     def update_recent_directories(self, path: Path) -> list[Path]:
+        if os.environ.get(DISABLE_RECENT_DIRS_ENV):
+            return self.load_recent_directories()
+
         self.load_recent_directories()
 
         resolved = Path(path)
@@ -564,6 +597,7 @@ class LogBrowserWindow(QMainWindow):
         self._update_window_title()
         self._sync_directory_watcher()
         self.refresh_logs()
+        QTimer.singleShot(500, _start_plotter_jit_warmup)
 
     def _build_ui(self) -> None:
         central = QWidget(self)

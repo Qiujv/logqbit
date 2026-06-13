@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from logqbit.plotter import _build_grids_rect, _is_lexsorted
+from logqbit.plotter import _build_grids_rect, _is_lexsorted, warmup_plotter_jit
 
 
 class TestIsLexsorted:
@@ -158,3 +158,7 @@ class TestBuildGridsRect:
         assert not np.isnan(y_final[1, 2])
         assert not np.isnan(y_final[2, 2])
         assert not np.isnan(y_final[3, 2])
+
+
+def test_warmup_plotter_jit() -> None:
+    warmup_plotter_jit()
