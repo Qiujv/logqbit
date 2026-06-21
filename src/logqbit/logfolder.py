@@ -106,8 +106,8 @@ class LogFolder:
     @classmethod
     def new(cls, parent_path: Path, title: str = "untitled") -> "LogFolder":
         """Create the next numeric log directory under ``parent_path``."""
-        # TODO: add locking or something.
         parent_path = Path(parent_path)
+        parent_path.mkdir(parents=True, exist_ok=True)
         max_index = max(
             (
                 int(entry.name)
@@ -117,10 +117,15 @@ class LogFolder:
             default=-1,
         )
         new_index = max_index + 1
-        while (parent_path / str(new_index)).exists():
-            new_index += 1
-        new_folder = parent_path / str(new_index)
-        return cls(new_folder, title=title, create=True)
+        while True:
+            new_folder = parent_path / str(new_index)
+            try:
+                new_folder.mkdir(exist_ok=False)
+            except FileExistsError:
+                new_index += 1
+                continue
+            break
+        return cls(new_folder, title=title, create=False)
 
     def add_row(self, **kwargs) -> None:
         """

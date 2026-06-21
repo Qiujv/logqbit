@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import gc
 from pathlib import Path
 import weakref
@@ -20,6 +21,22 @@ def test_new_creates_incremental_directory(tmp_path: Path) -> None:
 
     assert lf.path.parent == parent
     assert lf.path.name == "2"
+
+
+def test_new_reserves_unique_directory_names(tmp_path: Path) -> None:
+    parent = tmp_path / "logs"
+    parent.mkdir()
+    count = 20
+
+    def create_logfolder() -> str:
+        lf = LogFolder.new(parent)
+        return lf.path.name
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        names = list(executor.map(lambda _: create_logfolder(), range(count)))
+
+    assert len(set(names)) == count
+    assert sorted(map(int, names)) == list(range(count))
 
 
 def test_add_row_scalar_and_save(tmp_path: Path) -> None:
