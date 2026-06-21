@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+import os
+
 import pytest
+from PySide6.QtWidgets import QApplication
+
+
+@pytest.fixture(scope="session", autouse=True)
+def qt_application() -> QApplication:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 @pytest.fixture(autouse=True)

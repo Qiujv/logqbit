@@ -7,7 +7,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
-from logqbit.browser import (
+from logqbit.gui.browser import (
     COL_ID,
     COL_PLOT_AXES,
     COL_ROWS,
@@ -20,7 +20,7 @@ from logqbit.browser import (
     ensure_application,
     export_records,
 )
-from logqbit.detail_view import RecordDetailView, RecordDetailWindow, record_watch_paths
+from logqbit.gui.detail_view import RecordDetailView, RecordDetailWindow, record_watch_paths
 from logqbit.logfolder import LogFolder
 
 

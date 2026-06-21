@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from logqbit.browser import LogRecord
+from logqbit.gui.browser import LogRecord
 from logqbit.logfolder import LogFolder
 
 

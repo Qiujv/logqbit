@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import time
 from typing import Iterator
 
 import pandas as pd
 import pytest
 
-from logqbit.live_plotter import LIVE_PLOTTER_PIPE_NAME, LivePlotterClient
+from logqbit.gui.live_plotter import LIVE_PLOTTER_PIPE_NAME, LivePlotterClient
 
 
 def _wait_for_server(timeout: float = 10.0) -> None:
@@ -37,7 +36,7 @@ def live_plotter_process() -> Iterator[subprocess.Popen[str]]:
     env = os.environ.copy()
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-    process = subprocess.Popen(['logqbit-live-plotter'])
+    process = subprocess.Popen(["logqbit-live-plotter"], env=env)
 
     try:
         _wait_for_server()

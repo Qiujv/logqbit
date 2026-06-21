@@ -655,4 +655,9 @@ def main() -> None:
         sys.exit(app.exec())
 
 
-__all__ = ["LivePlotterWindow", "LivePlotterClient", "main"]
+__all__ = [
+    "LIVE_PLOTTER_PIPE_NAME",
+    "LivePlotterWindow",
+    "LivePlotterClient",
+    "main",
+]

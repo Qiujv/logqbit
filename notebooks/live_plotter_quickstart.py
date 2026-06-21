@@ -5,7 +5,7 @@ import time
 
 import pandas as pd
 
-from logqbit.live_plotter import LivePlotterClient
+from logqbit.gui.live_plotter import LivePlotterClient
 
 
 def main() -> None:

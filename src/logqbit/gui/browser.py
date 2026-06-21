@@ -53,8 +53,8 @@ try:  # pragma: no cover - fallback for direct execution
         RecordDetailWindow,
         record_watch_paths,
     )
-    from .logfolder import LogFolder
-    from .metadata import LogMetadata
+    from ..logfolder import LogFolder
+    from ..metadata import LogMetadata
     from .plotter import warmup_plotter_jit
 except ImportError:  # pragma: no cover - fallback for direct execution
     from detail_view import PandasTableModel  # type: ignore  # noqa: F401
@@ -63,8 +63,8 @@ except ImportError:  # pragma: no cover - fallback for direct execution
         RecordDetailWindow,
         record_watch_paths,
     )
-    from logfolder import LogFolder  # type: ignore  # noqa: F401
-    from metadata import LogMetadata  # type: ignore
+    from logqbit.logfolder import LogFolder  # type: ignore  # noqa: F401
+    from logqbit.metadata import LogMetadata  # type: ignore
     from plotter import warmup_plotter_jit  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -949,7 +949,7 @@ class LogBrowserWindow(QMainWindow):
         """Launch a new browser window in a separate process."""
         try:
             subprocess.Popen(
-                [sys.executable, "-m", "logqbit.browser", str(directory)],
+                [sys.executable, "-m", "logqbit.gui.browser", str(directory)],
                 cwd=Path.cwd(),
                 start_new_session=True,  # Detach from parent process
             )

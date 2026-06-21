@@ -175,14 +175,14 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
             {
                 "name": "LogQbit Browser",
                 "target": gui_python,
-                "arguments": "-m logqbit.browser",
+                "arguments": "-m logqbit.gui.browser",
                 "icon": str(browser_ico),
                 "output": output_dir / "LogQbit Browser.lnk"
             },
             {
                 "name": "LogQbit Live Plotter",
                 "target": gui_python,
-                "arguments": "-m logqbit.live_plotter",
+                "arguments": "-m logqbit.gui.live_plotter",
                 "icon": str(plotter_ico),
                 "output": output_dir / "LogQbit Live Plotter.lnk"
             }
@@ -352,7 +352,7 @@ def create_example_data() -> int:
         print("\nLaunching browser...")
 
         # Launch browser directly
-        from logqbit.browser import main as browser_main
+        from logqbit.gui.browser import main as browser_main
         return browser_main([str(example_dir)])
         
     except ImportError as exc:
@@ -425,7 +425,7 @@ def main() -> int:
         return copy_template(args.template, args.output)
     
     elif args.command == "browser":
-        from logqbit.browser import main as browser_main
+        from logqbit.gui.browser import main as browser_main
         directory = str(args.directory) if args.directory else None
         browser_args = [directory] if directory else []
         return browser_main(browser_args)

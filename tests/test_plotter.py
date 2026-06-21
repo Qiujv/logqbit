@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from logqbit.plotter import _build_grids_rect, _is_lexsorted, warmup_plotter_jit
+from logqbit.gui.plotter import _build_grids_rect, _is_lexsorted, warmup_plotter_jit
 
 
 class TestIsLexsorted:

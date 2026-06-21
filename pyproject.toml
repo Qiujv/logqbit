@@ -25,8 +25,8 @@ Homepage = "https://github.com/Qiujv/logqbit"
 logqbit = "logqbit.cli:main"
 
 [project.gui-scripts]
-logqbit-live-plotter = "logqbit.live_plotter:main"
-logqbit-browser = "logqbit.browser:main"
+logqbit-live-plotter = "logqbit.gui.live_plotter:main"
+logqbit-browser = "logqbit.gui.browser:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
