@@ -1,10 +1,7 @@
+import atexit
 import inspect
 import itertools
 import os
-import threading
-import uuid
-import time
-import warnings
 import weakref
 from collections.abc import Callable
 from functools import cached_property
@@ -16,10 +13,22 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 from typing_extensions import deprecated
 
+from .dataframe import DataFrameBuffer
 from .metadata import LogMetadata
 from .registry import Registry, get_parser
 
 yaml = get_parser()
+
+
+_ACTIVE_LOGFOLDERS: weakref.WeakSet["LogFolder"] = weakref.WeakSet()
+
+
+def _close_active_logfolders() -> None:
+    for logfolder in list(_ACTIVE_LOGFOLDERS):
+        LogFolder._close_quietly(logfolder)
+
+
+atexit.register(_close_active_logfolders)
 
 
 class LogFolder:
@@ -50,8 +59,29 @@ class LogFolder:
         # File created anyway.
         self.meta = LogMetadata(path / "metadata.json", title, create=True)
         # File create on setting values.
-        self._handler = _DataHandler(path / "data.feather")
-        weakref.finalize(self, self._handler.stop)
+        self._handler = DataFrameBuffer(path / "data.feather")
+        self._finalizer = weakref.finalize(self, self._close_handler_quietly, self._handler)
+        _ACTIVE_LOGFOLDERS.add(self)
+
+    def __enter__(self) -> "LogFolder":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    @staticmethod
+    def _close_handler_quietly(handler: DataFrameBuffer) -> None:
+        try:
+            handler.close()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _close_quietly(logfolder: "LogFolder") -> None:
+        try:
+            logfolder.close()
+        except Exception:
+            pass
 
     @cached_property
     def reg(self) -> Registry:
@@ -168,109 +198,8 @@ class LogFolder:
         """Flash the pending data immediately, block until done."""
         self._handler.flush()
 
-
-class _DataHandler:
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self._segs: list[pd.DataFrame] = []
-        if self.path.exists():
-            self._segs.append(pd.read_feather(self.path))
-        self._records: list[dict[str, float | int | str]] = []
-
-        self._should_stop = False
-        self._skip_debounce = threading.Event()
-        self._dirty = threading.Event()
-        self._flush_complete = threading.Event()
-        self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def get_df(self, _clear: bool = False) -> pd.DataFrame:
-        with self._lock:
-            if self._records:
-                self._segs.append(pd.DataFrame.from_records(self._records))
-                self._records = []
-
-            if len(self._segs) == 0:
-                df = pd.DataFrame({})
-            elif len(self._segs) == 1:
-                df = self._segs[0]
-            else:
-                df = pd.concat(self._segs)
-                self._segs = [df]
-
-            if _clear:
-                self._dirty.clear()
-        return df
-
-    def add_one_row(self, kwargs: dict[str, float | int | str]):
-        with self._lock:
-            self._records.append(kwargs)
-            if not self._dirty.is_set():
-                self._dirty.set()
-
-    def add_multi_rows(self, df: pd.DataFrame):
-        with self._lock:
-            if self._records:
-                self._segs.append(pd.DataFrame.from_records(self._records))
-                self._records = []
-            self._segs.append(df)
-            if not self._dirty.is_set():
-                self._dirty.set()
-
-    def _run(self):
-        save_delay_secs = 0.2
-        max_retries = 3
-        retry_delay = 0.1
-
-        while not self._should_stop:
-            self._dirty.wait()
-            if self._should_stop:
-                break
-            if self._skip_debounce.wait(save_delay_secs):
-                self._skip_debounce.clear()
-            df = self.get_df(_clear=True)
-            tmp = self.path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
-            df.to_feather(tmp)
-
-            for attempt in range(max_retries):
-                try:
-                    tmp.replace(self.path)
-                    break
-                except PermissionError:
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
-                    else:
-                        warnings.warn(
-                            f"Failed to replace {self.path} after {max_retries} attempts"
-                        )
-                        raise
-
-            self._flush_complete.set()
-
-            if df.shape[0] < 1000:
-                save_delay_secs = 0.1
-            elif df.shape[0] < 10000:
-                save_delay_secs = 0.2
-            elif df.shape[0] < 100000:
-                save_delay_secs = 0.5
-            else:
-                save_delay_secs = 1.0
-
-    def stop(self):
-        try:
-            self._should_stop = True
-            self._skip_debounce.set()  # Process all pending data.
-            self._dirty.set()  # Just break the run loop.
-            if self._thread.is_alive():
-                self._thread.join(timeout=2)
-        except Exception:
-            pass
-
-    def flush(self, timeout: float | None = 5.0):
-        """Flush the pending data immediately, block until done."""
-        self._flush_complete.clear()
-        if self._dirty.is_set():
-            self._skip_debounce.set()
-            self._flush_complete.wait(timeout=timeout)
+    def close(self) -> None:
+        """Flush pending data and stop the background autosave thread."""
+        self._handler.close()
+        self._finalizer.detach()
+        _ACTIVE_LOGFOLDERS.discard(self)

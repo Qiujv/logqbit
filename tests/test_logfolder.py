@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 from pathlib import Path
+import weakref
 
 import pandas as pd
 import pytest
@@ -72,3 +74,37 @@ def test_logfolder_index_persists_updates(tmp_path: Path) -> None:
 def test_load_raises_for_missing_directory(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         LogFolder(tmp_path / "nonexistent", create=False)
+
+
+def test_context_manager_closes_and_flushes(tmp_path: Path) -> None:
+    with LogFolder.new(tmp_path) as lf:
+        path = lf.df_path
+        lf.add_row(x=1)
+
+    saved_df = pd.read_feather(path)
+    pd.testing.assert_frame_equal(saved_df.reset_index(drop=True), pd.DataFrame([{"x": 1}]))
+
+
+def test_close_is_idempotent(tmp_path: Path) -> None:
+    lf = LogFolder.new(tmp_path)
+    lf.add_row(x=1)
+
+    lf.close()
+    lf.close()
+
+    saved_df = pd.read_feather(lf.df_path)
+    pd.testing.assert_frame_equal(saved_df.reset_index(drop=True), pd.DataFrame([{"x": 1}]))
+
+
+def test_finalize_flushes_when_logfolder_is_collected(tmp_path: Path) -> None:
+    lf = LogFolder.new(tmp_path)
+    path = lf.df_path
+    lf.add_row(x=1)
+    ref = weakref.ref(lf)
+
+    del lf
+    gc.collect()
+
+    assert ref() is None
+    saved_df = pd.read_feather(path)
+    pd.testing.assert_frame_equal(saved_df.reset_index(drop=True), pd.DataFrame([{"x": 1}]))

@@ -4,6 +4,7 @@ dynamic = ["version"]
 description = "Simple data logger and live plotter for lab-scale experiments."
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [{ name = "Qiujv", email = "qiujv@outlook.com" }]
 dependencies = [
     "numba>=0.65.0",
     "numpy>=2.3.3",
@@ -26,11 +27,6 @@ logqbit = "logqbit.cli:main"
 [project.gui-scripts]
 logqbit-live-plotter = "logqbit.live_plotter:main"
 logqbit-browser = "logqbit.browser:main"
-
-[project.optional-dependencies]
-labrad = [
-    "pylabrad>=0.98.3",
-]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -55,4 +51,9 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "ruff>=0.15.12",
+]
+
+[project.optional-dependencies]
+labrad = [
+    "pylabrad>=0.98.3",
 ]
