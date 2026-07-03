@@ -5,7 +5,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QPushButton
 
 from logqbit.gui.browser import (
     COL_ID,
@@ -20,7 +22,12 @@ from logqbit.gui.browser import (
     ensure_application,
     export_records,
 )
-from logqbit.gui.detail_view import RecordDetailView, RecordDetailWindow, record_watch_paths
+from logqbit.gui.detail_view import (
+    TAB_PLOT,
+    RecordDetailView,
+    RecordDetailWindow,
+    record_watch_paths,
+)
 from logqbit.logfolder import LogFolder
 
 
@@ -482,6 +489,50 @@ class TestPandasTableModel:
 
 
 class TestRecordDetailWidgets:
+    def test_image_tab_copies_original_image(self, sample_logfolder: Path) -> None:
+        app = ensure_application()
+        record = LogRecord.scan_directory(sample_logfolder)[0]
+        image_path = record.path / "copy-test.png"
+        source = QPixmap(13, 7)
+        source.fill(QColor("red"))
+        assert source.save(str(image_path))
+
+        view = RecordDetailView()
+        view.load_record(record)
+        image_tab = view.tab_widget.widget(view._image_tab_indices[0])
+        assert image_tab is not None
+        copy_button = image_tab.findChild(QPushButton)
+        assert copy_button is not None
+
+        app.clipboard().clear()
+        copy_button.click()
+        copied = app.clipboard().pixmap()
+        assert copied.size() == source.size()
+
+    def test_plot_tab_copies_current_view(self, sample_logfolder: Path) -> None:
+        app = ensure_application()
+        record = LogRecord.scan_directory(sample_logfolder)[0]
+        view = RecordDetailView()
+        view.resize(600, 400)
+        view.load_record(record)
+        view.set_current_tab(TAB_PLOT)
+        view.show()
+        app.processEvents()
+        try:
+            app.clipboard().clear()
+            view.plot_manager.copy_plot_button.click()
+            copied = app.clipboard().pixmap()
+            assert not copied.isNull()
+            image = copied.toImage()
+            first_pixel = image.pixel(0, 0)
+            assert any(
+                image.pixel(x, y) != first_pixel
+                for y in range(image.height())
+                for x in range(image.width())
+            )
+        finally:
+            view.close()
+
     def test_detail_header_separates_id_and_selectable_wrapped_path(
         self, sample_logfolder: Path
     ) -> None:

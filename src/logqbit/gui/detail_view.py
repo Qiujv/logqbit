@@ -15,6 +15,7 @@ import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QFileSystemWatcher, QModelIndex, Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QLabel,
     QListWidget,
@@ -110,6 +111,10 @@ class ScaledImageLabel(QLabel):
         self.setText("")
         self._update_scaled_pixmap()
         return True
+
+    def copy_image_to_clipboard(self) -> None:
+        if self._pixmap is not None and not self._pixmap.isNull():
+            QApplication.clipboard().setPixmap(self._pixmap)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override naming
         super().resizeEvent(event)
@@ -534,12 +539,26 @@ class RecordDetailView(QWidget):
     def _update_image_tabs(self, image_files: list[Path]) -> None:
         self._clear_image_tabs()
         for image_path in image_files:
-            widget = ScaledImageLabel()
-            widget.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            widget.setWordWrap(True)
-            widget.setToolTip(str(image_path))
-            widget.load_image(image_path)
-            index = self.tab_widget.addTab(widget, image_path.name)
+            image_tab = QWidget()
+            layout = QVBoxLayout(image_tab)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(4)
+
+            image_label = ScaledImageLabel()
+            image_label.setToolTip(str(image_path))
+            image_loaded = image_label.load_image(image_path)
+            layout.addWidget(image_label, stretch=1)
+
+            button_row = QHBoxLayout()
+            button_row.addStretch(1)
+            copy_button = QPushButton("Copy image")
+            copy_button.setEnabled(image_loaded)
+            copy_button.setToolTip("Copy the original image to the clipboard")
+            copy_button.clicked.connect(image_label.copy_image_to_clipboard)
+            button_row.addWidget(copy_button)
+            layout.addLayout(button_row)
+
+            index = self.tab_widget.addTab(image_tab, image_path.name)
             self._image_tab_indices.append(index)
 
     def _update_extra_files_tab(self, extra_files: list[Path]) -> None:

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
+from pyqtgraph.exporters import ImageExporter
 from numba import njit, prange
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor, QIcon
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -297,12 +299,26 @@ class PlotManager:
 
         layout.addWidget(self.plot_widget, stretch=1)
 
-        # Status label
+        # Status row
+        status_row = QHBoxLayout()
         self.plot_status_label = QLabel("No data to plot.")
         self.plot_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self.plot_status_label)
+        status_row.addWidget(self.plot_status_label)
+        status_row.addStretch(1)
+        self.copy_plot_button = QPushButton("Copy plot")
+        self.copy_plot_button.setToolTip("Copy the current plot view to the clipboard")
+        self.copy_plot_button.clicked.connect(self.copy_plot_to_clipboard)
+        status_row.addWidget(self.copy_plot_button)
+        layout.addLayout(status_row)
 
         return container
+
+    def copy_plot_to_clipboard(self) -> None:
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is None:
+            return
+        exporter = ImageExporter(plot_item)
+        exporter.export(copy=True)
 
     # ── record loading ────────────────────────────────────────────────────────
 
