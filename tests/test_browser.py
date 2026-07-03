@@ -482,6 +482,19 @@ class TestPandasTableModel:
 
 
 class TestRecordDetailWidgets:
+    def test_detail_header_separates_id_and_selectable_wrapped_path(
+        self, sample_logfolder: Path
+    ) -> None:
+        record = LogRecord.scan_directory(sample_logfolder)[0]
+        view = RecordDetailView()
+        view.load_record(record)
+
+        assert view.detail_id_label.text() == f"#{record.log_id}"
+        assert not (view.detail_id_label.textInteractionFlags() & Qt.TextSelectableByMouse)
+        assert view.detail_label.text() == str(record.path)
+        assert view.detail_label.textInteractionFlags() & Qt.TextSelectableByMouse
+        assert view.detail_label.wordWrap()
+
     def test_detail_view_shows_extra_files_tab(self, sample_logfolder: Path) -> None:
         app = ensure_application()
         record = LogRecord.scan_directory(sample_logfolder)[0]

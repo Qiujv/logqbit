@@ -427,7 +427,8 @@ class RecordDetailView(QWidget):
 
     def load_record(self, record: LogRecord) -> None:
         self._record = record
-        self.detail_label.setText(f"#{record.log_id} - {record.path}")
+        self.detail_id_label.setText(f"#{record.log_id}")
+        self.detail_label.setText(str(record.path))
         self.yaml_view.setPlainText(record.read_yaml_text())
         self.data_view_manager.show_data_table(record, preview_only=True)
         self._update_image_tabs(record.list_image_files())
@@ -443,6 +444,7 @@ class RecordDetailView(QWidget):
 
     def clear(self, message: str = "No log selected.") -> None:
         self._record = None
+        self.detail_id_label.setText("")
         self.detail_label.setText(message)
         self.yaml_view.setPlainText("")
         self.data_view_manager.set_empty("")
@@ -456,11 +458,13 @@ class RecordDetailView(QWidget):
         detail_layout.setSpacing(6)
 
         detail_top = QHBoxLayout()
+        self.detail_id_label = QLabel()
+        detail_top.addWidget(self.detail_id_label)
         self.detail_label = QLabel("No log selected.")
         self.detail_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.detail_label.setWordWrap(True)
         self.detail_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         detail_top.addWidget(self.detail_label)
-        detail_top.addStretch(1)
         self.watch_checkbox = QCheckBox("auto update")
         self.watch_checkbox.setChecked(True)
         self.watch_checkbox.setToolTip("Automatically refresh this detail view when files change")
