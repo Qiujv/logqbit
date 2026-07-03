@@ -499,7 +499,8 @@ class TestRecordDetailWidgets:
 
         view = RecordDetailView()
         view.load_record(record)
-        image_tab = view.tab_widget.widget(view._image_tab_indices[0])
+        tab_names = [view.tab_widget.tabText(i) for i in range(view.tab_widget.count())]
+        image_tab = view.tab_widget.widget(tab_names.index(image_path.name))
         assert image_tab is not None
         copy_button = image_tab.findChild(QPushButton)
         assert copy_button is not None
@@ -546,8 +547,9 @@ class TestRecordDetailWidgets:
         assert view.detail_label.textInteractionFlags() & Qt.TextSelectableByMouse
         assert view.detail_label.wordWrap()
 
-    def test_detail_view_shows_extra_files_tab(self, sample_logfolder: Path) -> None:
-        app = ensure_application()
+    def test_files_corner_menu_lists_and_opens_all_record_files(
+        self, sample_logfolder: Path
+    ) -> None:
         record = LogRecord.scan_directory(sample_logfolder)[0]
         extra_file = record.path / "notes.txt"
         extra_file.write_text("hello", encoding="utf-8")
@@ -555,22 +557,55 @@ class TestRecordDetailWidgets:
 
         view = RecordDetailView(file_open_callback=opened_paths.append)
         view.load_record(record)
-        view.show()
-        app.processEvents()
-        try:
-            tab_names = [view.tab_widget.tabText(i) for i in range(view.tab_widget.count())]
-            assert "Files" in tab_names
+        view._rebuild_files_menu()
 
-            files_index = tab_names.index("Files")
-            files_widget = view.tab_widget.widget(files_index)
-            assert files_widget is not None
-            assert files_widget.count() == 1
-            assert files_widget.item(0).text() == "notes.txt"
+        assert view.tab_widget.cornerWidget(Qt.TopRightCorner) is view.files_button
+        action_names = [action.text() for action in view.files_menu.actions()]
+        assert "data.feather" in action_names
+        assert "metadata.json" in action_names
+        assert "notes.txt" in action_names
+        assert action_names[-1] == "Show in Explorer"
 
-            files_widget.itemClicked.emit(files_widget.item(0))
-            assert opened_paths == [extra_file]
-        finally:
-            view.close()
+        next(
+            action for action in view.files_menu.actions() if action.text() == "notes.txt"
+        ).trigger()
+        assert opened_paths == [extra_file]
+
+    def test_show_in_explorer_uses_current_record_folder(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        record = LogRecord.scan_directory(sample_logfolder)[0]
+        opened_paths: list[Path] = []
+        monkeypatch.setattr(
+            "logqbit.gui.detail_view._open_path_in_explorer",
+            lambda path, parent=None: opened_paths.append(path),
+        )
+        view = RecordDetailView()
+        view.load_record(record)
+        view._rebuild_files_menu()
+
+        view.files_menu.actions()[-1].trigger()
+        assert opened_paths == [record.path]
+
+    def test_switching_to_record_without_images_removes_image_tabs(
+        self, sample_logfolder: Path
+    ) -> None:
+        record_with_image = LogRecord.scan_directory(sample_logfolder)[0]
+        image_path = record_with_image.path / "old-image.png"
+        image = QPixmap(8, 8)
+        image.fill(QColor("blue"))
+        assert image.save(str(image_path))
+
+        empty_path = sample_logfolder / "999"
+        empty_path.mkdir()
+        record_without_image = LogRecord(log_id=999, path=empty_path)
+
+        view = RecordDetailView()
+        view.load_record(record_with_image)
+        assert view.tab_widget.count() == TAB_PLOT + 2
+
+        view.load_record(record_without_image)
+        assert view.tab_widget.count() == TAB_PLOT + 1
 
     def test_detail_window_watch_toggle_controls_watcher(
         self, sample_logfolder: Path

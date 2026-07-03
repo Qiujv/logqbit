@@ -12,14 +12,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pandas as pd
-from PySide6.QtCore import QAbstractTableModel, QFileSystemWatcher, QModelIndex, Qt, QTimer
-from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QFileSystemWatcher,
+    QModelIndex,
+    Qt,
+    QTimer,
+    QUrl,
+)
+from PySide6.QtGui import QAction, QDesktopServices, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMenu,
     QPlainTextEdit,
@@ -27,6 +32,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableView,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QHBoxLayout,
     QHeaderView,
@@ -78,11 +84,18 @@ def record_watch_paths(record: LogRecord) -> list[str]:
 def _open_path_in_explorer(path: Path, parent: QWidget | None = None) -> None:
     try:
         if sys.platform.startswith("win"):
-            subprocess.run(["explorer", "/select,", str(path)], check=False)
+            command = ["explorer", str(path)]
+            if path.is_file():
+                command = ["explorer", "/select,", str(path)]
+            subprocess.run(command, check=False)
         elif sys.platform == "darwin":
-            subprocess.run(["open", "-R", str(path)], check=False)
+            command = ["open", str(path)]
+            if path.is_file():
+                command = ["open", "-R", str(path)]
+            subprocess.run(command, check=False)
         else:
-            subprocess.run(["xdg-open", str(path.parent)], check=False)
+            target = path if path.is_dir() else path.parent
+            subprocess.run(["xdg-open", str(target)], check=False)
     except Exception as exc:  # pragma: no cover - defensive
         logger.error("Failed to open explorer for %s: %s", path, exc)
         if parent is not None:
@@ -395,8 +408,6 @@ class RecordDetailView(QWidget):
         self._file_open_callback = file_open_callback
         self._watch_toggled_callback = watch_toggled_callback
         self._enable_tab_shortcuts = enable_tab_shortcuts
-        self._image_tab_indices: list[int] = []
-        self._extra_files_tab_index: int | None = None
         self._shortcuts: list[QAction] = []
 
         self._build_ui()
@@ -437,7 +448,7 @@ class RecordDetailView(QWidget):
         self.yaml_view.setPlainText(record.read_yaml_text())
         self.data_view_manager.show_data_table(record, preview_only=True)
         self._update_image_tabs(record.list_image_files())
-        self._update_extra_files_tab(record.list_other_files())
+        self.files_button.setEnabled(True)
         defer_plot = self.tab_widget.currentIndex() != TAB_PLOT
         self.plot_manager.update_plot_and_controls(record, defer_plot=defer_plot)
 
@@ -453,8 +464,9 @@ class RecordDetailView(QWidget):
         self.detail_label.setText(message)
         self.yaml_view.setPlainText("")
         self.data_view_manager.set_empty("")
-        self._clear_image_tabs()
-        self._update_extra_files_tab([])
+        self._clear_dynamic_tabs()
+        self.files_button.setEnabled(False)
+        self.files_menu.clear()
         self.plot_manager.reset_plot_state("")
 
     def _build_ui(self) -> None:
@@ -478,6 +490,15 @@ class RecordDetailView(QWidget):
         detail_layout.addLayout(detail_top)
 
         self.tab_widget = QTabWidget(self)
+
+        self.files_button = QToolButton(self.tab_widget)
+        self.files_button.setText("Files...")
+        self.files_button.setPopupMode(QToolButton.InstantPopup)
+        self.files_button.setEnabled(False)
+        self.files_menu = QMenu(self.files_button)
+        self.files_menu.aboutToShow.connect(self._rebuild_files_menu)
+        self.files_button.setMenu(self.files_menu)
+        self.tab_widget.setCornerWidget(self.files_button, Qt.TopRightCorner)
 
         self.yaml_view = QPlainTextEdit()
         self.yaml_view.setReadOnly(True)
@@ -529,15 +550,12 @@ class RecordDetailView(QWidget):
         if self._watch_toggled_callback:
             self._watch_toggled_callback(enabled)
 
-    def _clear_image_tabs(self) -> None:
-        if not self._image_tab_indices:
-            return
-        for index in sorted(self._image_tab_indices, reverse=True):
+    def _clear_dynamic_tabs(self) -> None:
+        for index in range(self.tab_widget.count() - 1, TAB_PLOT, -1):
             self.tab_widget.removeTab(index)
-        self._image_tab_indices.clear()
 
     def _update_image_tabs(self, image_files: list[Path]) -> None:
-        self._clear_image_tabs()
+        self._clear_dynamic_tabs()
         for image_path in image_files:
             image_tab = QWidget()
             layout = QVBoxLayout(image_tab)
@@ -558,36 +576,51 @@ class RecordDetailView(QWidget):
             button_row.addWidget(copy_button)
             layout.addLayout(button_row)
 
-            index = self.tab_widget.addTab(image_tab, image_path.name)
-            self._image_tab_indices.append(index)
+            self.tab_widget.addTab(image_tab, image_path.name)
 
-    def _update_extra_files_tab(self, extra_files: list[Path]) -> None:
-        if self._extra_files_tab_index is not None:
-            self.tab_widget.removeTab(self._extra_files_tab_index)
-            self._extra_files_tab_index = None
-
-        if not extra_files:
+    def _rebuild_files_menu(self) -> None:
+        self.files_menu.clear()
+        record = self._record
+        if record is None:
             return
 
-        file_list = QListWidget(self.tab_widget)
-        for file_path in extra_files:
-            item = QListWidgetItem(file_path.name)
-            item.setData(Qt.UserRole, file_path)
-            item.setToolTip(str(file_path))
-            file_list.addItem(item)
+        try:
+            file_paths = sorted(
+                (path for path in record.path.iterdir() if path.is_file()),
+                key=lambda path: path.name.casefold(),
+            )
+        except OSError:
+            file_paths = []
 
-        file_list.itemClicked.connect(self._open_extra_file_item)
-        file_list.itemActivated.connect(self._open_extra_file_item)
-        self._extra_files_tab_index = self.tab_widget.addTab(file_list, "Files")
+        if not file_paths:
+            empty_action = self.files_menu.addAction("(No files)")
+            empty_action.setEnabled(False)
 
-    def _open_extra_file_item(self, item: QListWidgetItem) -> None:
-        path = item.data(Qt.UserRole)
-        if not isinstance(path, Path):
-            return
+        for path in file_paths:
+            action = self.files_menu.addAction(path.name)
+            action.setToolTip(str(path))
+            action.triggered.connect(
+                lambda _checked=False, file_path=path: self._open_file(file_path)
+            )
+
+        self.files_menu.addSeparator()
+        show_action = self.files_menu.addAction("Show in Explorer")
+        show_action.triggered.connect(self._show_record_in_explorer)
+
+    def _open_file(self, path: Path) -> None:
         if self._file_open_callback:
             self._file_open_callback(path)
             return
-        _open_path_in_explorer(path, parent=self)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            QMessageBox.warning(
+                self,
+                "Open File",
+                f"No application is available to open {path.name}.",
+            )
+
+    def _show_record_in_explorer(self) -> None:
+        if self._record is not None:
+            _open_path_in_explorer(self._record.path, parent=self)
 
 
 class RecordDetailWindow(QMainWindow):
