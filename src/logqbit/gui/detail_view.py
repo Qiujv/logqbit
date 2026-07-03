@@ -20,7 +20,15 @@ from PySide6.QtCore import (
     QTimer,
     QUrl,
 )
-from PySide6.QtGui import QAction, QDesktopServices, QFont, QIcon, QKeySequence, QPixmap
+from PySide6.QtGui import (
+    QAction,
+    QDesktopServices,
+    QFont,
+    QFontDatabase,
+    QIcon,
+    QKeySequence,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -227,11 +235,8 @@ class DataViewManager:
         self,
         parent: QWidget | None = None,
         load_more_callback: Callable[[], None] | None = None,
-        plot_axes_changed_callback: Callable[[LogRecord], None] | None = None,
     ):
         self._load_more_callback = load_more_callback
-        self._plot_axes_changed_callback = plot_axes_changed_callback
-        self._current_record: LogRecord | None = None
         self.widget = self._create_widget(parent)
 
     def _create_widget(self, parent: QWidget | None = None) -> QWidget:
@@ -250,8 +255,6 @@ class DataViewManager:
         self.data_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         row_height = self.data_table.fontMetrics().height() + 6
         self.data_table.verticalHeader().setDefaultSectionSize(row_height)
-        self.data_table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.data_table.customContextMenuRequested.connect(self._open_context_menu)
         data_layout.addWidget(self.data_table)
 
         controls = QHBoxLayout()
@@ -277,7 +280,6 @@ class DataViewManager:
         self.data_load_button.setEnabled(False)
 
     def show_data_table(self, record: LogRecord, preview_only: bool) -> None:
-        self._current_record = record
         dataframe = record.load_dataframe()
         if dataframe is None:
             message = (
@@ -315,56 +317,6 @@ class DataViewManager:
             self.data_status_label.setText(f"Showing all {displayed_rows} rows.")
             self.data_load_button.setEnabled(False)
 
-    def _open_context_menu(self, point) -> None:
-        record = self._current_record
-        model = self.data_table.model()
-        if record is None or model is None:
-            return
-
-        index = self.data_table.indexAt(point)
-        column = (
-            index.column()
-            if index.isValid()
-            else self.data_table.horizontalHeader().logicalIndexAt(point.x())
-        )
-        if column < 0:
-            return
-
-        column_name = str(model.headerData(column, Qt.Horizontal))
-        if not column_name:
-            return
-
-        menu = QMenu(self.data_table)
-        is_tracked = column_name in record.meta.plot_axes
-        toggle_action = menu.addAction("Toggle Plot Axes")
-        toggle_action.setCheckable(True)
-        toggle_action.setChecked(is_tracked)
-
-        chosen = menu.exec(self.data_table.viewport().mapToGlobal(point))
-        if chosen == toggle_action:
-            self._toggle_plot_axes(record, column_name, not is_tracked)
-
-    def _toggle_plot_axes(
-        self, record: LogRecord, column_name: str, enable: bool
-    ) -> None:
-        column_name = str(column_name)
-        if not column_name:
-            return
-
-        updated = list(record.meta.plot_axes)
-        if enable:
-            if column_name in updated:
-                return
-            updated.append(column_name)
-        else:
-            if column_name not in updated:
-                return
-            updated = [item for item in updated if item != column_name]
-
-        record.meta.plot_axes = updated
-        if self._plot_axes_changed_callback:
-            self._plot_axes_changed_callback(record)
-
     def load_more_data(self, record: LogRecord) -> None:
         model = self.data_table.model()
         if not isinstance(model, PandasTableModel):
@@ -397,14 +349,12 @@ class RecordDetailView(QWidget):
     def __init__(
         self,
         parent: QWidget | None = None,
-        record_changed_callback: Callable[[LogRecord], None] | None = None,
         file_open_callback: Callable[[Path], None] | None = None,
         watch_toggled_callback: Callable[[bool], None] | None = None,
         enable_tab_shortcuts: bool = True,
     ) -> None:
         super().__init__(parent)
         self._record: LogRecord | None = None
-        self._record_changed_callback = record_changed_callback
         self._file_open_callback = file_open_callback
         self._watch_toggled_callback = watch_toggled_callback
         self._enable_tab_shortcuts = enable_tab_shortcuts
@@ -502,12 +452,14 @@ class RecordDetailView(QWidget):
 
         self.yaml_view = QPlainTextEdit()
         self.yaml_view.setReadOnly(True)
+        self.yaml_view.setFont(
+            QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        )
         self.tab_widget.addTab(self.yaml_view, "Const.")
 
         self.data_view_manager = DataViewManager(
             parent=self,
             load_more_callback=self._on_load_more,
-            plot_axes_changed_callback=self._on_plot_axes_changed,
         )
         self.tab_widget.addTab(self.data_view_manager.widget, "Data")
 
@@ -540,11 +492,6 @@ class RecordDetailView(QWidget):
     def _on_load_more(self) -> None:
         if self._record:
             self.data_view_manager.load_more_data(self._record)
-
-    def _on_plot_axes_changed(self, record: LogRecord) -> None:
-        if self._record_changed_callback:
-            self._record_changed_callback(record)
-        self.load_record(record)
 
     def _on_watch_toggled(self, enabled: bool) -> None:
         if self._watch_toggled_callback:

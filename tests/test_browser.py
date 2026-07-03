@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QFontDatabase, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QPushButton
 
@@ -546,6 +546,17 @@ class TestRecordDetailWidgets:
         assert view.detail_label.text() == str(record.path)
         assert view.detail_label.textInteractionFlags() & Qt.TextSelectableByMouse
         assert view.detail_label.wordWrap()
+
+    def test_const_view_uses_system_fixed_font(self) -> None:
+        view = RecordDetailView()
+        expected = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+
+        assert view.yaml_view.font().family() == expected.family()
+
+    def test_data_table_has_no_custom_context_menu(self) -> None:
+        view = RecordDetailView()
+
+        assert view.data_view_manager.data_table.contextMenuPolicy() == Qt.DefaultContextMenu
 
     def test_files_corner_menu_lists_and_opens_all_record_files(
         self, sample_logfolder: Path

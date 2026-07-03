@@ -698,7 +698,6 @@ class LogBrowserWindow(QMainWindow):
     def _create_detail_panel(self, parent: QWidget) -> QWidget:
         self.detail_view = RecordDetailView(
             parent=parent,
-            record_changed_callback=self._update_ui_for_record,
             watch_toggled_callback=self._on_detail_watch_toggled,
             enable_tab_shortcuts=False,
         )
