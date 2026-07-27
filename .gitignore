@@ -1,5 +1,6 @@
 logqbit_example/
 AGENTS.md
+src/logqbit/assets/*.ico
 
 # Python-generated files
 __pycache__/

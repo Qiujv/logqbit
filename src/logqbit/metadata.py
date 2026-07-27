@@ -83,6 +83,7 @@ class LogMetadata:
     def reload(self):
         if self._snap.changed():
             self.root = self.load()
+            self._snap.refresh()
 
     def load(self, path: str | Path | None = None) -> dict:
         path = self.path if path is None else path

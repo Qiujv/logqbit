@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from ruamel.yaml.representer import RepresenterError
 
 from logqbit.registry import Registry
 
@@ -151,3 +152,96 @@ def test_create_false_raises(tmp_path):
     path = tmp_path / "missing.yaml"
     with pytest.raises(FileNotFoundError):
         Registry(path, create=False)
+
+
+def test_failed_set_recovers_on_next_synchronized_operation(temp_yaml):
+    class Unsupported:
+        pass
+
+    reg = Registry(temp_yaml)
+    original_parser = reg._yaml.parser
+
+    with pytest.raises(RepresenterError):
+        reg["invalid"] = Unsupported()
+
+    assert "_parser" not in reg._yaml.__dict__
+    assert isinstance(reg.get_local("invalid"), Unsupported)
+    assert not reg.undo()
+    assert not list(temp_yaml.parent.glob(f"{temp_yaml.stem}*.tmp"))
+
+    reg["valid"] = 1
+    assert reg._yaml.parser is not original_parser
+    assert Registry(temp_yaml)["valid"] == 1
+    with pytest.raises(KeyError):
+        Registry(temp_yaml)["invalid"]
+
+
+def test_reload_discards_dirty_local_changes(temp_yaml):
+    reg = Registry(temp_yaml)
+    reg.set_local("local_only", "temp")
+
+    assert reg.get_local("local_only") == "temp"
+
+    reg.reload()
+
+    with pytest.raises(KeyError):
+        reg.get_local("local_only")
+    assert not reg._root_dirty
+
+
+def test_primary_save_clears_root_dirty(temp_yaml):
+    reg = Registry(temp_yaml)
+    reg.set_local("local_only", "saved")
+
+    reg.save()
+
+    assert not reg._root_dirty
+    reg.reload()
+    assert reg.get_local("local_only") == "saved"
+
+
+def test_save_to_other_path_keeps_primary_root_dirty(temp_yaml, tmp_path):
+    reg = Registry(temp_yaml)
+    reg.set_local("local_only", "exported")
+
+    export_path = tmp_path / "export.yaml"
+    reg.save(export_path)
+
+    assert reg._root_dirty
+    assert Registry(export_path)["local_only"] == "exported"
+
+    reg.reload()
+    with pytest.raises(KeyError):
+        reg.get_local("local_only")
+
+
+def test_failed_print_local_does_not_poison_yaml(temp_yaml):
+    class Unsupported:
+        pass
+
+    reg = Registry(temp_yaml)
+    original_parser = reg._yaml.parser
+    reg.set_local("invalid", Unsupported())
+
+    with pytest.raises(RepresenterError):
+        reg.print_local()
+
+    assert "_parser" not in reg._yaml.__dict__
+    reg.reload()
+    reg["valid"] = 1
+    assert reg._yaml.parser is not original_parser
+    assert Registry(temp_yaml)["valid"] == 1
+
+
+def test_failed_load_does_not_poison_yaml(temp_yaml):
+    reg = Registry(temp_yaml)
+    original_parser = reg._yaml.parser
+    temp_yaml.write_text("invalid: [", encoding="utf-8")
+
+    with pytest.raises(Exception):
+        reg.load()
+
+    assert "_parser" not in reg._yaml.__dict__
+    temp_yaml.write_text("valid: 1\n", encoding="utf-8")
+    assert reg.load()["valid"] == 1
+    assert reg._yaml.parser is not original_parser

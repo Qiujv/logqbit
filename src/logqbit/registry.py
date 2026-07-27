@@ -6,6 +6,8 @@ import tempfile
 import warnings
 from collections import deque
 from collections.abc import Mapping, Sequence, Set
+from contextlib import suppress
+from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,17 +31,16 @@ class FileSnap:
 
     def __init__(self, path: Path):
         self.path = Path(path)
+        self.refresh()
+
+    def refresh(self):
         st = self.path.stat()
         self.mtime = st.st_mtime
         self.size = st.st_size
 
     def changed(self) -> bool:
         st = self.path.stat()
-        if (st.st_mtime, st.st_size) != (self.mtime, self.size):
-            self.mtime = st.st_mtime
-            self.size = st.st_size
-            return True
-        return False
+        return (st.st_mtime, st.st_size) != (self.mtime, self.size)
 
 
 class Registry:
@@ -67,14 +68,15 @@ class Registry:
         if path.exists():
             pass
         elif create:
-            path.touch()  # TODO: delay the file creation on first save.
+            path.touch()
         else:
             raise FileNotFoundError(f"Registry file at '{path}' does not exist.")
 
         self.path = path
-        self.yaml = get_parser()
+        self._yaml = _RecoverableYAML()
         self.root: CommentedMap = self.load()
         self._snap = FileSnap(self.path)
+        self._root_dirty: bool = False
 
         self._undo_stack: deque[CommentedMap] = deque(maxlen=history_size)
         self._redo_stack: deque[CommentedMap] = deque(maxlen=history_size)
@@ -108,6 +110,7 @@ class Registry:
 
     def set_local(self, key: str, value, create_parents: bool = True):
         obj = self.root
+        self._root_dirty = True
         keys = key.split("/")
         for k in keys[:-1]:
             if not (k in obj and isinstance(obj[k], Mapping)):
@@ -120,14 +123,13 @@ class Registry:
 
     def print_local(self):
         """Print the local content to stdout."""
-        self.yaml.dump(self.root, sys.stdout)
+        self._yaml.dump(self.root, sys.stdout)
 
     def reload(self):
-        """Reloads the file if it has changed since the last load."""
-        if self._snap.changed():
+        if self._root_dirty or self._snap.changed():
             self.root = self.load()
-            self._undo_stack.clear()
-            self._redo_stack.clear()
+            self._snap.refresh()
+            self._root_dirty = False
 
     def load(self, path: str | Path | None = None) -> CommentedMap:
         # NOTE: `yaml.load` also returns `CommentedSeq`, `float`, `str`, `None`
@@ -135,7 +137,7 @@ class Registry:
         # only `CommentedMap` is legal for the use case of this class.
         path = self.path if path is None else Path(path)
         with open(path, "r", encoding="utf-8") as f:
-            root = self.yaml.load(f)
+            root = self._yaml.load(f)
         if root is None:
             root = CommentedMap()
             root.fa.set_block_style()
@@ -144,24 +146,24 @@ class Registry:
     def save(self, path: str | Path | None = None, *, record_history: bool = True):
         path = self.path if path is None else Path(path)
         is_primary_path = path == self.path
-        if record_history and is_primary_path:
-            self._undo_stack.append(self.load(path))
-            self._redo_stack.clear()
+        previous = self.load(path) if record_history and is_primary_path else None
+
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.stem, suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            self.yaml.dump(self.root, f)
-        Path(tmp).replace(path)
+        tmp_path = Path(tmp)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                self._yaml.dump(self.root, f)
+            tmp_path.replace(path)
+        finally:
+            with suppress(OSError):
+                tmp_path.unlink()
+
         if is_primary_path:
-            self._snap = FileSnap(self.path)
-
-    @deprecated("For backward compatibility only.")
-    def copy(self) -> dict:
-        self.reload()
-        return _to_builtins(self.root)
-
-    @deprecated("For backward compatibility only.")
-    def cwd(self) -> str:
-        return self["data_folder"]
+            self._snap.refresh()
+            self._root_dirty = False
+        if previous is not None:
+            self._undo_stack.append(previous)
+            self._redo_stack.clear()
 
     def undo(self) -> bool:
         if not self._undo_stack:
@@ -178,6 +180,40 @@ class Registry:
         self.root = self._redo_stack.pop()
         self.save(record_history=False)
         return True
+
+    @deprecated("For backward compatibility only.")
+    def copy(self) -> dict:
+        self.reload()
+        return _to_builtins(self.root)
+
+    @deprecated("For backward compatibility only.")
+    def cwd(self) -> str:
+        return self["data_folder"]
+
+
+class _RecoverableYAML:
+    """Reuse a YAML parser until a load or dump failure invalidates it."""
+
+    @cached_property
+    def parser(self) -> YAML:
+        return get_parser()
+
+    def _invalidate(self) -> None:
+        self.__dict__.pop("parser", None)
+
+    def load(self, stream):
+        try:
+            return self.parser.load(stream)
+        except BaseException:
+            self._invalidate()
+            raise
+
+    def dump(self, data, stream):
+        try:
+            return self.parser.dump(data, stream)
+        except BaseException:
+            self._invalidate()
+            raise
 
 
 def get_parser() -> YAML:
