@@ -126,7 +126,7 @@ class LogRecord:
             logger.error("Failed to read feather file %s: %s", self.data_path, exc)
             return None
 
-    def read_const_text(self) -> str:
+    def read_yaml_text(self) -> str:
         if not self.const_path.exists():
             return "const.yaml not found."
         try:

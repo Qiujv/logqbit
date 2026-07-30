@@ -18,14 +18,11 @@ LogQbit 是一个面向实验室场景的轻量数据记录工具包，适合记
 pip install logqbit
 ```
 
-如果你不想让安装过程修改当前 Python 环境，可以跳过依赖解析：
+如果还需要 GUI：
 
 ```bash
-pip install --no-deps logqbit
+pip install "logqbit[gui]"
 ```
-
-通常 `logqbit.logfolder.LogFolder`、`logqbit.registry.Registry` 等核心接口仍然可用；
-但浏览器、实时绘图和快捷方式等 GUI 功能仍然依赖 `PySide6`、`pyqtgraph` 等组件。
 
 更详细的安装说明见：https://qiujv.github.io/logqbit/install/
 

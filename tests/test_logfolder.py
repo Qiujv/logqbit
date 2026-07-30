@@ -65,6 +65,15 @@ def test_add_row_vector_creates_dataframe(tmp_path: Path) -> None:
     pd.testing.assert_frame_equal(lf.df.reset_index(drop=True), expected_df)
 
 
+def test_add_df_appends_dataframe(tmp_path: Path) -> None:
+    lf = LogFolder.new(tmp_path)
+    expected_df = pd.DataFrame({"step": [0, 1], "current": [0.1, 0.2]})
+
+    lf.add_df(expected_df)
+
+    pd.testing.assert_frame_equal(lf.df.reset_index(drop=True), expected_df)
+
+
 def test_add_meta_covers_existing_meta(tmp_path: Path) -> None:
     lf = LogFolder.new(tmp_path)
 

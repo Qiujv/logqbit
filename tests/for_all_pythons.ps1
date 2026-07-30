@@ -29,8 +29,8 @@ foreach ($v in $Versions) {
 
     try {
         uv venv --python $v $venvDir
-        uv sync --frozen --python $v
-        uv run --python $v pytest
+        uv sync --frozen --python $v --extra gui
+        uv run --python $v --extra gui pytest
         Write-Host "Python $v 通过 ✅" -ForegroundColor Green
     }
     catch {

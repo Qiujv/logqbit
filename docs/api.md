@@ -56,6 +56,14 @@ log.add_row(
 
 多行写入会交给 pandas 检查列长度是否一致。
 
+也可以直接追加一个已有 dataframe：
+
+```python
+import pandas as pd
+
+log.add_df(pd.DataFrame({"x": [3.0, 4.0], "y": [2.4, 2.8]}))
+```
+
 ### 读取和保存
 
 ```python

@@ -183,7 +183,7 @@ def test_failed_set_recovers_on_next_synchronized_operation(temp_yaml):
 
 def test_reload_discards_dirty_local_changes(temp_yaml):
     reg = Registry(temp_yaml)
-    reg.set_local("local_only", "temp")
+    reg.root["local_only"] = "temp"
 
     assert reg.get_local("local_only") == "temp"
 

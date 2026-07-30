@@ -85,7 +85,7 @@ class DataFrameBuffer:
         if len(self._segs) == 1:
             return self._segs[0]
 
-        df = pd.concat(self._segs)
+        df = pd.concat(self._segs, ignore_index=True)
         self._segs = [df]
         return df
 

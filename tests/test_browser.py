@@ -22,6 +22,7 @@ from logqbit.gui.browser import (
     COL_TITLE,
     LogBrowserWindow,
     LogListTableModel,
+    SORT_ROLE,
     SettingsManager,
     ensure_application,
 )
@@ -125,7 +126,7 @@ class TestLogRecord:
         records = scan_catalog(sample_logfolder)
         record = records[0]
         
-        yaml_text = record.read_const_text()
+        yaml_text = record.read_yaml_text()
         
         assert isinstance(yaml_text, str)
         assert len(yaml_text) > 0
@@ -140,7 +141,7 @@ class TestLogRecord:
         records = scan_catalog(tmp_path)
         record = records[0]
         
-        yaml_text = record.read_const_text()
+        yaml_text = record.read_yaml_text()
         assert "const.yaml not found" in yaml_text
     
     def test_list_image_files(self, tmp_path: Path) -> None:
@@ -297,14 +298,15 @@ class TestLogListTableModel:
     
     def test_data_display_rows(self, sample_records: list[LogRecord]) -> None:
         """Test displaying row count."""
+        record = LogRecord(sample_records[0].path, row_count=1_234)
         model = LogListTableModel()
-        model.set_records(sample_records)
-        
+        model.set_records([record])
+
         index = model.index(0, COL_ROWS)
         data = model.data(index, Qt.DisplayRole)
-        
-        assert isinstance(data, int)
-        assert data >= 0
+
+        assert data == "1,234"
+        assert model.data(index, SORT_ROLE) == 1_234
     
     def test_data_display_plot_axes(self, sample_logfolder: Path) -> None:
         """Test displaying plot axes with abbreviations."""
@@ -316,7 +318,7 @@ class TestLogListTableModel:
         data = model.data(index, Qt.DisplayRole)
         
         # Should show first 3 characters of each axis
-        assert data == "2, x, y"  # "x" + "y"
+        assert data == "2,x,y"  # "x" + "y"
     
     def test_data_tooltip_plot_axes(self, sample_logfolder: Path) -> None:
         """Test tooltip showing full plot axes names."""

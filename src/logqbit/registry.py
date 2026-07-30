@@ -80,12 +80,22 @@ class Registry:
 
         self.path = path
         self._yaml = _RecoverableYAML()
-        self.root: CommentedMap = self.load()
+        self._root: CommentedMap = self.load()
         self._snap = FileSnap(self.path)
         self._root_dirty: bool = False
 
         self._undo_stack: deque[CommentedMap] = deque(maxlen=history_size)
         self._redo_stack: deque[CommentedMap] = deque(maxlen=history_size)
+
+    @property
+    def root(self) -> CommentedMap:
+        self._root_dirty = True
+        return self._root
+
+    @root.setter
+    def root(self, value: CommentedMap):
+        self._root = value
+        self._root_dirty = True
 
     def __getitem__(self, key: str):
         return self.get(key)
@@ -103,7 +113,7 @@ class Registry:
         self.save()
 
     def get_local(self, key: str, default=_sentinel):
-        obj = self.root
+        obj = self._root
         keys = key.split("/")
         for k in keys:
             try:
@@ -116,7 +126,6 @@ class Registry:
 
     def set_local(self, key: str, value, create_parents: bool = True):
         obj = self.root
-        self._root_dirty = True
         keys = key.split("/")
         for k in keys[:-1]:
             if not (k in obj and isinstance(obj[k], Mapping)):
@@ -129,11 +138,11 @@ class Registry:
 
     def print_local(self):
         """Print the local content to stdout."""
-        self._yaml.dump(self.root, sys.stdout)
+        self._yaml.dump(self._root, sys.stdout)
 
     def reload(self):
         if self._root_dirty or self._snap.changed():
-            self.root = self.load()
+            self._root = self.load()
             self._snap.refresh()
             self._root_dirty = False
 
@@ -158,7 +167,7 @@ class Registry:
         tmp_path = Path(tmp)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                self._yaml.dump(self.root, f)
+                self._yaml.dump(self._root, f)
             tmp_path.replace(path)
         finally:
             with suppress(OSError):
@@ -174,7 +183,7 @@ class Registry:
     def undo(self) -> bool:
         if not self._undo_stack:
             return False
-        self._redo_stack.append(copy.deepcopy(self.root))
+        self._redo_stack.append(copy.deepcopy(self._root))
         self.root = self._undo_stack.pop()
         self.save(record_history=False)
         return True
@@ -182,7 +191,7 @@ class Registry:
     def redo(self) -> bool:
         if not self._redo_stack:
             return False
-        self._undo_stack.append(copy.deepcopy(self.root))
+        self._undo_stack.append(copy.deepcopy(self._root))
         self.root = self._redo_stack.pop()
         self.save(record_history=False)
         return True
@@ -190,7 +199,7 @@ class Registry:
     @deprecated("For backward compatibility only.")
     def copy(self) -> dict:
         self.reload()
-        return _to_builtins(self.root)
+        return _to_builtins(self._root)
 
     @deprecated("For backward compatibility only.")
     def cwd(self) -> str:

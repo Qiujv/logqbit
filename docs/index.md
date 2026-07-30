@@ -40,7 +40,13 @@ df = pd.read_feather("./runs/0/data.feather")
 ## 浏览和辅助文件
 
 LogQbit 的主要图形界面是 LogBrowser，用来浏览一组实验记录、查看数据表、检查常量和元数据，
-并打开绘图视图：
+并打开绘图视图。使用前请安装 GUI extra：
+
+```bash
+uv pip install "logqbit[gui]"
+```
+
+安装后可以运行：
 
 ```bash
 logqbit-browser ./runs

@@ -2,6 +2,12 @@
 
 ## 图形界面命令
 
+以下命令需要先安装 GUI extra：
+
+```bash
+uv pip install "logqbit[gui]"
+```
+
 启动 LogBrowser，浏览一组 `LogFolder` 记录。
 
 ```bash

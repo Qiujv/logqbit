@@ -56,11 +56,11 @@ class LogFolder:
             raise FileNotFoundError(f"LogFolder at '{path}' does not exist.")
 
         self.path = path
-        # File created anyway.
         self.meta = LogMetadata(path / "metadata.json", title, create=True)
-        # File create on setting values.
         self._handler = DataFrameBuffer(path / "data.feather")
-        self._finalizer = weakref.finalize(self, self._close_handler_quietly, self._handler)
+        self._finalizer = weakref.finalize(
+            self, self._close_handler_quietly, self._handler
+        )
         _ACTIVE_LOGFOLDERS.add(self)
 
     def __enter__(self) -> "LogFolder":
@@ -85,7 +85,6 @@ class LogFolder:
 
     @cached_property
     def reg(self) -> Registry:
-        # File create on setting values.
         return Registry(self.path / "const.yaml", create=True)
 
     @property
@@ -142,6 +141,10 @@ class LogFolder:
             self._handler.add_multi_rows(pd.DataFrame(kwargs))
         else:
             self._handler.add_one_row(kwargs)
+
+    def add_df(self, df: pd.DataFrame) -> None:
+        """Append all rows from an existing dataframe."""
+        self._handler.add_multi_rows(df)
 
     def capture(
         self,

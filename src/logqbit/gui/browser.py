@@ -62,6 +62,7 @@ COL_ROWS = 2
 COL_PLOT_AXES = 3
 COL_CREATE_TIME = 4
 COL_CREATE_MACHINE = 5
+SORT_ROLE = Qt.UserRole + 1
 
 SETTINGS_ORG = "LogQbit"
 SETTINGS_APP = "LogBrowser"
@@ -175,7 +176,7 @@ class LogListTableModel(QAbstractTableModel):
                 parts.append(title_text)
                 return " ".join(parts)
             elif col == COL_ROWS:
-                return record.row_count
+                return f"{record.row_count:,}"
             elif col == COL_CREATE_TIME:
                 return record.create_time
             elif col == COL_CREATE_MACHINE:
@@ -183,9 +184,7 @@ class LogListTableModel(QAbstractTableModel):
             elif col == COL_PLOT_AXES:
                 if record.plot_axes:
                     n_axes = len(record.plot_axes)
-                    return f"{n_axes}, " + ", ".join(
-                        [item[:3] for item in record.plot_axes]
-                    )
+                    return ",".join([str(n_axes)] + [i[:3] for i in record.plot_axes])
                 else:
                     return ""
 
@@ -216,6 +215,11 @@ class LogListTableModel(QAbstractTableModel):
         # User data - store record reference
         elif role == Qt.UserRole and col == COL_ID:
             return record
+
+        elif role == SORT_ROLE:
+            if col == COL_ROWS:
+                return record.row_count
+            return self.data(index, Qt.DisplayRole)
 
         return None
 
@@ -496,7 +500,7 @@ class LogBrowserWindow(QMainWindow):
 
         proxy = QSortFilterProxyModel(parent)
         proxy.setSourceModel(model)
-        proxy.setSortRole(Qt.DisplayRole)
+        proxy.setSortRole(SORT_ROLE)
 
         table = QTableView(parent)
         table.setModel(proxy)

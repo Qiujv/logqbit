@@ -321,10 +321,7 @@ def create_example_data() -> int:
         t_arr = np.linspace(0, 100, N1d)
         signal_arr = np.sin(2 * np.pi * 0.5 * t_arr) * np.exp(-t_arr / 50) + np.random.default_rng(42).normal(0, 0.05, N1d)
         df1d = pd.DataFrame({"t": t_arr, "signal": signal_arr})
-        import pyarrow.feather as feather
-        import pyarrow as pa
-        log3_feather = log3_path / "data.feather"
-        feather.write_feather(pa.Table.from_pandas(df1d, preserve_index=False), log3_feather)
+        df1d.to_feather(log3_path / "data.feather")
         log3.const["description"] = "Damped sine, 1 million points"
         log3.const["points"] = N1d
         log3.flush()
@@ -342,8 +339,7 @@ def create_example_data() -> int:
         rng = np.random.default_rng(7)
         z_arr = np.sin(4 * np.pi * x_arr) * np.cos(4 * np.pi * y_arr) + rng.normal(0, 0.05, nx2d * ny2d)
         df2d = pd.DataFrame({"x": x_arr, "y": y_arr, "z": z_arr})
-        log4_feather = log4_path / "data.feather"
-        feather.write_feather(pa.Table.from_pandas(df2d, preserve_index=False), log4_feather)
+        df2d.to_feather(log4_path / "data.feather")
         log4.const["description"] = "sin(4πx)cos(4πy) + noise, 1000×1000 grid"
         log4.const["points"] = nx2d * ny2d
         log4.flush()

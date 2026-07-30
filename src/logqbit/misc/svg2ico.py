@@ -1,7 +1,7 @@
 """SVG to ICO converter using PySide6.
 
-This script converts SVG files to multi-resolution ICO files without requiring
-external dependencies beyond PySide6 (which is already a dependency of logqbit).
+This script converts SVG files to multi-resolution ICO files using PySide6
+from LogQbit's optional ``gui`` dependencies.
 
 The ICO file will contain 7 resolutions: 16x16, 24x24, 32x32, 48x48, 64x64, 128x128, 256x256.
 

@@ -449,7 +449,7 @@ class RecordDetailView(QWidget):
         self._record = record
         self.detail_id_label.setText(f"#{record.log_id}")
         self.detail_label.setText(str(record.path))
-        self.yaml_view.setPlainText(record.read_const_text())
+        self.yaml_view.setPlainText(record.read_yaml_text())
         self.data_view_manager.show_data_table(
             record,
             dataframe,
