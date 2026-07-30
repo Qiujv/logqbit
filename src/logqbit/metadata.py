@@ -1,20 +1,32 @@
 from __future__ import annotations
+
 import json
+import logging
 import os
 import socket
 import tempfile
+from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Generic, TypeVar, overload
-from collections.abc import Callable
 
-try:
-    from .registry import FileSnap
-except ImportError:
-    from registry import FileSnap  # type: ignore
-
+from .registry import FileSnap
 
 _T = TypeVar("_T")
+logger = logging.getLogger(__name__)
+
+
+def _default_root(title: str) -> dict[str, object]:
+    return {
+        "title": title,
+        "star": 0,
+        "trash": False,
+        "plot_axes": [],
+        "plot_fields": [],
+        "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "create_machine": socket.gethostname(),
+    }
 
 
 class _MetaField(Generic[_T]):
@@ -50,59 +62,102 @@ class LogMetadata:
     title = _MetaField("title", "untitled", str)
     star = _MetaField("star", 0, int)
     trash = _MetaField("trash", False, bool)
-    plot_axes = _MetaField("plot_axes", [], lambda v: [str(i) for i in v])
-    plot_fields = _MetaField("plot_fields", [], lambda v: [str(i) for i in v])
+    plot_axes = _MetaField(
+        "plot_axes",
+        (),
+        lambda v: (v,) if isinstance(v, str) else tuple(str(i) for i in v),
+    )
+    plot_fields = _MetaField(
+        "plot_fields",
+        (),
+        lambda v: (v,) if isinstance(v, str) else tuple(str(i) for i in v),
+    )
     create_time = _MetaField("create_time", "", str)
     create_machine = _MetaField("create_machine", "", str)
 
-    def __init__(self, path: str | Path, title: str = "untitled", create: bool = True):
+    def __init__(
+        self,
+        path: str | Path,
+        title: str = "untitled",
+        create: bool = True,
+        *,
+        default_on_error: bool = False,
+    ):
         path = Path(path)
         if path.exists():
             pass
         elif create:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "title": title,
-                        "star": 0,
-                        "trash": False,
-                        "plot_axes": [],
-                        "plot_fields": [],
-                        "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "create_machine": socket.gethostname(),
-                    },
-                    f,
-                )
+                json.dump(_default_root(title), f)
         else:
             raise FileNotFoundError(f"Metadata file at '{path}' does not exist.")
 
         self.path = path
-        self.root: dict = self.load()
+        self._default_on_error = default_on_error
+        self.root = self._load()
         self._snap = FileSnap(self.path)
 
     def reload(self):
         if self._snap.changed():
-            self.root = self.load()
+            self.root = self._load()
             self._snap.refresh()
 
-    def load(self, path: str | Path | None = None) -> dict:
-        path = self.path if path is None else path
-        with open(self.path, "r", encoding="utf-8") as f:
-            root = json.load(f)
-        return root
+    def _load(self) -> dict:
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                root = json.load(f)
+            if not isinstance(root, dict):
+                raise ValueError(
+                    f"Metadata root in '{self.path}' must be a JSON object."
+                )
+            return root
+        except (OSError, UnicodeError, ValueError) as exc:
+            if not self._default_on_error:
+                raise
+            logger.warning("Failed to load metadata file %s: %s", self.path, exc)
+            return _default_root("<invalid metadata>")
 
     def save(self, path: str | Path | None = None) -> None:
         path = self.path if path is None else Path(path)
+
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.stem, suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(self.root, f)
-        Path(tmp).replace(path)
+        tmp_path = Path(tmp)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self.root, f)
+            tmp_path.replace(path)
+        finally:
+            with suppress(OSError):
+                tmp_path.unlink()
+
+        if path == self.path:
+            self._snap.refresh()
+
+    def update(
+        self,
+        values: Mapping[str, object] | None = None,
+        /,
+        **changes: object,
+    ) -> None:
+        """Atomically persist one metadata update."""
+        pending = dict(values or {})
+        pending.update(changes)
+        if not pending:
+            self.reload()
+            return
+
+        for key, value in pending.items():
+            descriptor = getattr(type(self), key, None)
+            if isinstance(descriptor, _MetaField):
+                pending[key] = descriptor.cast(value)
+
+        self.reload()
+        self.root.update(pending)
+        self.save()
 
     def __getitem__(self, key: str):
         self.reload()
         return self.root[key]
 
     def __setitem__(self, key: str, value):
-        self.reload()
-        self.root[key] = value
-        self.save()
+        self.update({key: value})

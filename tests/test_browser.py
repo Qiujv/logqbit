@@ -9,7 +9,12 @@ from PySide6.QtGui import QColor, QFontDatabase, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QPushButton
 
-from logqbit.gui import log_catalog as log_catalog_module
+from logqbit import catalog as catalog_module
+from logqbit.catalog import (
+    LogCatalog,
+    LogRecord,
+    export_records,
+)
 from logqbit.gui.browser import (
     COL_ID,
     COL_PLOT_AXES,
@@ -17,18 +22,21 @@ from logqbit.gui.browser import (
     COL_TITLE,
     LogBrowserWindow,
     LogListTableModel,
-    PandasTableModel,
     SettingsManager,
     ensure_application,
 )
 from logqbit.gui.detail_view import (
     TAB_PLOT,
+    PandasTableModel,
     RecordDetailView,
     RecordDetailWindow,
     record_watch_paths,
 )
-from logqbit.gui.log_catalog import LogRecord, export_records
 from logqbit.logfolder import LogFolder
+
+
+def scan_catalog(directory: Path) -> list[LogRecord]:
+    return LogCatalog(directory).refresh()
 
 
 @pytest.fixture
@@ -69,20 +77,20 @@ def sample_records(tmp_path: Path) -> list[LogRecord]:
     lf2.meta.trash = True
     
     # Scan directory to get records
-    records = LogRecord.scan_directory(tmp_path)
+    records = scan_catalog(tmp_path)
     return records
 
 
 class TestLogRecord:
     """Tests for LogRecord class."""
     
-    def test_scan_directory_finds_logs(self, tmp_path: Path) -> None:
+    def test_scan_catalog_finds_logs(self, tmp_path: Path) -> None:
         """Test scanning a directory for log records."""
         # Create multiple log folders
         LogFolder.new(tmp_path, title="log1").flush()
         LogFolder.new(tmp_path, title="log2").flush()
         
-        records = LogRecord.scan_directory(tmp_path)
+        records = scan_catalog(tmp_path)
         
         assert len(records) == 2
         assert all(isinstance(r, LogRecord) for r in records)
@@ -90,44 +98,34 @@ class TestLogRecord:
     
     def test_scan_empty_directory(self, tmp_path: Path) -> None:
         """Test scanning an empty directory."""
-        records = LogRecord.scan_directory(tmp_path)
+        records = scan_catalog(tmp_path)
         assert records == []
     
     def test_scan_nonexistent_directory(self, tmp_path: Path) -> None:
         """Test scanning a directory that doesn't exist."""
-        records = LogRecord.scan_directory(tmp_path / "nonexistent")
+        records = scan_catalog(tmp_path / "nonexistent")
         assert records == []
     
-    def test_load_dataframe(self, sample_logfolder: Path) -> None:
-        """Test loading dataframe from a log record."""
-        records = LogRecord.scan_directory(sample_logfolder)
+    def test_entry_reads_dataframe(self, sample_logfolder: Path) -> None:
+        """Test loading dataframe through the passive entry."""
+        records = scan_catalog(sample_logfolder)
         assert len(records) == 1
         
         record = records[0]
-        df = record.load_dataframe()
+        df = record.read_dataframe()
         
         assert df is not None
         assert len(df) == 3
         assert list(df.columns) == ["x", "y", "z"]
         assert record.row_count == 3
-        assert record.columns == ["x", "y", "z"]
-    
-    def test_load_dataframe_caches_result(self, sample_logfolder: Path) -> None:
-        """Test that loading dataframe caches the result."""
-        records = LogRecord.scan_directory(sample_logfolder)
-        record = records[0]
-        
-        df1 = record.load_dataframe()
-        df2 = record.load_dataframe()
-        
-        assert df1 is df2  # Should be the same object
+        assert record.columns == ("x", "y", "z")
     
     def test_read_yaml_text(self, sample_logfolder: Path) -> None:
         """Test reading YAML text from a log record."""
-        records = LogRecord.scan_directory(sample_logfolder)
+        records = scan_catalog(sample_logfolder)
         record = records[0]
         
-        yaml_text = record.read_yaml_text()
+        yaml_text = record.read_const_text()
         
         assert isinstance(yaml_text, str)
         assert len(yaml_text) > 0
@@ -139,10 +137,10 @@ class TestLogRecord:
         lf.df_path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame({"x": [1]}).to_feather(lf.df_path)
         
-        records = LogRecord.scan_directory(tmp_path)
+        records = scan_catalog(tmp_path)
         record = records[0]
         
-        yaml_text = record.read_yaml_text()
+        yaml_text = record.read_const_text()
         assert "const.yaml not found" in yaml_text
     
     def test_list_image_files(self, tmp_path: Path) -> None:
@@ -155,7 +153,7 @@ class TestLogRecord:
         (lf.path / "result.jpg").touch()
         (lf.path / "data.txt").touch()  # Not an image
         
-        records = LogRecord.scan_directory(tmp_path)
+        records = scan_catalog(tmp_path)
         record = records[0]
         
         images = record.list_image_files()
@@ -165,7 +163,7 @@ class TestLogRecord:
 
     def test_list_other_files(self, sample_logfolder: Path) -> None:
         """Test listing non-standard files in a log folder."""
-        records = LogRecord.scan_directory(sample_logfolder)
+        records = scan_catalog(sample_logfolder)
         record = records[0]
 
         extra_text = record.path / "notes.txt"
@@ -181,7 +179,7 @@ class TestLogRecord:
 
     def test_record_watch_paths_include_extra_files(self, sample_logfolder: Path) -> None:
         """Test watch path helper tracks record files beyond the standard trio."""
-        records = LogRecord.scan_directory(sample_logfolder)
+        records = scan_catalog(sample_logfolder)
         record = records[0]
 
         extra_file = record.path / "notes.txt"
@@ -190,7 +188,7 @@ class TestLogRecord:
         watch_paths = set(record_watch_paths(record))
 
         assert str(record.path) in watch_paths
-        assert str(record.meta.path) in watch_paths
+        assert str(record.meta_path) in watch_paths
         assert str(extra_file) in watch_paths
 
     def test_export_records_copies_selected_logs_in_id_order(self, tmp_path: Path) -> None:
@@ -208,15 +206,18 @@ class TestLogRecord:
         (high.path / "snapshot.bin").write_bytes(b"abc")
         (high.path / "import_from").write_text("preserve-me", encoding="utf-8")
 
-        records = LogRecord.scan_directory(source_parent)
-        record_by_title = {record.meta.title: record for record in records}
+        records = scan_catalog(source_parent)
+        record_by_title = {record.title: record for record in records}
 
         destination_parent = tmp_path / "exported"
         destination_parent.mkdir()
         (destination_parent / "0").mkdir()
 
         exported_paths = export_records(
-            [record_by_title["high"], record_by_title["low"]],
+            [
+                record_by_title["high"],
+                record_by_title["low"],
+            ],
             destination_parent,
         )
 
@@ -226,8 +227,8 @@ class TestLogRecord:
         assert (exported_paths[0] / "import_from").read_text(encoding="utf-8") == str(record_by_title["low"].path)
         assert (exported_paths[1] / "import_from").read_text(encoding="utf-8") == "preserve-me"
 
-        exported_records = LogRecord.scan_directory(destination_parent)
-        exported_titles = {record.log_id: record.meta.title for record in exported_records}
+        exported_records = scan_catalog(destination_parent)
+        exported_titles = {record.log_id: record.title for record in exported_records}
         assert exported_titles[1] == "low"
         assert exported_titles[2] == "high"
 
@@ -307,7 +308,7 @@ class TestLogListTableModel:
     
     def test_data_display_plot_axes(self, sample_logfolder: Path) -> None:
         """Test displaying plot axes with abbreviations."""
-        records = LogRecord.scan_directory(sample_logfolder)
+        records = scan_catalog(sample_logfolder)
         model = LogListTableModel()
         model.set_records(records)
         
@@ -319,7 +320,7 @@ class TestLogListTableModel:
     
     def test_data_tooltip_plot_axes(self, sample_logfolder: Path) -> None:
         """Test tooltip showing full plot axes names."""
-        records = LogRecord.scan_directory(sample_logfolder)
+        records = scan_catalog(sample_logfolder)
         model = LogListTableModel()
         model.set_records(records)
         
@@ -356,8 +357,7 @@ class TestLogListTableModel:
         model.set_records(sample_records)
 
         record = sample_records[0]
-        record.meta.title = "updated_title"
-        record.refresh_metadata(force=True)
+        record.meta.update(title="updated_title")
 
         model.notify_record_changed(record)
         
@@ -492,7 +492,7 @@ class TestPandasTableModel:
 class TestRecordDetailWidgets:
     def test_image_tab_copies_original_image(self, sample_logfolder: Path) -> None:
         app = ensure_application()
-        record = LogRecord.scan_directory(sample_logfolder)[0]
+        record = scan_catalog(sample_logfolder)[0]
         image_path = record.path / "copy-test.png"
         source = QPixmap(13, 7)
         source.fill(QColor("red"))
@@ -513,7 +513,7 @@ class TestRecordDetailWidgets:
 
     def test_plot_tab_copies_current_view(self, sample_logfolder: Path) -> None:
         app = ensure_application()
-        record = LogRecord.scan_directory(sample_logfolder)[0]
+        record = scan_catalog(sample_logfolder)[0]
         view = RecordDetailView()
         view.resize(600, 400)
         view.load_record(record)
@@ -538,7 +538,7 @@ class TestRecordDetailWidgets:
     def test_detail_header_separates_id_and_selectable_wrapped_path(
         self, sample_logfolder: Path
     ) -> None:
-        record = LogRecord.scan_directory(sample_logfolder)[0]
+        record = scan_catalog(sample_logfolder)[0]
         view = RecordDetailView()
         view.load_record(record)
 
@@ -551,15 +551,15 @@ class TestRecordDetailWidgets:
     def test_detail_refresh_keeps_dataframe_when_only_other_files_change(
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        record = LogRecord.scan_directory(sample_logfolder)[0]
+        record = scan_catalog(sample_logfolder)[0]
         view = RecordDetailView()
         view.load_record(record)
-        dataframe = record.data_frame
+        dataframe = view._data_cache.dataframe
         assert dataframe is not None
 
         (record.path / "notes.txt").write_text("updated", encoding="utf-8")
         read_count = 0
-        original_read_feather = log_catalog_module.pd.read_feather
+        original_read_feather = catalog_module.pd.read_feather
 
         def count_read_feather(*args, **kwargs):
             nonlocal read_count
@@ -567,12 +567,12 @@ class TestRecordDetailWidgets:
             return original_read_feather(*args, **kwargs)
 
         monkeypatch.setattr(
-            log_catalog_module.pd, "read_feather", count_read_feather
+            catalog_module.pd, "read_feather", count_read_feather
         )
 
         view.refresh_current_record()
 
-        assert record.data_frame is dataframe
+        assert view._data_cache.dataframe is dataframe
         assert read_count == 0
 
     def test_const_view_uses_system_fixed_font(self) -> None:
@@ -589,7 +589,7 @@ class TestRecordDetailWidgets:
     def test_files_corner_menu_lists_and_opens_all_record_files(
         self, sample_logfolder: Path
     ) -> None:
-        record = LogRecord.scan_directory(sample_logfolder)[0]
+        record = scan_catalog(sample_logfolder)[0]
         extra_file = record.path / "notes.txt"
         extra_file.write_text("hello", encoding="utf-8")
         opened_paths: list[Path] = []
@@ -613,7 +613,7 @@ class TestRecordDetailWidgets:
     def test_show_in_explorer_uses_current_record_folder(
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        record = LogRecord.scan_directory(sample_logfolder)[0]
+        record = scan_catalog(sample_logfolder)[0]
         opened_paths: list[Path] = []
         monkeypatch.setattr(
             "logqbit.gui.detail_view._open_path_in_explorer",
@@ -629,15 +629,19 @@ class TestRecordDetailWidgets:
     def test_switching_to_record_without_images_removes_image_tabs(
         self, sample_logfolder: Path
     ) -> None:
-        record_with_image = LogRecord.scan_directory(sample_logfolder)[0]
+        record_with_image = scan_catalog(sample_logfolder)[0]
         image_path = record_with_image.path / "old-image.png"
         image = QPixmap(8, 8)
         image.fill(QColor("blue"))
         assert image.save(str(image_path))
 
         empty_path = sample_logfolder / "999"
-        empty_path.mkdir()
-        record_without_image = LogRecord(log_id=999, path=empty_path)
+        LogFolder(empty_path).close()
+        record_without_image = next(
+            record
+            for record in scan_catalog(sample_logfolder)
+            if record.path == empty_path
+        )
 
         view = RecordDetailView()
         view.load_record(record_with_image)
@@ -650,7 +654,7 @@ class TestRecordDetailWidgets:
         self, sample_logfolder: Path
     ) -> None:
         app = ensure_application()
-        record = LogRecord.scan_directory(sample_logfolder)[0]
+        record = scan_catalog(sample_logfolder)[0]
         window = RecordDetailWindow(record)
         window.show()
         app.processEvents()
@@ -674,7 +678,7 @@ class TestRecordDetailWidgets:
     def test_detail_views_manage_watchers_independently(
         self, sample_logfolder: Path
     ) -> None:
-        record = LogRecord.scan_directory(sample_logfolder)[0]
+        record = scan_catalog(sample_logfolder)[0]
         first_view = RecordDetailView()
         second_view = RecordDetailView()
         try:
@@ -698,11 +702,35 @@ class TestRecordDetailWidgets:
             first_view.close()
             second_view.close()
 
+    def test_detail_views_own_independent_dataframe_caches(
+        self, sample_logfolder: Path
+    ) -> None:
+        record = scan_catalog(sample_logfolder)[0]
+        first_view = RecordDetailView()
+        second_view = RecordDetailView()
+        try:
+            first_view.load_record(record)
+            second_view.load_record(record)
+
+            first_frame = first_view._data_cache.dataframe
+            second_frame = second_view._data_cache.dataframe
+            assert first_frame is not None
+            assert second_frame is not None
+            assert first_frame is not second_frame
+
+            first_view.refresh_current_record(force=True)
+
+            assert first_view._data_cache.dataframe is not first_frame
+            assert second_view._data_cache.dataframe is second_frame
+        finally:
+            first_view.close()
+            second_view.close()
+
     def test_detail_window_has_file_watcher_and_tab_shortcuts(
         self, sample_logfolder: Path
     ) -> None:
         app = ensure_application()
-        record = LogRecord.scan_directory(sample_logfolder)[0]
+        record = scan_catalog(sample_logfolder)[0]
         extra_file = record.path / "notes.txt"
         extra_file.write_text("hello", encoding="utf-8")
 
@@ -714,7 +742,7 @@ class TestRecordDetailWidgets:
                 window.detail_view._detail_watcher.directories()
             )
             watched_files = set(window.detail_view._detail_watcher.files())
-            assert str(record.meta.path) in watched_files
+            assert str(record.meta_path) in watched_files
             assert str(extra_file) in watched_files
 
             window.detail_view.yaml_view.setFocus()
@@ -756,13 +784,13 @@ class TestRecordDetailWidgets:
         window = LogBrowserWindow(sample_logfolder)
         app.processEvents()
         try:
-            record = window._current_record
+            record = window._selected_record
             assert record is not None
-            dataframe = record.data_frame
+            dataframe = window.detail_view._data_cache.dataframe
             assert dataframe is not None
 
             read_count = 0
-            original_read_feather = log_catalog_module.pd.read_feather
+            original_read_feather = catalog_module.pd.read_feather
 
             def count_read_feather(*args, **kwargs):
                 nonlocal read_count
@@ -770,13 +798,13 @@ class TestRecordDetailWidgets:
                 return original_read_feather(*args, **kwargs)
 
             monkeypatch.setattr(
-                log_catalog_module.pd, "read_feather", count_read_feather
+                catalog_module.pd, "read_feather", count_read_feather
             )
 
             window.refresh_logs()
 
-            assert window._current_record is record
-            assert window._current_record.data_frame is dataframe
+            assert window._selected_record is record
+            assert window.detail_view._data_cache.dataframe is dataframe
             assert read_count == 0
         finally:
             window.close()
@@ -789,7 +817,7 @@ class TestRecordDetailWidgets:
         app.processEvents()
         try:
             read_count = 0
-            original_read_feather = log_catalog_module.pd.read_feather
+            original_read_feather = catalog_module.pd.read_feather
 
             def count_read_feather(*args, **kwargs):
                 nonlocal read_count
@@ -797,7 +825,7 @@ class TestRecordDetailWidgets:
                 return original_read_feather(*args, **kwargs)
 
             monkeypatch.setattr(
-                log_catalog_module.pd, "read_feather", count_read_feather
+                catalog_module.pd, "read_feather", count_read_feather
             )
 
             window._on_refresh_clicked()
@@ -806,24 +834,24 @@ class TestRecordDetailWidgets:
         finally:
             window.close()
 
-    def test_manual_refresh_defers_changed_current_summary_to_detail(
+    def test_manual_refresh_updates_catalog_summary_and_detail(
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         app = ensure_application()
         window = LogBrowserWindow(sample_logfolder)
         app.processEvents()
         try:
-            record = window._current_record
+            record = window._selected_record
             assert record is not None
-            assert record.data_path is not None
+            assert record.data_path.exists()
             pd.DataFrame({"x": range(10), "y": range(10)}).to_feather(
                 record.data_path
             )
 
             inspect_count = 0
             read_count = 0
-            original_open_file = log_catalog_module.pyarrow.ipc.open_file
-            original_read_feather = log_catalog_module.pd.read_feather
+            original_open_file = catalog_module.pyarrow.ipc.open_file
+            original_read_feather = catalog_module.pd.read_feather
 
             def count_open_file(*args, **kwargs):
                 nonlocal inspect_count
@@ -836,17 +864,19 @@ class TestRecordDetailWidgets:
                 return original_read_feather(*args, **kwargs)
 
             monkeypatch.setattr(
-                log_catalog_module.pyarrow.ipc, "open_file", count_open_file
+                catalog_module.pyarrow.ipc, "open_file", count_open_file
             )
             monkeypatch.setattr(
-                log_catalog_module.pd, "read_feather", count_read_feather
+                catalog_module.pd, "read_feather", count_read_feather
             )
 
             window._on_refresh_clicked()
 
-            assert inspect_count == 0
+            assert inspect_count == 1
             assert read_count == 1
-            assert record.row_count == 10
+            assert record.row_count == 3
+            assert window._selected_record is not None
+            assert window._selected_record.row_count == 10
         finally:
             window.close()
 

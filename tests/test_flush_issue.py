@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from logqbit.gui.browser import LogRecord
+from logqbit.catalog import LogCatalog
 from logqbit.logfolder import LogFolder
 
 
@@ -16,6 +16,6 @@ def sample_logfolder_lf(tmp_path: Path) -> LogFolder:
     return lf  # 返回 LogFolder 对象
 
 def test_load_dataframe_lf(sample_logfolder_lf: LogFolder):
-    records = LogRecord.scan_directory(sample_logfolder_lf.path.parent)
-    df = records[0].load_dataframe()
+    records = LogCatalog(sample_logfolder_lf.path.parent).refresh()
+    df = records[0].read_dataframe()
     assert df is not None  # ❌ 失败! df 是 None

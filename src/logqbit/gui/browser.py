@@ -10,6 +10,7 @@ import threading
 from collections.abc import Iterable
 from importlib.resources import files
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
     QAbstractTableModel,
@@ -43,22 +44,12 @@ from PySide6.QtWidgets import (
 )
 from send2trash import send2trash
 
-try:  # pragma: no cover - fallback for direct execution
-    from .detail_view import (
-        PandasTableModel,
-        RecordDetailView,
-        RecordDetailWindow,
-    )
-    from .log_catalog import LogCatalog, LogRecord, export_records
-    from .plotter import warmup_plotter_jit
-except ImportError:  # pragma: no cover - fallback for direct execution
-    from detail_view import PandasTableModel  # type: ignore  # noqa: F401
-    from detail_view import (  # type: ignore
-        RecordDetailView,
-        RecordDetailWindow,
-    )
-    from log_catalog import LogCatalog, LogRecord, export_records  # type: ignore
-    from plotter import warmup_plotter_jit  # type: ignore
+from ..catalog import LogCatalog, export_records
+from .detail_view import RecordDetailView, RecordDetailWindow
+from .plotter import warmup_plotter_jit
+
+if TYPE_CHECKING:
+    from ..catalog import LogRecord
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +141,7 @@ class LogListTableModel(QAbstractTableModel):
         )
         if row is None:
             return
+        self._records[row] = record
         self.dataChanged.emit(
             self.index(row, 0), self.index(row, self.columnCount() - 1)
         )
@@ -408,7 +400,7 @@ class LogBrowserWindow(QMainWindow):
 
         # State
         self._base_dir = Path(directory) if directory else Path.cwd()
-        self._current_record: LogRecord | None = None
+        self._selected_record: LogRecord | None = None
         self._show_trash = True
         self._shortcuts: list[QAction] = []
         self._list_refresh_pending = False
@@ -639,12 +631,9 @@ class LogBrowserWindow(QMainWindow):
         self._rebuild_directory_menu()
 
     def refresh_logs(self) -> None:
-        previous_record = self._current_record
+        previous_record = self._selected_record
         previous_path = previous_record.path if previous_record else None
-        all_records = self._catalog.refresh(
-            self._base_dir,
-            skip_data_inspection_for=previous_path,
-        )
+        all_records = self._catalog.refresh(self._base_dir)
 
         # Filter out trash if needed
         if self._show_trash:
@@ -657,7 +646,11 @@ class LogBrowserWindow(QMainWindow):
         row_count = self.table_proxy.rowCount()
         if row_count:
             selected_record = next(
-                (record for record in records if record.path == previous_path),
+                (
+                    record
+                    for record in records
+                    if record.path == previous_path
+                ),
                 None,
             )
             if selected_record is None:
@@ -674,7 +667,7 @@ class LogBrowserWindow(QMainWindow):
             finally:
                 selection_blocker.unblock()
 
-            self._current_record = selected_record
+            self._selected_record = selected_record
             if selected_record is not previous_record:
                 self._load_log(selected_record)
         else:
@@ -682,11 +675,11 @@ class LogBrowserWindow(QMainWindow):
                 self.detail_view.clear("No logs to display.")
             else:
                 self.detail_view.clear("No logs found.")
-            self._current_record = None
+            self._selected_record = None
             self.log_table.clearSelection()
 
     def refresh_current_log(self, *, force: bool = False) -> None:
-        if not self._current_record:
+        if not self._selected_record:
             return
         self.detail_view.refresh_current_record(force=force)
 
@@ -718,7 +711,7 @@ class LogBrowserWindow(QMainWindow):
         record = self.table_model.get_record(source_index.row())
         if record is None:
             return
-        self._current_record = record
+        self._selected_record = record
         self._load_log(record)
 
     def _load_log(self, record: LogRecord) -> None:
@@ -728,13 +721,17 @@ class LogBrowserWindow(QMainWindow):
         self.detail_view.clear()
 
     def _on_detail_record_refreshed(self, record: LogRecord) -> None:
-        if self._current_record is record:
+        if (
+            self._selected_record is not None
+            and self._selected_record.path == record.path
+        ):
+            self._selected_record = record
             self.table_model.notify_record_changed(record)
 
     def _on_refresh_clicked(self) -> None:
-        previous_record = self._current_record
+        previous_record = self._selected_record
         self.refresh_logs()
-        self.refresh_current_log(force=self._current_record is previous_record)
+        self.refresh_current_log(force=self._selected_record is previous_record)
 
     def _on_theme_button_clicked(self) -> None:
         current_index = ThemeManager.THEME_MODES.index(self._theme_mode)
@@ -816,8 +813,8 @@ class LogBrowserWindow(QMainWindow):
             export_action.setEnabled(False)
         else:
             rename_action.setEnabled(len(records) == 1)
-            all_starred = all(rec.meta.star > 0 for rec in records)
-            all_trashed = all(rec.meta.trash for rec in records)
+            all_starred = all(record.star > 0 for record in records)
+            all_trashed = all(record.trash for record in records)
             toggle_star_action.setEnabled(True)
             toggle_star_action.setChecked(all_starred)
             toggle_trash_action.setEnabled(True)
@@ -846,7 +843,10 @@ class LogBrowserWindow(QMainWindow):
         elif chosen == plot_axes_action:
             self._toggle_column(COL_PLOT_AXES, plot_axes_action.isChecked())
         elif chosen == open_explorer and records:
-            self._open_path_in_explorer(records[0].path, len(records) != 1)
+            self._open_path_in_explorer(
+                records[0].path,
+                len(records) != 1,
+            )
         elif chosen == export_action and records:
             self._export_records(records)
 
@@ -858,7 +858,7 @@ class LogBrowserWindow(QMainWindow):
         self.refresh_logs()
 
     def _rename_record_title(self, record: LogRecord) -> None:
-        current_title = record.meta.title
+        current_title = record.title
         dialog = QInputDialog(self)
         dialog.setWindowTitle("Rename Log")
         dialog.setLabelText("Enter new title:")
@@ -870,18 +870,16 @@ class LogBrowserWindow(QMainWindow):
         new_title = dialog.textValue().strip()
         if new_title == current_title:
             return
-        record.meta.title = new_title
-        self._update_ui_for_record(record)
+        record.meta.update(title=new_title)
         self.refresh_logs()
 
     def _set_record_star_count(
         self, record: LogRecord, count: int, refresh: bool = True
     ) -> bool:
-        new_value = max(int(count), 0)
-        if record.meta.star == new_value:
+        count = max(int(count), 0)
+        if record.star == count:
             return False
-        record.meta.star = new_value
-        self._update_ui_for_record(record)
+        record.meta.update(star=count)
         if refresh:
             self.refresh_logs()
         return True
@@ -889,10 +887,10 @@ class LogBrowserWindow(QMainWindow):
     def _set_record_trash(
         self, record: LogRecord, value: bool, refresh: bool = True
     ) -> bool:
-        if record.meta.trash == value:
+        value = bool(value)
+        if record.trash == value:
             return False
-        record.meta.trash = value
-        self._update_ui_for_record(record)
+        record.meta.update(trash=value)
         if refresh:
             self.refresh_logs()
         return True
@@ -910,10 +908,6 @@ class LogBrowserWindow(QMainWindow):
             changed |= self._set_record_trash(record, value, refresh=False)
         if changed:
             self.refresh_logs()
-
-    def _update_ui_for_record(self, record: LogRecord) -> None:
-        record.refresh_metadata(force=True)
-        self.table_model.notify_record_changed(record)
 
     def _open_path_in_explorer(self, path: Path, select: bool = False) -> None:
         try:
@@ -1026,7 +1020,7 @@ class LogBrowserWindow(QMainWindow):
         records = self._get_selected_records()
         if not records:
             return
-        all_starred = all(rec.meta.star > 0 for rec in records)
+        all_starred = all(record.star > 0 for record in records)
         self._set_records_star_count(records, 0 if all_starred else 1)
 
     def _shortcut_send_to_recycle_bin(self) -> None:
@@ -1039,7 +1033,7 @@ class LogBrowserWindow(QMainWindow):
         records = self._get_selected_records()
         if not records:
             return
-        all_trashed = all(rec.meta.trash for rec in records)
+        all_trashed = all(record.trash for record in records)
         self._set_records_trash(records, not all_trashed)
 
     def _shortcut_rename_title(self) -> None:

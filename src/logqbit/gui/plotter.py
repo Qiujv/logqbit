@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 if TYPE_CHECKING:
-    from .log_catalog import LogRecord
+    from ..catalog import LogRecord
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +268,7 @@ class PlotManager:
 
     def __init__(self, parent: QWidget | None = None):
         self._plot_record: LogRecord | None = None
+        self._plot_frame: pd.DataFrame | None = None
         self._suppress_updates = False
         self._needs_refresh = False
         self.widget = self._create_widget(parent)
@@ -326,11 +327,14 @@ class PlotManager:
         record = self._plot_record
         if record is None:
             return
-        record.meta.plot_axes = self.tag_bar.axes
-        record.meta.plot_fields = self.tag_bar.fields
+        record.meta.update(
+            plot_axes=self.tag_bar.axes,
+            plot_fields=self.tag_bar.fields,
+        )
 
     def reset_plot_state(self, message: str = "No data to plot.") -> None:
         self._plot_record = None
+        self._plot_frame = None
         self.tag_bar.set_columns([], [], [])
         self.plot_widget.clear()
         self.plot_status_label.setText(message)
@@ -345,10 +349,13 @@ class PlotManager:
             self.refresh_plot()
 
     def update_plot_and_controls(
-        self, record: LogRecord, defer_plot: bool = False
+        self,
+        record: LogRecord,
+        frame: pd.DataFrame | None,
+        defer_plot: bool = False,
     ) -> None:
         self._plot_record = record
-        frame = record.load_dataframe()
+        self._plot_frame = frame
 
         if frame is None or frame.empty or not len(frame.columns):
             self.tag_bar.set_columns([], [], [])
@@ -358,8 +365,8 @@ class PlotManager:
             return
 
         columns = list(frame.columns)
-        plot_axes = record.meta.plot_axes
-        plot_fields = record.meta.plot_fields
+        plot_axes = record.plot_axes
+        plot_fields = record.plot_fields
 
         # If meta has no fields, auto-assign the first non-axes column
         if not plot_fields:
@@ -401,7 +408,7 @@ class PlotManager:
             self.plot_status_label.setText("No log selected.")
             return
 
-        frame = record.load_dataframe()
+        frame = self._plot_frame
         if frame is None or frame.empty:
             self.plot_widget.clear()
             self.plot_status_label.setText("No data to plot.")
@@ -460,7 +467,7 @@ class PlotManager:
             self.plot_status_label.setText("No log selected.")
             return
 
-        frame = record.load_dataframe()
+        frame = self._plot_frame
         if frame is None or frame.empty:
             self.plot_widget.clear()
             self.plot_status_label.setText("No data to plot.")

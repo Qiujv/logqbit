@@ -13,7 +13,6 @@ Usage:
     python svg2ico.py input.svg output.ico
 """
 
-import io
 import struct
 import sys
 from pathlib import Path

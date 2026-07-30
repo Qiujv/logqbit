@@ -28,7 +28,7 @@ _sentinel = object()
 class FileSnap:
     """Track a file's modification time and size for cheap change detection."""
 
-    __slots__ = ("path", "mtime", "size")
+    __slots__ = ("path", "mtime_ns", "size", "inode")
 
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -36,12 +36,17 @@ class FileSnap:
 
     def refresh(self):
         st = self.path.stat()
-        self.mtime = st.st_mtime
+        self.mtime_ns = st.st_mtime_ns
         self.size = st.st_size
+        self.inode = st.st_ino
 
     def changed(self) -> bool:
         st = self.path.stat()
-        return (st.st_mtime, st.st_size) != (self.mtime, self.size)
+        return (st.st_mtime_ns, st.st_size, st.st_ino) != (
+            self.mtime_ns,
+            self.size,
+            self.inode,
+        )
 
 
 class Registry:

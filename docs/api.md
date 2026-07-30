@@ -99,6 +99,52 @@ log.meta.plot_axes = ["time"]
 - `log.meta` 对应 `metadata.json`，主要用于和 LogBrowser 交互，例如标题、收藏、
   回收站状态、绘图轴等 GUI 展示相关的轻量状态。
 
+## LogCatalog
+
+`LogCatalog` 用于快速浏览一个父目录下的已有记录，不会创建 `LogFolder` 的写缓冲或
+autosave 线程。每个 `LogRecord` 同时包含轻量的内存摘要，以及显式的磁盘读取入口。
+
+Catalog 以 `metadata.json` 文件作为日志目录的标记，因此目录名不必是数字；没有
+`metadata.json` 的普通子目录会被忽略。
+
+```python
+from logqbit.catalog import LogCatalog
+
+catalog = LogCatalog()
+records = catalog.refresh("./runs")
+
+for record in records:
+    print(record.log_id, record.title, record.row_count)
+```
+
+`LogRecord` 缓存 dataframe 的行数、列名和文件版本；未变化的日志会复用同一个 record
+实例。Metadata 直接来自 `record.meta` 当前已经加载的内存值。
+
+```python
+record = records[0]
+df = record.read_dataframe()
+```
+
+`read_dataframe()` 是明确的一次读取，不保留隐藏的进程级缓存。LogBrowser 的 detail
+view 会按窗口和文件版本缓存完整 dataframe，因此多个 detail 窗口的刷新状态互不影响。
+
+```python
+record.meta.update(
+    title="cooldown",
+    star=2,
+    trash=False,
+    plot_axes=["time"],
+    plot_fields=["temperature"],
+)
+```
+
+`LogFolder.meta` 和 `LogRecord.meta` 使用同一个 `LogMetadata` 接口。Catalog 和
+LogBrowser 会在各自的刷新边界同步外部修改；client 代码也可以主动同步：
+
+```python
+record.meta.reload()
+```
+
 ## Registry
 
 `Registry` 是基于 YAML 文件的轻量键值注册表。它支持使用 `/` 分隔路径访问嵌套字段：
@@ -149,6 +195,10 @@ buffer.close()
 ## API Reference
 
 ::: logqbit.logfolder.LogFolder
+
+::: logqbit.catalog.LogCatalog
+
+::: logqbit.catalog.LogRecord
 
 ::: logqbit.metadata.LogMetadata
 

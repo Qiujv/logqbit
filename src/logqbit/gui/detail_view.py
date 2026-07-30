@@ -52,7 +52,7 @@ from PySide6.QtWidgets import (
 from .plotter import PlotManager
 
 if TYPE_CHECKING:
-    from .log_catalog import LogRecord
+    from ..catalog import LogRecord
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,9 @@ WINDOW_ICON = _load_window_icon()
 def record_watch_paths(record: LogRecord) -> list[str]:
     paths: list[str] = [str(record.path)]
     for extra in (
-        record.yaml_path,
+        record.const_path,
         record.data_path,
-        record.meta.path,
+        record.meta_path,
         *record.list_image_files(),
         *record.list_other_files(),
     ):
@@ -228,6 +228,42 @@ class PandasTableModel(QAbstractTableModel):
         return str(self._df.index[section])
 
 
+class DetailDataCache:
+    """Full-data cache owned by one detail view."""
+
+    def __init__(self) -> None:
+        self.dataframe: pd.DataFrame | None = None
+        self.path: Path | None = None
+        self.version: tuple[int, int, int] | None = None
+
+    def clear(self) -> None:
+        self.dataframe = None
+        self.path = None
+        self.version = None
+
+    def load(self, record: LogRecord) -> pd.DataFrame | None:
+        data_path = record.data_path
+        try:
+            stat = data_path.stat()
+            version = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        except OSError:
+            version = None
+        if (
+            self.dataframe is not None
+            and self.path == record.path
+            and self.version == version
+            and version is not None
+        ):
+            return self.dataframe
+        self.clear()
+        dataframe = record.read_dataframe()
+        if dataframe is not None:
+            self.dataframe = dataframe
+            self.path = record.path
+            self.version = version
+        return dataframe
+
+
 class DataViewManager:
     INITIAL_PREVIEW_LIMIT = 100
     PREVIEW_INCREMENT = 1000
@@ -280,12 +316,16 @@ class DataViewManager:
         self.data_status_label.setText(message)
         self.data_load_button.setEnabled(False)
 
-    def show_data_table(self, record: LogRecord, preview_only: bool) -> None:
-        dataframe = record.load_dataframe()
+    def show_data_table(
+        self,
+        record: LogRecord,
+        dataframe: pd.DataFrame | None,
+        preview_only: bool,
+    ) -> None:
         if dataframe is None:
             message = (
                 "Data file not found."
-                if not record.data_path or not record.data_path.exists()
+                if record.data_version is None
                 else "Failed to load data."
             )
             self.set_empty(message)
@@ -299,7 +339,7 @@ class DataViewManager:
         model = PandasTableModel(
             dataframe,
             self.data_table,
-            highlight_columns=record.meta.plot_axes,
+            highlight_columns=record.plot_axes,
             preview_limit=preview_limit,
         )
         self.data_table.setModel(model)
@@ -318,10 +358,14 @@ class DataViewManager:
             self.data_status_label.setText(f"Showing all {displayed_rows} rows.")
             self.data_load_button.setEnabled(False)
 
-    def load_more_data(self, record: LogRecord) -> None:
+    def load_more_data(
+        self,
+        record: LogRecord,
+        dataframe: pd.DataFrame | None,
+    ) -> None:
         model = self.data_table.model()
         if not isinstance(model, PandasTableModel):
-            self.show_data_table(record, preview_only=False)
+            self.show_data_table(record, dataframe, preview_only=False)
             return
 
         total_rows = model.get_total_rows()
@@ -357,6 +401,7 @@ class RecordDetailView(QWidget):
     ) -> None:
         super().__init__(parent)
         self._record: LogRecord | None = None
+        self._data_cache = DetailDataCache()
         self._file_open_callback = file_open_callback
         self._enable_tab_shortcuts = enable_tab_shortcuts
         self._shortcuts: list[QAction] = []
@@ -400,23 +445,32 @@ class RecordDetailView(QWidget):
         self.tab_widget.setCurrentIndex((current + step) % count)
 
     def load_record(self, record: LogRecord) -> None:
+        dataframe = self._data_cache.load(record)
         self._record = record
         self.detail_id_label.setText(f"#{record.log_id}")
         self.detail_label.setText(str(record.path))
-        self.yaml_view.setPlainText(record.read_yaml_text())
-        self.data_view_manager.show_data_table(record, preview_only=True)
+        self.yaml_view.setPlainText(record.read_const_text())
+        self.data_view_manager.show_data_table(
+            record,
+            dataframe,
+            preview_only=True,
+        )
         self._update_image_tabs(record.list_image_files())
         self.files_button.setEnabled(True)
         defer_plot = self.tab_widget.currentIndex() != TAB_PLOT
-        self.plot_manager.update_plot_and_controls(record, defer_plot=defer_plot)
+        self.plot_manager.update_plot_and_controls(
+            record,
+            dataframe,
+            defer_plot=defer_plot,
+        )
         self._sync_detail_watcher()
 
     def refresh_current_record(self, *, force: bool = False) -> None:
         if self._record is None:
             return
-        self._record.refresh_from_disk(inspect_data=False)
         if force:
-            self._record.data_frame = None
+            self._data_cache.clear()
+        self._record.meta.reload()
         self.load_record(self._record)
         self.record_refreshed.emit(self._record)
 
@@ -424,6 +478,7 @@ class RecordDetailView(QWidget):
         self._refresh_timer.stop()
         self._clear_detail_watcher()
         self._record = None
+        self._data_cache.clear()
         self.detail_id_label.setText("")
         self.detail_label.setText(message)
         self.yaml_view.setPlainText("")
@@ -505,7 +560,10 @@ class RecordDetailView(QWidget):
 
     def _on_load_more(self) -> None:
         if self._record:
-            self.data_view_manager.load_more_data(self._record)
+            self.data_view_manager.load_more_data(
+                self._record,
+                self._data_cache.load(self._record),
+            )
 
     def _on_watch_toggled(self, enabled: bool) -> None:
         if enabled:
@@ -635,5 +693,5 @@ class RecordDetailWindow(QMainWindow):
         self.detail_view.refresh_current_record()
 
     def _update_window_title(self, record: LogRecord) -> None:
-        title = record.meta.title or "(untitled)"
+        title = record.title or "(untitled)"
         self.setWindowTitle(f"#{record.log_id} {title}")
