@@ -1,9 +1,9 @@
 import copy
+import logging
 import os
 import re
 import sys
 import tempfile
-import warnings
 from collections import deque
 from collections.abc import Mapping, Sequence, Set
 from contextlib import suppress
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from ruamel.yaml.nodes import ScalarNode
     from ruamel.yaml.representer import BaseRepresenter
 
+_logger = logging.getLogger(__name__)
 _sentinel = object()
 
 
@@ -252,14 +253,27 @@ try:
     from labrad.units import Unit, Value, WithUnit
 
     def _set_yaml_for_labrad_units(yaml: YAML) -> YAML:
-        yaml.resolver.add_implicit_resolver(
-            "!labrad_unit", _UNIT_PATTERN, list("+-0123456789")
+        try:
+            yaml.constructor.add_constructor("!labrad_unit", _construct_labrad_value)
+            yaml.representer.add_representer(WithUnit, _represent_labrad_value)
+            yaml.representer.add_representer(Value, _represent_labrad_value)
+            yaml.resolver.add_implicit_resolver(
+                "!labrad_unit", _UNIT_PATTERN, list("+-0123456789")
+            )
+        except Exception:
+            _logger.warning(
+                "Failed to register labrad.units YAML support.", exc_info=True
+            )
+        return yaml
+except ModuleNotFoundError as exc:
+    if exc.name != "labrad":
+        _logger.warning(
+            "Failed to import labrad.units; unit support is disabled.", exc_info=True
         )
-        yaml.constructor.add_constructor("!labrad_unit", _construct_labrad_value)
-        yaml.representer.add_representer(WithUnit, _represent_labrad_value)
-        yaml.representer.add_representer(Value, _represent_labrad_value)
-except ImportError:
-    warnings.warn("labrad.units not found, unit support disabled.", ImportWarning)
+except Exception:
+    _logger.warning(
+        "Failed to import labrad.units; unit support is disabled.", exc_info=True
+    )
 
 
 _UNIT_PATTERN = re.compile(r"^\s*([-+]?\d[\d_]*(?:\.\d[\d_]*)?)\s*([A-Za-z]*)\s*$")

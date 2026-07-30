@@ -1,3 +1,4 @@
+import importlib
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,11 @@ def temp_yaml(tmp_path: Path) -> Path:
 
 
 def test_get_unit_value(temp_yaml):
-    pytest.importorskip("labrad.units", reason="requires labrad.units for unit parsing")
+    try:
+        importlib.import_module("labrad.units")
+    except Exception:
+        pytest.skip("requires working labrad.units for unit parsing")
+
     reg = Registry(temp_yaml)
     val = reg.get("Device/Q1/frr")
     assert hasattr(val, "unit")
