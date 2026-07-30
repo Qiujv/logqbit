@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 if TYPE_CHECKING:
-    from .browser import LogRecord
+    from .log_catalog import LogRecord
 
 logger = logging.getLogger(__name__)
 
@@ -542,4 +542,3 @@ class PlotManager:
         if cmap is None:
             cmap = pg.colormap.get("CET-D1")
         return cmap
-

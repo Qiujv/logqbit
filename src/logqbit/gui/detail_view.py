@@ -16,6 +16,7 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QFileSystemWatcher,
     QModelIndex,
+    Signal,
     Qt,
     QTimer,
     QUrl,
@@ -51,7 +52,7 @@ from PySide6.QtWidgets import (
 from .plotter import PlotManager
 
 if TYPE_CHECKING:
-    from .browser import LogRecord
+    from .log_catalog import LogRecord
 
 logger = logging.getLogger(__name__)
 
@@ -346,19 +347,26 @@ class DataViewManager:
 class RecordDetailView(QWidget):
     """Reusable record detail widget with tabs and preview controls."""
 
+    record_refreshed = Signal(object)
+
     def __init__(
         self,
         parent: QWidget | None = None,
         file_open_callback: Callable[[Path], None] | None = None,
-        watch_toggled_callback: Callable[[bool], None] | None = None,
         enable_tab_shortcuts: bool = True,
     ) -> None:
         super().__init__(parent)
         self._record: LogRecord | None = None
         self._file_open_callback = file_open_callback
-        self._watch_toggled_callback = watch_toggled_callback
         self._enable_tab_shortcuts = enable_tab_shortcuts
         self._shortcuts: list[QAction] = []
+        self._detail_watcher = QFileSystemWatcher(self)
+        self._detail_watcher.directoryChanged.connect(self._schedule_detail_refresh)
+        self._detail_watcher.fileChanged.connect(self._schedule_detail_refresh)
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(REFRESH_DEBOUNCE_MS)
+        self._refresh_timer.timeout.connect(self.refresh_current_record)
 
         self._build_ui()
         if self._enable_tab_shortcuts:
@@ -401,14 +409,20 @@ class RecordDetailView(QWidget):
         self.files_button.setEnabled(True)
         defer_plot = self.tab_widget.currentIndex() != TAB_PLOT
         self.plot_manager.update_plot_and_controls(record, defer_plot=defer_plot)
+        self._sync_detail_watcher()
 
-    def refresh_current_record(self) -> None:
+    def refresh_current_record(self, *, force: bool = False) -> None:
         if self._record is None:
             return
-        self._record.data_frame = None
+        self._record.refresh_from_disk(inspect_data=False)
+        if force:
+            self._record.data_frame = None
         self.load_record(self._record)
+        self.record_refreshed.emit(self._record)
 
     def clear(self, message: str = "No log selected.") -> None:
+        self._refresh_timer.stop()
+        self._clear_detail_watcher()
         self._record = None
         self.detail_id_label.setText("")
         self.detail_label.setText(message)
@@ -494,8 +508,30 @@ class RecordDetailView(QWidget):
             self.data_view_manager.load_more_data(self._record)
 
     def _on_watch_toggled(self, enabled: bool) -> None:
-        if self._watch_toggled_callback:
-            self._watch_toggled_callback(enabled)
+        if enabled:
+            self._sync_detail_watcher()
+        else:
+            self._refresh_timer.stop()
+            self._clear_detail_watcher()
+
+    def _schedule_detail_refresh(self) -> None:
+        self._refresh_timer.start()
+
+    def _clear_detail_watcher(self) -> None:
+        try:
+            paths = self._detail_watcher.files() + self._detail_watcher.directories()
+            if paths:
+                self._detail_watcher.removePaths(paths)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _sync_detail_watcher(self) -> None:
+        self._clear_detail_watcher()
+        if not self.watch_enabled or self._record is None:
+            return
+        watch_paths = record_watch_paths(self._record)
+        if watch_paths:
+            self._detail_watcher.addPaths(watch_paths)
 
     def _clear_dynamic_tabs(self) -> None:
         for index in range(self.tab_widget.count() - 1, TAB_PLOT, -1):
@@ -583,64 +619,21 @@ class RecordDetailWindow(QMainWindow):
         if not WINDOW_ICON.isNull():
             self.setWindowIcon(WINDOW_ICON)
         self.resize(900, 600)
-        self._detail_refresh_pending = False
-        self._detail_watcher = QFileSystemWatcher(self)
-        self._detail_watcher.directoryChanged.connect(self._schedule_detail_refresh)
-        self._detail_watcher.fileChanged.connect(self._schedule_detail_refresh)
 
-        self.detail_view = RecordDetailView(
-            parent=self,
-            watch_toggled_callback=self._on_watch_toggled,
-        )
+        self.detail_view = RecordDetailView(parent=self)
+        self.detail_view.record_refreshed.connect(self._update_window_title)
         self.setCentralWidget(self.detail_view)
 
         self.load_record(record)
         self.detail_view.set_current_tab(initial_tab)
 
     def load_record(self, record: LogRecord) -> None:
-        title = record.meta.title or "(untitled)"
-        self.setWindowTitle(f"#{record.log_id} {title}")
+        self._update_window_title(record)
         self.detail_view.load_record(record)
-        self._update_detail_watcher(record)
 
     def refresh_current_record(self) -> None:
         self.detail_view.refresh_current_record()
-        record = self.detail_view.current_record
-        if record is not None:
-            self._update_detail_watcher(record)
 
-    def _schedule_detail_refresh(self) -> None:
-        if self._detail_refresh_pending:
-            return
-        self._detail_refresh_pending = True
-        QTimer.singleShot(REFRESH_DEBOUNCE_MS, self._run_detail_refresh)
-
-    def _run_detail_refresh(self) -> None:
-        self._detail_refresh_pending = False
-        self.refresh_current_record()
-
-    def _clear_detail_watcher(self) -> None:
-        try:
-            paths = self._detail_watcher.files() + self._detail_watcher.directories()
-            if paths:
-                self._detail_watcher.removePaths(paths)
-        except Exception:  # pragma: no cover - defensive
-            pass
-
-    def _update_detail_watcher(self, record: LogRecord) -> None:
-        self._clear_detail_watcher()
-        if not self.detail_view.watch_enabled:
-            return
-        watch_paths = record_watch_paths(record)
-        if watch_paths:
-            self._detail_watcher.addPaths(watch_paths)
-
-    def _on_watch_toggled(self, enabled: bool) -> None:
-        record = self.detail_view.current_record
-        if record is None:
-            self._clear_detail_watcher()
-            return
-        if enabled:
-            self._update_detail_watcher(record)
-        else:
-            self._clear_detail_watcher()
+    def _update_window_title(self, record: LogRecord) -> None:
+        title = record.meta.title or "(untitled)"
+        self.setWindowTitle(f"#{record.log_id} {title}")

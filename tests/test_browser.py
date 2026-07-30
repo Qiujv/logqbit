@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor, QFontDatabase, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QPushButton
 
+from logqbit.gui import log_catalog as log_catalog_module
 from logqbit.gui.browser import (
     COL_ID,
     COL_PLOT_AXES,
@@ -16,11 +17,9 @@ from logqbit.gui.browser import (
     COL_TITLE,
     LogBrowserWindow,
     LogListTableModel,
-    LogRecord,
     PandasTableModel,
     SettingsManager,
     ensure_application,
-    export_records,
 )
 from logqbit.gui.detail_view import (
     TAB_PLOT,
@@ -28,6 +27,7 @@ from logqbit.gui.detail_view import (
     RecordDetailWindow,
     record_watch_paths,
 )
+from logqbit.gui.log_catalog import LogRecord, export_records
 from logqbit.logfolder import LogFolder
 
 
@@ -350,15 +350,16 @@ class TestLogListTableModel:
         assert font is not None
         assert font.strikeOut()
     
-    def test_update_record(self, sample_records: list[LogRecord]) -> None:
-        """Test updating a record in the model."""
+    def test_notify_record_changed(self, sample_records: list[LogRecord]) -> None:
+        """Test notifying views after a record has been refreshed."""
         model = LogListTableModel()
         model.set_records(sample_records)
-        
+
         record = sample_records[0]
         record.meta.title = "updated_title"
-        
-        model.update_record(record)
+        record.refresh_metadata(force=True)
+
+        model.notify_record_changed(record)
         
         index = model.index(0, COL_TITLE)
         data = model.data(index, Qt.DisplayRole)
@@ -547,6 +548,33 @@ class TestRecordDetailWidgets:
         assert view.detail_label.textInteractionFlags() & Qt.TextSelectableByMouse
         assert view.detail_label.wordWrap()
 
+    def test_detail_refresh_keeps_dataframe_when_only_other_files_change(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        record = LogRecord.scan_directory(sample_logfolder)[0]
+        view = RecordDetailView()
+        view.load_record(record)
+        dataframe = record.data_frame
+        assert dataframe is not None
+
+        (record.path / "notes.txt").write_text("updated", encoding="utf-8")
+        read_count = 0
+        original_read_feather = log_catalog_module.pd.read_feather
+
+        def count_read_feather(*args, **kwargs):
+            nonlocal read_count
+            read_count += 1
+            return original_read_feather(*args, **kwargs)
+
+        monkeypatch.setattr(
+            log_catalog_module.pd, "read_feather", count_read_feather
+        )
+
+        view.refresh_current_record()
+
+        assert record.data_frame is dataframe
+        assert read_count == 0
+
     def test_const_view_uses_system_fixed_font(self) -> None:
         view = RecordDetailView()
         expected = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
@@ -628,18 +656,47 @@ class TestRecordDetailWidgets:
         app.processEvents()
         try:
             assert window.detail_view.watch_enabled
-            assert window._detail_watcher.directories()
+            assert window.detail_view._detail_watcher.directories()
 
             window.detail_view.set_watch_enabled(False)
             app.processEvents()
-            assert not window._detail_watcher.directories()
-            assert not window._detail_watcher.files()
+            assert not window.detail_view._detail_watcher.directories()
+            assert not window.detail_view._detail_watcher.files()
 
             window.detail_view.set_watch_enabled(True)
             app.processEvents()
-            assert str(record.path) in set(window._detail_watcher.directories())
+            assert str(record.path) in set(
+                window.detail_view._detail_watcher.directories()
+            )
         finally:
             window.close()
+
+    def test_detail_views_manage_watchers_independently(
+        self, sample_logfolder: Path
+    ) -> None:
+        record = LogRecord.scan_directory(sample_logfolder)[0]
+        first_view = RecordDetailView()
+        second_view = RecordDetailView()
+        try:
+            first_view.load_record(record)
+            second_view.load_record(record)
+
+            assert str(record.path) in set(
+                first_view._detail_watcher.directories()
+            )
+            assert str(record.path) in set(
+                second_view._detail_watcher.directories()
+            )
+
+            first_view.set_watch_enabled(False)
+
+            assert not first_view._detail_watcher.directories()
+            assert str(record.path) in set(
+                second_view._detail_watcher.directories()
+            )
+        finally:
+            first_view.close()
+            second_view.close()
 
     def test_detail_window_has_file_watcher_and_tab_shortcuts(
         self, sample_logfolder: Path
@@ -653,8 +710,10 @@ class TestRecordDetailWidgets:
         window.show()
         app.processEvents()
         try:
-            assert str(record.path) in set(window._detail_watcher.directories())
-            watched_files = set(window._detail_watcher.files())
+            assert str(record.path) in set(
+                window.detail_view._detail_watcher.directories()
+            )
+            watched_files = set(window.detail_view._detail_watcher.files())
             assert str(record.meta.path) in watched_files
             assert str(extra_file) in watched_files
 
@@ -690,6 +749,107 @@ class TestRecordDetailWidgets:
         finally:
             window.close()
 
+    def test_list_refresh_preserves_current_detail_cache(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = ensure_application()
+        window = LogBrowserWindow(sample_logfolder)
+        app.processEvents()
+        try:
+            record = window._current_record
+            assert record is not None
+            dataframe = record.data_frame
+            assert dataframe is not None
+
+            read_count = 0
+            original_read_feather = log_catalog_module.pd.read_feather
+
+            def count_read_feather(*args, **kwargs):
+                nonlocal read_count
+                read_count += 1
+                return original_read_feather(*args, **kwargs)
+
+            monkeypatch.setattr(
+                log_catalog_module.pd, "read_feather", count_read_feather
+            )
+
+            window.refresh_logs()
+
+            assert window._current_record is record
+            assert window._current_record.data_frame is dataframe
+            assert read_count == 0
+        finally:
+            window.close()
+
+    def test_manual_refresh_reads_current_feather_once(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = ensure_application()
+        window = LogBrowserWindow(sample_logfolder)
+        app.processEvents()
+        try:
+            read_count = 0
+            original_read_feather = log_catalog_module.pd.read_feather
+
+            def count_read_feather(*args, **kwargs):
+                nonlocal read_count
+                read_count += 1
+                return original_read_feather(*args, **kwargs)
+
+            monkeypatch.setattr(
+                log_catalog_module.pd, "read_feather", count_read_feather
+            )
+
+            window._on_refresh_clicked()
+
+            assert read_count == 1
+        finally:
+            window.close()
+
+    def test_manual_refresh_defers_changed_current_summary_to_detail(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = ensure_application()
+        window = LogBrowserWindow(sample_logfolder)
+        app.processEvents()
+        try:
+            record = window._current_record
+            assert record is not None
+            assert record.data_path is not None
+            pd.DataFrame({"x": range(10), "y": range(10)}).to_feather(
+                record.data_path
+            )
+
+            inspect_count = 0
+            read_count = 0
+            original_open_file = log_catalog_module.pyarrow.ipc.open_file
+            original_read_feather = log_catalog_module.pd.read_feather
+
+            def count_open_file(*args, **kwargs):
+                nonlocal inspect_count
+                inspect_count += 1
+                return original_open_file(*args, **kwargs)
+
+            def count_read_feather(*args, **kwargs):
+                nonlocal read_count
+                read_count += 1
+                return original_read_feather(*args, **kwargs)
+
+            monkeypatch.setattr(
+                log_catalog_module.pyarrow.ipc, "open_file", count_open_file
+            )
+            monkeypatch.setattr(
+                log_catalog_module.pd, "read_feather", count_read_feather
+            )
+
+            window._on_refresh_clicked()
+
+            assert inspect_count == 0
+            assert read_count == 1
+            assert record.row_count == 10
+        finally:
+            window.close()
+
     def test_browser_window_watch_toggle_controls_watcher(
         self, sample_logfolder: Path
     ) -> None:
@@ -700,16 +860,20 @@ class TestRecordDetailWidgets:
         try:
             record = window.detail_view.current_record
             assert record is not None
-            assert str(record.path) in set(window._detail_watcher.directories())
+            assert str(record.path) in set(
+                window.detail_view._detail_watcher.directories()
+            )
 
             window.detail_view.set_watch_enabled(False)
             app.processEvents()
-            assert not window._detail_watcher.directories()
-            assert not window._detail_watcher.files()
+            assert not window.detail_view._detail_watcher.directories()
+            assert not window.detail_view._detail_watcher.files()
 
             window.detail_view.set_watch_enabled(True)
             app.processEvents()
-            assert str(record.path) in set(window._detail_watcher.directories())
+            assert str(record.path) in set(
+                window.detail_view._detail_watcher.directories()
+            )
         finally:
             window.close()
 

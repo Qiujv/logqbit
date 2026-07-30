@@ -4,22 +4,19 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import threading
 from collections.abc import Iterable
-from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
-import pandas as pd
-import pyarrow.ipc
 from PySide6.QtCore import (
     QAbstractTableModel,
     QFileSystemWatcher,
     QModelIndex,
     QSettings,
+    QSignalBlocker,
     QSortFilterProxyModel,
     Qt,
     QTimer,
@@ -51,27 +48,21 @@ try:  # pragma: no cover - fallback for direct execution
         PandasTableModel,
         RecordDetailView,
         RecordDetailWindow,
-        record_watch_paths,
     )
-    from ..logfolder import LogFolder
-    from ..metadata import LogMetadata
+    from .log_catalog import LogCatalog, LogRecord, export_records
     from .plotter import warmup_plotter_jit
 except ImportError:  # pragma: no cover - fallback for direct execution
     from detail_view import PandasTableModel  # type: ignore  # noqa: F401
     from detail_view import (  # type: ignore
         RecordDetailView,
         RecordDetailWindow,
-        record_watch_paths,
     )
-    from logqbit.logfolder import LogFolder  # type: ignore  # noqa: F401
-    from logqbit.metadata import LogMetadata  # type: ignore
+    from log_catalog import LogCatalog, LogRecord, export_records  # type: ignore
     from plotter import warmup_plotter_jit  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 # Constants
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
-KNOWN_RECORD_FILENAMES = {"const.yaml", "data.feather", "metadata.json"}
 REFRESH_DEBOUNCE_MS = 250
 
 COL_ID = 0
@@ -126,161 +117,6 @@ def _start_plotter_jit_warmup() -> None:
     thread.start()
 
 
-def _next_export_logfolder_path(parent_path: Path) -> Path:
-    parent_path = Path(parent_path)
-    max_index = max(
-        (
-            int(entry.name)
-            for entry in parent_path.iterdir()
-            if entry.is_dir() and entry.name.isdecimal()
-        ),
-        default=-1,
-    )
-    next_index = max_index + 1
-    while (parent_path / str(next_index)).exists():
-        next_index += 1
-    return parent_path / str(next_index)
-
-
-def export_records(records: Iterable["LogRecord"], destination_parent: Path) -> list[Path]:
-    destination_parent = Path(destination_parent)
-    destination_parent.mkdir(parents=True, exist_ok=True)
-    exported_paths: list[Path] = []
-    for record in sorted(records, key=lambda item: item.log_id):
-        target_path = _next_export_logfolder_path(destination_parent)
-        target_path.mkdir(parents=True, exist_ok=False)
-        shutil.copytree(record.path, target_path, dirs_exist_ok=True)
-        import_from_path = target_path / "import_from"
-        if not import_from_path.exists():
-            import_from_path.write_text(str(record.path), encoding="utf-8")
-        exported_paths.append(target_path)
-    return exported_paths
-
-
-@dataclass
-class LogRecord:
-    log_id: int
-    path: Path
-    data_path: Path | None = None
-    yaml_path: Path | None = None
-
-    # Data metadata
-    row_count: int = 0
-    columns: list[str] = field(default_factory=list)
-
-    # Cached data
-    data_frame: pd.DataFrame | None = field(default=None, repr=False)
-
-    # Metadata accessor (always available)
-    meta: LogMetadata = field(init=False, repr=False)
-
-    def __post_init__(self):
-        self.meta = LogMetadata(self.path / "metadata.json", create=True)
-
-    def load_dataframe(self) -> pd.DataFrame | None:
-        if self.data_frame is not None:
-            return self.data_frame
-        if not self.data_path:
-            return None
-        try:
-            self.data_frame = pd.read_feather(self.data_path)
-            self.row_count = len(self.data_frame)
-            self.columns = [str(col) for col in self.data_frame.columns]
-            return self.data_frame
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error("Failed to read feather file %s: %s", self.data_path, exc)
-            return None
-
-    def read_yaml_text(self) -> str:
-        if not self.yaml_path or not self.yaml_path.exists():
-            return "const.yaml not found."
-        try:
-            text = self.yaml_path.read_text(encoding="utf-8", errors="ignore")
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error("Failed to read yaml file %s: %s", self.yaml_path, exc)
-            return f"Failed to read const.yaml: {exc}"
-        return text if text.strip() else "(const.yaml is empty)"
-
-    def list_image_files(self) -> list[Path]:
-        files: list[Path] = []
-        try:
-            children = list(self.path.iterdir())
-        except OSError:
-            return files
-        for child in children:
-            if child.is_file() and child.suffix.lower() in IMAGE_EXTENSIONS:
-                files.append(child)
-        files.sort()
-        return files
-
-    def list_other_files(self) -> list[Path]:
-        files: list[Path] = []
-        try:
-            children = list(self.path.iterdir())
-        except OSError:
-            return files
-        for child in children:
-            if not child.is_file():
-                continue
-            if child.name in KNOWN_RECORD_FILENAMES:
-                continue
-            if child.suffix.lower() in IMAGE_EXTENSIONS:
-                continue
-            files.append(child)
-        files.sort()
-        return files
-
-    @staticmethod
-    def scan_directory(directory: Path) -> list["LogRecord"]:
-        records: list[LogRecord] = []
-        if not directory.exists() or not directory.is_dir():
-            return records
-
-        for path in directory.iterdir():
-            if not path.is_dir() or not path.name.isdigit():
-                continue
-
-            exp_id = int(path.name)
-            yaml_path = path / "const.yaml"
-            data_path = path / "data.feather"
-            if not yaml_path.exists():
-                yaml_path = None
-            if not data_path.exists():
-                data_path = None
-
-            # Read feather summary if available
-            row_count: int = 0
-            columns: list[str] = []
-            if data_path:
-                try:
-                    with pyarrow.ipc.open_file(data_path) as reader:
-                        schema = reader.schema
-                        row_count = sum(
-                            reader.get_batch(i).num_rows
-                            for i in range(reader.num_record_batches)
-                        )
-                        columns = [str(name) for name in schema.names]
-                except FileNotFoundError:
-                    pass
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning(
-                        "Failed to inspect feather file %s: %s", data_path, exc
-                    )
-
-            record = LogRecord(
-                log_id=exp_id,
-                path=path,
-                row_count=row_count,
-                columns=columns,
-                data_path=data_path,
-                yaml_path=yaml_path,
-            )
-
-            records.append(record)
-
-        return records
-
-
 class LogListTableModel(QAbstractTableModel):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -303,14 +139,20 @@ class LogListTableModel(QAbstractTableModel):
             return self._records[row]
         return None
 
-    def update_record(self, record: LogRecord) -> None:
-        try:
-            row = self._records.index(record)
-            self.dataChanged.emit(
-                self.index(row, 0), self.index(row, self.columnCount() - 1)
-            )
-        except ValueError:
-            pass
+    def notify_record_changed(self, record: LogRecord) -> None:
+        row = next(
+            (
+                index
+                for index, current in enumerate(self._records)
+                if current.path == record.path
+            ),
+            None,
+        )
+        if row is None:
+            return
+        self.dataChanged.emit(
+            self.index(row, 0), self.index(row, self.columnCount() - 1)
+        )
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else len(self._records)
@@ -324,41 +166,42 @@ class LogListTableModel(QAbstractTableModel):
 
         record = self._records[index.row()]
         col = index.column()
-        meta = record.meta
 
         # Display text
         if role == Qt.DisplayRole:
             if col == COL_ID:
                 return record.log_id
             elif col == COL_TITLE:
-                star_count = max(int(meta.star), 0)
+                star_count = max(record.star, 0)
                 star_prefix = "⭐" * star_count
                 parts: list[str] = []
-                if meta.trash:
+                if record.trash:
                     parts.append("🗑️")
                 if star_prefix:
                     parts.append(star_prefix)
-                title_text = meta.title or "(untitled)"
+                title_text = record.title or "(untitled)"
                 parts.append(title_text)
                 return " ".join(parts)
             elif col == COL_ROWS:
                 return record.row_count
             elif col == COL_CREATE_TIME:
-                return meta.create_time
+                return record.create_time
             elif col == COL_CREATE_MACHINE:
-                return meta.create_machine
+                return record.create_machine
             elif col == COL_PLOT_AXES:
-                if meta.plot_axes:
-                    n_axes = len(meta.plot_axes)
-                    return f"{n_axes}, " + ", ".join([i[:3] for i in meta.plot_axes])
+                if record.plot_axes:
+                    n_axes = len(record.plot_axes)
+                    return f"{n_axes}, " + ", ".join(
+                        [item[:3] for item in record.plot_axes]
+                    )
                 else:
                     return ""
 
         # Font styling
         elif role == Qt.FontRole and col == COL_TITLE:
-            star_count = max(int(meta.star), 0)
+            star_count = max(record.star, 0)
             is_bold = star_count > 0
-            is_trash = meta.trash
+            is_trash = record.trash
             if is_bold and is_trash:
                 return self._bold_strikeout_font
             elif is_bold:
@@ -370,9 +213,13 @@ class LogListTableModel(QAbstractTableModel):
         # Tooltip
         elif role == Qt.ToolTipRole:
             if col == COL_TITLE:
-                return meta.title or "(untitled)"
+                return record.title or "(untitled)"
             elif col == COL_PLOT_AXES:
-                return ", ".join(meta.plot_axes) if meta.plot_axes else "(no plot axes)"
+                return (
+                    ", ".join(record.plot_axes)
+                    if record.plot_axes
+                    else "(no plot axes)"
+                )
 
         # User data - store record reference
         elif role == Qt.UserRole and col == COL_ID:
@@ -565,8 +412,8 @@ class LogBrowserWindow(QMainWindow):
         self._show_trash = True
         self._shortcuts: list[QAction] = []
         self._list_refresh_pending = False
-        self._detail_refresh_pending = False
         self._detail_windows: list[RecordDetailWindow] = []
+        self._catalog = LogCatalog()
 
         # Theme management
         app = QApplication.instance()
@@ -583,11 +430,8 @@ class LogBrowserWindow(QMainWindow):
 
         # File watchers
         self._dir_watcher = QFileSystemWatcher(self)
-        self._detail_watcher = QFileSystemWatcher(self)
         self._dir_watcher.directoryChanged.connect(self._schedule_list_refresh)
         self._dir_watcher.fileChanged.connect(self._schedule_list_refresh)
-        self._detail_watcher.directoryChanged.connect(self._schedule_detail_refresh)
-        self._detail_watcher.fileChanged.connect(self._schedule_detail_refresh)
 
         # Build UI
         self._build_ui()
@@ -698,8 +542,10 @@ class LogBrowserWindow(QMainWindow):
     def _create_detail_panel(self, parent: QWidget) -> QWidget:
         self.detail_view = RecordDetailView(
             parent=parent,
-            watch_toggled_callback=self._on_detail_watch_toggled,
             enable_tab_shortcuts=False,
+        )
+        self.detail_view.record_refreshed.connect(
+            self._on_detail_record_refreshed
         )
         return self.detail_view
 
@@ -779,16 +625,6 @@ class LogBrowserWindow(QMainWindow):
         self._list_refresh_pending = False
         self.refresh_logs()
 
-    def _schedule_detail_refresh(self) -> None:
-        if self._detail_refresh_pending:
-            return
-        self._detail_refresh_pending = True
-        QTimer.singleShot(REFRESH_DEBOUNCE_MS, self._run_detail_refresh)
-
-    def _run_detail_refresh(self) -> None:
-        self._detail_refresh_pending = False
-        self.refresh_current_log()
-
     def set_directory(self, directory: Path) -> None:
         path = Path(directory)
         if path != self._base_dir:
@@ -803,39 +639,44 @@ class LogBrowserWindow(QMainWindow):
         self._rebuild_directory_menu()
 
     def refresh_logs(self) -> None:
-        previous_id = self._current_record.log_id if self._current_record else None
-        all_records = LogRecord.scan_directory(self._base_dir)
+        previous_record = self._current_record
+        previous_path = previous_record.path if previous_record else None
+        all_records = self._catalog.refresh(
+            self._base_dir,
+            skip_data_inspection_for=previous_path,
+        )
 
         # Filter out trash if needed
         if self._show_trash:
             records = all_records
         else:
-            records = [r for r in all_records if not r.meta.trash]
+            records = [record for record in all_records if not record.trash]
 
         self.table_model.set_records(records)
 
         row_count = self.table_proxy.rowCount()
         if row_count:
-            self.detail_view.clear("Select a log to preview.")
-            if previous_id is not None:
-                # Try to select previous log
-                found = False
-                for source_row in range(len(records)):
-                    if records[source_row].log_id == previous_id:
-                        # Map source row to proxy row
-                        source_index = self.table_model.index(source_row, 0)
-                        proxy_index = self.table_proxy.mapFromSource(source_index)
-                        if proxy_index.isValid():
-                            self.log_table.selectRow(proxy_index.row())
-                            self._current_record = records[source_row]
-                            self._load_log(self._current_record)
-                            found = True
-                            break
-                if found:
-                    return
-            # Select first row if available
-            if row_count:
-                self.log_table.selectRow(0)
+            selected_record = next(
+                (record for record in records if record.path == previous_path),
+                None,
+            )
+            if selected_record is None:
+                source_row = 0
+                selected_record = records[source_row]
+            else:
+                source_row = records.index(selected_record)
+
+            source_index = self.table_model.index(source_row, 0)
+            proxy_index = self.table_proxy.mapFromSource(source_index)
+            selection_blocker = QSignalBlocker(self.log_table.selectionModel())
+            try:
+                self.log_table.selectRow(proxy_index.row())
+            finally:
+                selection_blocker.unblock()
+
+            self._current_record = selected_record
+            if selected_record is not previous_record:
+                self._load_log(selected_record)
         else:
             if all_records:
                 self.detail_view.clear("No logs to display.")
@@ -843,14 +684,11 @@ class LogBrowserWindow(QMainWindow):
                 self.detail_view.clear("No logs found.")
             self._current_record = None
             self.log_table.clearSelection()
-            self._clear_detail_watcher()
 
-    def refresh_current_log(self) -> None:
+    def refresh_current_log(self, *, force: bool = False) -> None:
         if not self._current_record:
             return
-        # Clear cached dataframe to force reload from disk
-        self._current_record.data_frame = None
-        self._load_log(self._current_record)
+        self.detail_view.refresh_current_record(force=force)
 
     def _on_log_double_clicked(self, proxy_index) -> None:
         """Open a standalone detail window for the double-clicked log record."""
@@ -885,37 +723,18 @@ class LogBrowserWindow(QMainWindow):
 
     def _load_log(self, record: LogRecord) -> None:
         self.detail_view.load_record(record)
-        self._update_detail_watcher(record)
 
     def _clear_preview_panels(self) -> None:
         self.detail_view.clear()
 
-    def _clear_detail_watcher(self) -> None:
-        try:
-            paths = self._detail_watcher.files() + self._detail_watcher.directories()
-            if paths:
-                self._detail_watcher.removePaths(paths)
-        except Exception:  # pragma: no cover - defensive
-            pass
-
-    def _update_detail_watcher(self, record: LogRecord) -> None:
-        self._clear_detail_watcher()
-        if not self.detail_view.watch_enabled:
-            return
-        watch_paths = record_watch_paths(record)
-        if watch_paths:
-            self._detail_watcher.addPaths(watch_paths)
-
-    def _on_detail_watch_toggled(self, enabled: bool) -> None:
-        if not enabled:
-            self._clear_detail_watcher()
-            return
-        if self._current_record is not None:
-            self._update_detail_watcher(self._current_record)
+    def _on_detail_record_refreshed(self, record: LogRecord) -> None:
+        if self._current_record is record:
+            self.table_model.notify_record_changed(record)
 
     def _on_refresh_clicked(self) -> None:
+        previous_record = self._current_record
         self.refresh_logs()
-        self.refresh_current_log()
+        self.refresh_current_log(force=self._current_record is previous_record)
 
     def _on_theme_button_clicked(self) -> None:
         current_index = ThemeManager.THEME_MODES.index(self._theme_mode)
@@ -1093,9 +912,8 @@ class LogBrowserWindow(QMainWindow):
             self.refresh_logs()
 
     def _update_ui_for_record(self, record: LogRecord) -> None:
-        self.table_model.update_record(record)
-        if self._current_record and self._current_record.log_id == record.log_id:
-            self._update_detail_watcher(record)
+        record.refresh_metadata(force=True)
+        self.table_model.notify_record_changed(record)
 
     def _open_path_in_explorer(self, path: Path, select: bool = False) -> None:
         try:
