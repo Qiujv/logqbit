@@ -1,3 +1,7 @@
+# Use PowerShell explicitly instead of relying on whichever Unix-like shell is
+# discoverable on PATH when Just runs on Windows.
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+
 # Show the available development commands.
 default:
     @just --list
@@ -23,22 +27,14 @@ test-core-isolated python="3.11":
     uv run --isolated --no-project --python {{python}} --with . --with pytest pytest -q tests/core
 
 # Test the core package against the supported Python endpoints.
-test-core-matrix:
-    just test-core-isolated 3.11
-    just test-core-isolated 3.13
+test-core-matrix: (test-core-isolated "3.11") (test-core-isolated "3.13")
 
 # Build the wheel and source distribution.
 build:
     uv build
 
 # Run the usual local checks before committing.
-check:
-    just lint
-    just test
+check: lint test
 
 # Run the comprehensive local checks before releasing.
-release-check:
-    just lint
-    just test-core-matrix
-    just test
-    just build
+release-check: lint test-core-matrix test build

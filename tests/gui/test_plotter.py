@@ -186,7 +186,8 @@ class TestPlotManagerFitAndColorBar:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         manager = PlotManager()
-        manager._plot_record = SimpleNamespace(path=Path("/logs/example-record"))
+        record_path = Path("/logs/example-record")
+        manager._plot_record = SimpleNamespace(path=record_path)
         observed: dict[str, object] = {}
 
         class FakeExporter:
@@ -204,7 +205,7 @@ class TestPlotManagerFitAndColorBar:
 
         assert observed == {
             "copy": True,
-            "title": "/logs/example-record",
+            "title": str(record_path),
             "visible": True,
         }
         assert not manager.plot_widget.getPlotItem().titleLabel.isVisible()
