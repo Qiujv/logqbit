@@ -15,7 +15,14 @@ from logqbit.catalog import (
     LogRecord,
     export_records,
 )
-from logqbit.gui.browser import (
+from logqbit.gui.browser.detail import (
+    TAB_PLOT,
+    PandasTableModel,
+    RecordDetailView,
+    RecordDetailWindow,
+    record_watch_paths,
+)
+from logqbit.gui.browser.window import (
     COL_ID,
     COL_PLOT_AXES,
     COL_ROWS,
@@ -25,13 +32,6 @@ from logqbit.gui.browser import (
     SORT_ROLE,
     SettingsManager,
     ensure_application,
-)
-from logqbit.gui.detail_view import (
-    TAB_PLOT,
-    PandasTableModel,
-    RecordDetailView,
-    RecordDetailWindow,
-    record_watch_paths,
 )
 from logqbit.logfolder import LogFolder
 
@@ -644,7 +644,7 @@ class TestRecordDetailWidgets:
         record = scan_catalog(sample_logfolder)[0]
         opened_paths: list[Path] = []
         monkeypatch.setattr(
-            "logqbit.gui.detail_view._open_path_in_explorer",
+            "logqbit.gui.browser.detail._open_path_in_explorer",
             lambda path, parent=None: opened_paths.append(path),
         )
         view = RecordDetailView()

@@ -1,4 +1,4 @@
-"""Numerical preparation for two-dimensional plot meshes."""
+"""Mesh preparation for two-dimensional record plots."""
 
 from __future__ import annotations
 

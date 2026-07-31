@@ -1,4 +1,4 @@
-"""Reusable detail views for log records."""
+"""Record detail views for the log browser."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,34 +26,34 @@ from PySide6.QtGui import (
     QDesktopServices,
     QFont,
     QFontDatabase,
-    QIcon,
     QKeySequence,
     QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QHeaderView,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
-    QTableView,
     QTabWidget,
+    QTableView,
     QToolButton,
     QVBoxLayout,
-    QHBoxLayout,
-    QHeaderView,
-    QWidget,
     QMessageBox,
+    QWidget,
 )
 
-from ..file_version import FileVersion
-from .plotter import PlotManager
+from logqbit.file_version import FileVersion
+
+from logqbit.gui.plot.widget import PlotManager
 
 if TYPE_CHECKING:
-    from ..catalog import LogRecord
+    from logqbit.catalog import LogRecord
 
 logger = logging.getLogger(__name__)
 
@@ -64,98 +63,8 @@ TAB_DATA = 1
 TAB_PLOT = 2
 
 
-def _load_window_icon() -> QIcon:
-    try:
-        icon_path = files("logqbit") / "assets" / "browser.svg"
-        icon = QIcon(str(icon_path))
-        if not icon.isNull():
-            return icon
-    except Exception as exc:
-        logger.debug("Failed to load window icon: %s", exc)
-    return QIcon()
-
-
-WINDOW_ICON = _load_window_icon()
-
-
-def record_watch_paths(record: LogRecord) -> list[str]:
-    paths: list[str] = [str(record.path)]
-    for extra in (
-        record.const_path,
-        record.data_path,
-        record.meta_path,
-        *record.list_image_files(),
-        *record.list_other_files(),
-    ):
-        if extra and extra.exists():
-            paths.append(str(extra))
-    return paths
-
-
-def _open_path_in_explorer(path: Path, parent: QWidget | None = None) -> None:
-    try:
-        if sys.platform.startswith("win"):
-            command = ["explorer", str(path)]
-            if path.is_file():
-                command = ["explorer", "/select,", str(path)]
-            subprocess.run(command, check=False)
-        elif sys.platform == "darwin":
-            command = ["open", str(path)]
-            if path.is_file():
-                command = ["open", "-R", str(path)]
-            subprocess.run(command, check=False)
-        else:
-            target = path if path.is_dir() else path.parent
-            subprocess.run(["xdg-open", str(target)], check=False)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.error("Failed to open explorer for %s: %s", path, exc)
-        if parent is not None:
-            QMessageBox.warning(
-                parent,
-                "Open in Explorer",
-                f"Failed to open file browser: {exc}",
-            )
-
-
-class ScaledImageLabel(QLabel):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._pixmap: QPixmap | None = None
-        self.setAlignment(Qt.AlignCenter)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setMinimumSize(200, 200)
-
-    def load_image(self, path: Path) -> bool:
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            self._pixmap = None
-            self.setText(f"Failed to load {path.name}")
-            return False
-        self._pixmap = pixmap
-        self.setText("")
-        self._update_scaled_pixmap()
-        return True
-
-    def copy_image_to_clipboard(self) -> None:
-        if self._pixmap is not None and not self._pixmap.isNull():
-            QApplication.clipboard().setPixmap(self._pixmap)
-
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override naming
-        super().resizeEvent(event)
-        self._update_scaled_pixmap()
-
-    def _update_scaled_pixmap(self) -> None:
-        if not self._pixmap or self._pixmap.isNull():
-            return
-        size = self.size()
-        if size.width() <= 0 or size.height() <= 0:
-            return
-        scaled = self._pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        super().setPixmap(scaled)
-
-
 class PandasTableModel(QAbstractTableModel):
-    """Table model for displaying pandas DataFrames with optional preview limit."""
+    """Table model for displaying DataFrames with an optional row limit."""
 
     def __init__(
         self,
@@ -190,8 +99,7 @@ class PandasTableModel(QAbstractTableModel):
     def set_preview_limit(self, limit: int | None) -> None:
         old_count = self.rowCount()
         self._preview_limit = limit
-        new_count = self.rowCount()
-        if new_count != old_count:
+        if self.rowCount() != old_count:
             self.beginResetModel()
             self.endResetModel()
 
@@ -232,7 +140,7 @@ class PandasTableModel(QAbstractTableModel):
 
 @dataclass
 class DetailMetadataCache:
-    """Track whether plot controls need to be synchronized from metadata."""
+    """Track whether plot controls need synchronization from metadata."""
 
     path: Path | None = None
     version: FileVersion | None = None
@@ -263,8 +171,7 @@ class DetailDataCache:
         self.version = None
 
     def load(self, record: LogRecord) -> pd.DataFrame | None:
-        data_path = record.data_path
-        version = FileVersion.from_path(data_path)
+        version = FileVersion.from_path(record.data_path)
         if (
             self.dataframe is not None
             and self.path == record.path
@@ -316,7 +223,8 @@ class DataViewManager:
         self.data_status_label = QLabel("")
         self.data_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.data_status_label.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Preferred
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred,
         )
         self.data_load_button = QPushButton("Show More Rows")
         self.data_load_button.setEnabled(False)
@@ -405,6 +313,82 @@ class DataViewManager:
             self.data_load_button.setEnabled(False)
 
 
+def record_watch_paths(record: LogRecord) -> list[str]:
+    paths: list[str] = [str(record.path)]
+    for extra in (
+        record.const_path,
+        record.data_path,
+        record.meta_path,
+        *record.list_image_files(),
+        *record.list_other_files(),
+    ):
+        if extra and extra.exists():
+            paths.append(str(extra))
+    return paths
+
+
+def _open_path_in_explorer(path: Path, parent: QWidget | None = None) -> None:
+    try:
+        if sys.platform.startswith("win"):
+            command = ["explorer", str(path)]
+            if path.is_file():
+                command = ["explorer", "/select,", str(path)]
+            subprocess.run(command, check=False)
+        elif sys.platform == "darwin":
+            command = ["open", str(path)]
+            if path.is_file():
+                command = ["open", "-R", str(path)]
+            subprocess.run(command, check=False)
+        else:
+            target = path if path.is_dir() else path.parent
+            subprocess.run(["xdg-open", str(target)], check=False)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Failed to open explorer for %s: %s", path, exc)
+        if parent is not None:
+            QMessageBox.warning(
+                parent,
+                "Open in Explorer",
+                f"Failed to open file browser: {exc}",
+            )
+
+
+class ScaledImageLabel(QLabel):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pixmap: QPixmap | None = None
+        self.setAlignment(Qt.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(200, 200)
+
+    def load_image(self, path: Path) -> bool:
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self._pixmap = None
+            self.setText(f"Failed to load {path.name}")
+            return False
+        self._pixmap = pixmap
+        self.setText("")
+        self._update_scaled_pixmap()
+        return True
+
+    def copy_image_to_clipboard(self) -> None:
+        if self._pixmap is not None and not self._pixmap.isNull():
+            QApplication.clipboard().setPixmap(self._pixmap)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override naming
+        super().resizeEvent(event)
+        self._update_scaled_pixmap()
+
+    def _update_scaled_pixmap(self) -> None:
+        if not self._pixmap or self._pixmap.isNull():
+            return
+        size = self.size()
+        if size.width() <= 0 or size.height() <= 0:
+            return
+        scaled = self._pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        super().setPixmap(scaled)
+
+
 class RecordDetailView(QWidget):
     """Reusable record detail widget with tabs and preview controls."""
 
@@ -423,9 +407,7 @@ class RecordDetailView(QWidget):
         self._file_open_callback = file_open_callback
         self._enable_tab_shortcuts = enable_tab_shortcuts
         self._shortcuts: list[QAction] = []
-        self._detail_watcher = QFileSystemWatcher(self)
-        self._detail_watcher.directoryChanged.connect(self._schedule_detail_refresh)
-        self._detail_watcher.fileChanged.connect(self._schedule_detail_refresh)
+        self._detail_watcher = self._create_detail_watcher()
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(REFRESH_DEBOUNCE_MS)
@@ -521,7 +503,9 @@ class RecordDetailView(QWidget):
         detail_top.addWidget(self.detail_label)
         self.watch_checkbox = QCheckBox("auto update")
         self.watch_checkbox.setChecked(True)
-        self.watch_checkbox.setToolTip("Automatically refresh this detail view when files change")
+        self.watch_checkbox.setToolTip(
+            "Automatically refresh this detail view when files change"
+        )
         self.watch_checkbox.toggled.connect(self._on_watch_toggled)
         detail_top.addWidget(self.watch_checkbox)
         detail_layout.addLayout(detail_top)
@@ -593,11 +577,20 @@ class RecordDetailView(QWidget):
     def _schedule_detail_refresh(self) -> None:
         self._refresh_timer.start()
 
+    def _create_detail_watcher(self) -> QFileSystemWatcher:
+        watcher = QFileSystemWatcher(self)
+        watcher.directoryChanged.connect(self._schedule_detail_refresh)
+        watcher.fileChanged.connect(self._schedule_detail_refresh)
+        return watcher
+
     def _clear_detail_watcher(self) -> None:
         try:
             paths = self._detail_watcher.files() + self._detail_watcher.directories()
-            if paths:
-                self._detail_watcher.removePaths(paths)
+            failed_paths = self._detail_watcher.removePaths(paths) if paths else []
+            if failed_paths:
+                old_watcher = self._detail_watcher
+                self._detail_watcher = self._create_detail_watcher()
+                old_watcher.deleteLater()
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -692,8 +685,6 @@ class RecordDetailWindow(QMainWindow):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        if not WINDOW_ICON.isNull():
-            self.setWindowIcon(WINDOW_ICON)
         self.resize(900, 600)
 
         self.detail_view = RecordDetailView(parent=self)

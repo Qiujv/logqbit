@@ -44,17 +44,20 @@ from PySide6.QtWidgets import (
 )
 from send2trash import send2trash
 
-from ..catalog import LogCatalog, export_records
-from .detail_view import RecordDetailView, RecordDetailWindow
-from .plotter import warmup_plotter_jit
+from logqbit.catalog import LogCatalog, export_records
+
+from logqbit.gui.browser.detail import RecordDetailView, RecordDetailWindow
+from logqbit.gui.plot.mesh import warmup_plotter_jit
 
 if TYPE_CHECKING:
-    from ..catalog import LogRecord
+    from logqbit.catalog import LogRecord
 
 logger = logging.getLogger(__name__)
 
 # Constants
 REFRESH_DEBOUNCE_MS = 250
+DISABLE_RECENT_DIRS_ENV = "LOGQBIT_BROWSER_DISABLE_RECENT_DIRS"
+DISABLE_JIT_WARMUP_ENV = "LOGQBIT_BROWSER_DISABLE_JIT_WARMUP"
 
 COL_ID = 0
 COL_TITLE = 1
@@ -68,48 +71,13 @@ SETTINGS_ORG = "LogQbit"
 SETTINGS_APP = "LogBrowser"
 SETTINGS_RECENT_DIRS_KEY = "recent/directories"
 SETTINGS_THEME_KEY = "ui/theme"
-DISABLE_RECENT_DIRS_ENV = "LOGQBIT_BROWSER_DISABLE_RECENT_DIRS"
-DISABLE_JIT_WARMUP_ENV = "LOGQBIT_BROWSER_DISABLE_JIT_WARMUP"
 
 _plotter_jit_warmup_started = False
 
-def _load_window_icon() -> QIcon:
-    try:
-        icon_path = files("logqbit") / "assets" / "browser.svg"
-        icon = QIcon(str(icon_path))
-        if not icon.isNull():
-            return icon
-    except Exception as exc:
-        logger.debug(f"Failed to load window icon: {exc}")
-    return QIcon()  # Return null icon as fallback
-
-
-WINDOW_ICON = _load_window_icon()
-
-
-def _start_plotter_jit_warmup() -> None:
-    global _plotter_jit_warmup_started
-    if _plotter_jit_warmup_started:
-        return
-    if os.environ.get(DISABLE_JIT_WARMUP_ENV):
-        return
-    _plotter_jit_warmup_started = True
-
-    def run_warmup() -> None:
-        try:
-            warmup_plotter_jit()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("Failed to warm up plotter JIT: %s", exc)
-
-    thread = threading.Thread(
-        target=run_warmup,
-        name="logqbit-plotter-jit-warmup",
-        daemon=True,
-    )
-    thread.start()
-
 
 class LogListTableModel(QAbstractTableModel):
+    """Table model for the browser's record list."""
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._records: list[LogRecord] = []
@@ -158,69 +126,58 @@ class LogListTableModel(QAbstractTableModel):
             return None
 
         record = self._records[index.row()]
-        col = index.column()
-
-        # Display text
+        column = index.column()
         if role == Qt.DisplayRole:
-            if col == COL_ID:
+            if column == COL_ID:
                 return record.log_id
-            elif col == COL_TITLE:
-                star_count = max(record.star, 0)
-                star_prefix = "⭐" * star_count
+            if column == COL_TITLE:
                 parts: list[str] = []
                 if record.trash:
                     parts.append("🗑️")
+                star_prefix = "⭐" * max(record.star, 0)
                 if star_prefix:
                     parts.append(star_prefix)
-                title_text = record.title or "(untitled)"
-                parts.append(title_text)
+                parts.append(record.title or "(untitled)")
                 return " ".join(parts)
-            elif col == COL_ROWS:
+            if column == COL_ROWS:
                 return f"{record.row_count:,}"
-            elif col == COL_CREATE_TIME:
+            if column == COL_CREATE_TIME:
                 return record.create_time
-            elif col == COL_CREATE_MACHINE:
+            if column == COL_CREATE_MACHINE:
                 return record.create_machine
-            elif col == COL_PLOT_AXES:
+            if column == COL_PLOT_AXES:
                 if record.plot_axes:
-                    n_axes = len(record.plot_axes)
-                    return ",".join([str(n_axes)] + [i[:3] for i in record.plot_axes])
-                else:
-                    return ""
+                    return ",".join(
+                        [str(len(record.plot_axes))]
+                        + [axis[:3] for axis in record.plot_axes]
+                    )
+                return ""
 
-        # Font styling
-        elif role == Qt.FontRole and col == COL_TITLE:
-            star_count = max(record.star, 0)
-            is_bold = star_count > 0
-            is_trash = record.trash
-            if is_bold and is_trash:
+        if role == Qt.FontRole and column == COL_TITLE:
+            is_bold = max(record.star, 0) > 0
+            if is_bold and record.trash:
                 return self._bold_strikeout_font
-            elif is_bold:
+            if is_bold:
                 return self._bold_font
-            elif is_trash:
+            if record.trash:
                 return self._strikeout_font
             return None
 
-        # Tooltip
-        elif role == Qt.ToolTipRole:
-            if col == COL_TITLE:
+        if role == Qt.ToolTipRole:
+            if column == COL_TITLE:
                 return record.title or "(untitled)"
-            elif col == COL_PLOT_AXES:
+            if column == COL_PLOT_AXES:
                 return (
                     ", ".join(record.plot_axes)
                     if record.plot_axes
                     else "(no plot axes)"
                 )
-
-        # User data - store record reference
-        elif role == Qt.UserRole and col == COL_ID:
+        if role == Qt.UserRole and column == COL_ID:
             return record
-
-        elif role == SORT_ROLE:
-            if col == COL_ROWS:
+        if role == SORT_ROLE:
+            if column == COL_ROWS:
                 return record.row_count
             return self.data(index, Qt.DisplayRole)
-
         return None
 
     def headerData(  # noqa: N802
@@ -238,9 +195,14 @@ class LogListTableModel(QAbstractTableModel):
 
 
 class SettingsManager:
-    def __init__(self):
+    """Persist browser preferences and recent directories."""
+
+    def __init__(self) -> None:
         self._settings = QSettings(
-            QSettings.IniFormat, QSettings.UserScope, SETTINGS_ORG, SETTINGS_APP
+            QSettings.IniFormat,
+            QSettings.UserScope,
+            SETTINGS_ORG,
+            SETTINGS_APP,
         )
         self._recent_directories: list[Path] = []
 
@@ -269,16 +231,15 @@ class SettingsManager:
     def save_recent_directories(self, directories: list[Path]) -> None:
         self._recent_directories = directories[:10]
         self._settings.setValue(
-            SETTINGS_RECENT_DIRS_KEY, [str(path) for path in self._recent_directories]
+            SETTINGS_RECENT_DIRS_KEY,
+            [str(path) for path in self._recent_directories],
         )
         self._settings.sync()
 
     def update_recent_directories(self, path: Path) -> list[Path]:
         if os.environ.get(DISABLE_RECENT_DIRS_ENV):
             return self.load_recent_directories()
-
         self.load_recent_directories()
-
         resolved = Path(path)
         entries = [resolved]
         for existing in self._recent_directories:
@@ -286,15 +247,12 @@ class SettingsManager:
                 entries.append(existing)
             if len(entries) >= 10:
                 break
-        self._recent_directories = entries
-        self.save_recent_directories(self._recent_directories)
+        self.save_recent_directories(entries)
         return self._recent_directories
 
     def load_theme_mode(self) -> str:
         saved_mode = self._settings.value(SETTINGS_THEME_KEY, "system")
-        if saved_mode in ThemeManager.THEME_MODES:
-            return saved_mode
-        return "system"
+        return saved_mode if saved_mode in ThemeManager.THEME_MODES else "system"
 
     def save_theme_mode(self, mode: str) -> None:
         self._settings.setValue(SETTINGS_THEME_KEY, mode)
@@ -302,11 +260,13 @@ class SettingsManager:
 
 
 class ThemeManager:
+    """Apply the browser's light, dark, or system color theme."""
+
     THEME_MODES = ["light", "dark", "system"]
 
     def __init__(self, app: QApplication):
         self.app = app
-        self._system_palette = app.palette() if app else QPalette()
+        self._system_palette = app.palette()
         self._current_mode = "system"
 
     def apply_theme(self, mode: str) -> None:
@@ -319,7 +279,6 @@ class ThemeManager:
             can_use_color_scheme = hasattr(hints, "setColorScheme")
 
         if can_use_color_scheme:
-            # Qt 6.5+ with ColorScheme support
             unknown_scheme = getattr(Qt.ColorScheme, "Unknown", Qt.ColorScheme.Light)
             scheme_map = {
                 "dark": Qt.ColorScheme.Dark,
@@ -329,66 +288,88 @@ class ThemeManager:
             hints.setColorScheme(scheme_map.get(mode, unknown_scheme))
             palette = self._system_palette
         else:
-            # Fallback to manual palette creation
-            palette_map = {
+            palette = {
                 "dark": self._create_dark_palette(),
                 "light": self._create_light_palette(),
                 "system": self._system_palette,
-            }
-            palette = palette_map.get(mode, self._system_palette)
+            }.get(mode, self._system_palette)
 
         self.app.setPalette(palette)
         self.app.setStyleSheet("")
 
     def _create_light_palette(self) -> QPalette:
         palette = QPalette()
-        palette.setColor(QPalette.Window, QColor(250, 250, 250))
-        palette.setColor(QPalette.WindowText, QColor(30, 30, 30))
-        palette.setColor(QPalette.Base, QColor(255, 255, 255))
-        palette.setColor(QPalette.AlternateBase, QColor(245, 245, 245))
-        palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-        palette.setColor(QPalette.ToolTipText, QColor(30, 30, 30))
-        palette.setColor(QPalette.Text, QColor(30, 30, 30))
-        palette.setColor(QPalette.Button, QColor(245, 245, 245))
-        palette.setColor(QPalette.ButtonText, QColor(30, 30, 30))
-        palette.setColor(QPalette.BrightText, QColor(255, 0, 0))
-        palette.setColor(QPalette.Link, QColor(0, 122, 204))
-        palette.setColor(QPalette.Highlight, QColor(51, 153, 255))
-        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+        colors = {
+            QPalette.Window: (250, 250, 250),
+            QPalette.WindowText: (30, 30, 30),
+            QPalette.Base: (255, 255, 255),
+            QPalette.AlternateBase: (245, 245, 245),
+            QPalette.ToolTipBase: (255, 255, 255),
+            QPalette.ToolTipText: (30, 30, 30),
+            QPalette.Text: (30, 30, 30),
+            QPalette.Button: (245, 245, 245),
+            QPalette.ButtonText: (30, 30, 30),
+            QPalette.BrightText: (255, 0, 0),
+            QPalette.Link: (0, 122, 204),
+            QPalette.Highlight: (51, 153, 255),
+            QPalette.HighlightedText: (255, 255, 255),
+        }
+        for role, color in colors.items():
+            palette.setColor(role, QColor(*color))
         return palette
 
     def _create_dark_palette(self) -> QPalette:
         palette = QPalette()
-        palette.setColor(QPalette.Window, QColor(37, 37, 38))
-        palette.setColor(QPalette.WindowText, QColor(220, 220, 220))
-        palette.setColor(QPalette.Base, QColor(30, 30, 30))
-        palette.setColor(QPalette.AlternateBase, QColor(45, 45, 45))
-        palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-        palette.setColor(QPalette.ToolTipText, QColor(255, 255, 255))
-        palette.setColor(QPalette.Text, QColor(220, 220, 220))
-        palette.setColor(QPalette.Button, QColor(45, 45, 45))
-        palette.setColor(QPalette.ButtonText, QColor(220, 220, 220))
-        palette.setColor(QPalette.BrightText, QColor(255, 0, 0))
-        palette.setColor(QPalette.Link, QColor(100, 160, 220))
-        palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
-        palette.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
+        colors = {
+            QPalette.Window: (37, 37, 38),
+            QPalette.WindowText: (220, 220, 220),
+            QPalette.Base: (30, 30, 30),
+            QPalette.AlternateBase: (45, 45, 45),
+            QPalette.ToolTipBase: (255, 255, 255),
+            QPalette.ToolTipText: (255, 255, 255),
+            QPalette.Text: (220, 220, 220),
+            QPalette.Button: (45, 45, 45),
+            QPalette.ButtonText: (220, 220, 220),
+            QPalette.BrightText: (255, 0, 0),
+            QPalette.Link: (100, 160, 220),
+            QPalette.Highlight: (42, 130, 218),
+            QPalette.HighlightedText: (0, 0, 0),
+        }
+        for role, color in colors.items():
+            palette.setColor(role, QColor(*color))
         return palette
 
     def get_theme_button_emoji(self, mode: str) -> str:
-        emoji_map = {
-            "light": "🌝",
-            "dark": "🌚",
-            "system": "🌗",
-        }
-        return emoji_map.get(mode, "🌗")
+        return {"light": "🌝", "dark": "🌚", "system": "🌗"}.get(mode, "🌗")
 
     def get_theme_tooltip(self, mode: str) -> str:
-        tooltip_map = {
+        return {
             "light": "Light mode",
             "dark": "Dark mode",
             "system": "Follow system theme",
-        }
-        return tooltip_map.get(mode, "Follow system theme")
+        }.get(mode, "Follow system theme")
+
+
+def _start_plotter_jit_warmup() -> None:
+    global _plotter_jit_warmup_started
+    if _plotter_jit_warmup_started:
+        return
+    if os.environ.get(DISABLE_JIT_WARMUP_ENV):
+        return
+    _plotter_jit_warmup_started = True
+
+    def run_warmup() -> None:
+        try:
+            warmup_plotter_jit()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to warm up plotter JIT: %s", exc)
+
+    thread = threading.Thread(
+        target=run_warmup,
+        name="logqbit-plotter-jit-warmup",
+        daemon=True,
+    )
+    thread.start()
 
 
 class LogBrowserWindow(QMainWindow):
@@ -396,8 +377,6 @@ class LogBrowserWindow(QMainWindow):
         self, directory: Path | None = None, parent: QWidget | None = None
     ) -> None:
         super().__init__(parent)
-        if not WINDOW_ICON.isNull():
-            self.setWindowIcon(WINDOW_ICON)
         self.resize(1200, 700)
 
         self.settings_manager = SettingsManager()
@@ -540,9 +519,7 @@ class LogBrowserWindow(QMainWindow):
             parent=parent,
             enable_tab_shortcuts=False,
         )
-        self.detail_view.record_refreshed.connect(
-            self._on_detail_record_refreshed
-        )
+        self.detail_view.record_refreshed.connect(self._on_detail_record_refreshed)
         return self.detail_view
 
     def _setup_shortcuts(self) -> None:
@@ -650,11 +627,7 @@ class LogBrowserWindow(QMainWindow):
         row_count = self.table_proxy.rowCount()
         if row_count:
             selected_record = next(
-                (
-                    record
-                    for record in records
-                    if record.path == previous_path
-                ),
+                (record for record in records if record.path == previous_path),
                 None,
             )
             if selected_record is None:
@@ -941,7 +914,11 @@ class LogBrowserWindow(QMainWindow):
         chosen = QFileDialog.getExistingDirectory(
             self,
             "Select new parent folder for export",
-            str(self._base_dir.parent if self._base_dir.parent.exists() else self._base_dir),
+            str(
+                self._base_dir.parent
+                if self._base_dir.parent.exists()
+                else self._base_dir
+            ),
         )
         if not chosen:
             return
@@ -1064,6 +1041,9 @@ def ensure_application() -> QApplication:
     if app is None:
         app = QApplication(sys.argv)
         app.setApplicationName("Logqbit Log Browser")
+        icon = QIcon(str(files("logqbit") / "assets" / "browser.svg"))
+        if not icon.isNull():
+            app.setWindowIcon(icon)
     return app
 
 

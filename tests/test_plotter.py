@@ -11,14 +11,16 @@ import pytest
 from PySide6.QtCore import QRectF
 from PySide6.QtWidgets import QSizePolicy
 
-from logqbit.gui.plot_fit import fit_exponential, fit_quadratic
-from logqbit.gui.plotter import (
-    PlotManager,
-    TagBar,
+from logqbit.gui.plot.fit import fit_exponential, fit_quadratic
+from logqbit.gui.plot.mesh import (
     _build_grids_rect,
     _is_lexsorted,
-    _partition_columns,
     warmup_plotter_jit,
+)
+from logqbit.gui.plot.widget import (
+    PlotManager,
+    TagBar,
+    _partition_columns,
 )
 
 
@@ -173,7 +175,7 @@ class TestPlotManagerFitAndColorBar:
                 observed["title"] = self.plot_item.titleLabel.text
                 observed["visible"] = self.plot_item.titleLabel.isVisible()
 
-        monkeypatch.setattr("logqbit.gui.plotter.ImageExporter", FakeExporter)
+        monkeypatch.setattr("logqbit.gui.plot.widget.ImageExporter", FakeExporter)
 
         manager.copy_plot_to_clipboard()
 
