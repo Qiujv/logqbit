@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import html
 import logging
 from collections.abc import Sequence
 from importlib.resources import files
@@ -23,12 +24,15 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 if TYPE_CHECKING:
     from ..catalog import LogRecord
+
+from .plot_fit import FitController, FitViewBox
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +299,7 @@ class PlotManager:
         self._plot_frame: pd.DataFrame | None = None
         self._suppress_updates = False
         self._needs_refresh = False
+        self._color_bar: pg.ColorBarItem | None = None
         self.widget = self._create_widget(parent)
 
     def _create_widget(self, parent: QWidget | None = None) -> QWidget:
@@ -310,7 +315,9 @@ class PlotManager:
         layout.addWidget(self.tag_bar)
 
         # Plot widget
-        self.plot_widget = pg.PlotWidget()
+        self.fit_view_box = FitViewBox()
+        plot_item = pg.PlotItem(viewBox=self.fit_view_box)
+        self.plot_widget = pg.PlotWidget(plotItem=plot_item)
         self.plot_widget.setBackground("w")
         self.plot_widget.useOpenGL(True)
         self.plot_widget.setMinimumHeight(220)
@@ -328,22 +335,66 @@ class PlotManager:
         status_row = QHBoxLayout()
         self.plot_status_label = QLabel("No data to plot.")
         self.plot_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        status_row.addWidget(self.plot_status_label)
-        status_row.addStretch(1)
+        self.plot_status_label.setSizePolicy(
+            QSizePolicy.Ignored,
+            QSizePolicy.Preferred,
+        )
+        status_row.addWidget(self.plot_status_label, stretch=1)
+        self.exponential_fit_button = QPushButton("fit exp")
+        self.exponential_fit_button.setCheckable(True)
+        self._make_button_compact(self.exponential_fit_button)
+        status_row.addWidget(self.exponential_fit_button)
+        self.quadratic_fit_button = QPushButton("fit x²")
+        self.quadratic_fit_button.setCheckable(True)
+        self._make_button_compact(self.quadratic_fit_button)
+        status_row.addWidget(self.quadratic_fit_button)
         self.copy_plot_button = QPushButton("Copy plot")
         self.copy_plot_button.setToolTip("Copy the current plot view to the clipboard")
         self.copy_plot_button.clicked.connect(self.copy_plot_to_clipboard)
+        self._make_button_compact(self.copy_plot_button)
         status_row.addWidget(self.copy_plot_button)
         layout.addLayout(status_row)
 
+        self.fit_controller = FitController(
+            self.plot_widget,
+            self.fit_view_box,
+            self.plot_status_label,
+            self.exponential_fit_button,
+            self.quadratic_fit_button,
+        )
         return container
+
+    @staticmethod
+    def _make_button_compact(button: QPushButton) -> None:
+        text_width = button.fontMetrics().horizontalAdvance(button.text())
+        button.setFixedWidth(text_width + 24)
 
     def copy_plot_to_clipboard(self) -> None:
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is None:
             return
-        exporter = ImageExporter(plot_item)
-        exporter.export(copy=True)
+
+        title_label = plot_item.titleLabel
+        previous_title = title_label.text
+        previous_options = dict(title_label.opts)
+        title_was_visible = title_label.isVisible()
+        record = self._plot_record
+        if record is not None:
+            plot_item.setTitle(
+                html.escape(str(record.path)),
+                color="k",
+                size="9pt",
+            )
+            plot_item.layout.activate()
+        try:
+            exporter = ImageExporter(plot_item)
+            exporter.export(copy=True)
+        finally:
+            if title_was_visible:
+                plot_item.setTitle(previous_title, **previous_options)
+            else:
+                plot_item.setTitle(None)
+            plot_item.layout.activate()
 
     # ── record loading ────────────────────────────────────────────────────────
 
@@ -360,8 +411,7 @@ class PlotManager:
         self._plot_record = None
         self._plot_frame = None
         self.tag_bar.set_columns([], [], [])
-        self.plot_widget.clear()
-        self.plot_status_label.setText(message)
+        self._clear_plot(message)
         self._needs_refresh = False
 
     def mark_needs_refresh(self) -> None:
@@ -400,8 +450,7 @@ class PlotManager:
         self._plot_frame = frame
 
         if frame is None or frame.empty or not len(frame.columns):
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No columns available to plot.")
+            self._clear_plot("No columns available to plot.")
             self._needs_refresh = False
         elif defer:
             self._needs_refresh = True
@@ -422,29 +471,78 @@ class PlotManager:
         elif len(axes) >= 2 and len(fields) >= 1:
             self._refresh_plot_2d(axes[0], axes[1], fields[0])
         else:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No data to plot.")
+            self._clear_plot("No data to plot.")
+
+    def _clear_plot(
+        self,
+        message: str | None = None,
+        *,
+        hide_fit_buttons: bool = True,
+    ) -> None:
+        self.fit_controller.disable("Fit is available for a single 1D field.")
+        if hide_fit_buttons:
+            self.fit_controller.set_visible(False)
+        self.plot_widget.clear()
+        self._hide_color_bar()
+        if message is not None:
+            self.plot_status_label.setText(message)
+
+    def _hide_color_bar(self) -> None:
+        if self._color_bar is None:
+            return
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is not None:
+            plot_item.layout.removeItem(self._color_bar)
+        self._color_bar.setParentItem(None)
+        self._color_bar.deleteLater()
+        self._color_bar = None
+
+    def _show_color_bar(
+        self,
+        mesh: pg.PColorMeshItem,
+        levels: tuple[float, float],
+    ) -> None:
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is None:
+            return
+        if self._color_bar is None:
+            self._color_bar = plot_item.addColorBar(
+                mesh,
+                values=levels,
+                width=12,
+                colorMap=self.cmap,
+                interactive=False,
+                colorMapMenu=False,
+                pen="k",
+            )
+            self._color_bar.axis.setPen("k")
+            self._color_bar.axis.setTextPen("k")
+            self._color_bar.axis.setWidth(38)
+            self._color_bar.getAxis("left").setWidth(1)
+            plot_item.layout.setColumnFixedWidth(4, 2)
+            plot_item.layout.setColumnSpacing(4, 0)
+        else:
+            self._color_bar.setLevels(levels)
+            self._color_bar.setImageItem(mesh)
 
     def _refresh_plot_1d(self, x_col: str, y_cols: list[str]) -> None:
         record = self._plot_record
         if record is None:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No log selected.")
+            self._clear_plot("No log selected.")
             return
 
         frame = self._plot_frame
         if frame is None or frame.empty:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No data to plot.")
+            self._clear_plot("No data to plot.")
             return
 
         if x_col not in frame.columns:
-            self.plot_widget.clear()
-            self.plot_status_label.setText(f"Column '{x_col}' not in data.")
+            self._clear_plot(f"Column '{x_col}' not in data.")
             return
 
         x_values = pd.to_numeric(frame[x_col], errors="coerce")
-        self.plot_widget.clear()
+        self._clear_plot(hide_fit_buttons=False)
+        self.fit_controller.set_visible(True)
 
         COLORS = [
             "#1E90FF",
@@ -457,6 +555,7 @@ class PlotManager:
             "#8B4513",
         ]
         plotted = 0
+        single_series: tuple[np.ndarray, np.ndarray, str] | None = None
         for i, y_col in enumerate(y_cols):
             if y_col not in frame.columns:
                 continue
@@ -482,11 +581,17 @@ class PlotManager:
                 self.plot_widget.plot(
                     df["x"].values, df["y"].values, pen=pen, name=y_col
                 )
+            if len(y_cols) == 1:
+                single_series = (
+                    df["x"].to_numpy(dtype=float),
+                    df["y"].to_numpy(dtype=float),
+                    y_col,
+                    color,
+                )
             plotted += 1
 
         if plotted == 0:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No numeric data to plot.")
+            self._clear_plot("No numeric data to plot.")
             return
 
         plot_item = self.plot_widget.getPlotItem()
@@ -496,24 +601,28 @@ class PlotManager:
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", ", ".join(y_cols))
         self.plot_status_label.setText(f"1D plot: {x_col} vs {', '.join(y_cols[:3])}")
+        if single_series is not None:
+            self.fit_controller.set_series(*single_series)
+        else:
+            self.fit_controller.disable(
+                "Keep exactly one field in the TagBar to enable fitting."
+            )
 
     def _refresh_plot_2d(self, x_col: str, y_col: str, z_col: str) -> None:
+        self.fit_controller.set_visible(False)
         record = self._plot_record
         if record is None:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No log selected.")
+            self._clear_plot("No log selected.")
             return
 
         frame = self._plot_frame
         if frame is None or frame.empty:
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No data to plot.")
+            self._clear_plot("No data to plot.")
             return
 
         for col in (x_col, y_col, z_col):
             if col not in frame.columns:
-                self.plot_widget.clear()
-                self.plot_status_label.setText(f"Column '{col}' not in data.")
+                self._clear_plot(f"Column '{col}' not in data.")
                 return
 
         sub = frame[[x_col, y_col, z_col]]
@@ -524,8 +633,7 @@ class PlotManager:
 
         mask = ~np.isnan(arr).any(axis=1)
         if not mask.any():
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No numeric data to plot.")
+            self._clear_plot("No numeric data to plot.")
             return
 
         filtered = arr[mask]
@@ -574,9 +682,24 @@ class PlotManager:
             step_c,
         )
 
+        self.fit_controller.disable("Fit is only available for 1D plots.")
         self.plot_widget.clear()
-        pcm = pg.PColorMeshItem(x_corners, y_corners, z_grid, colorMap=self.cmap)
+        z_min = float(np.min(z_data))
+        z_max = float(np.max(z_data))
+        if z_min == z_max:
+            padding = abs(z_min) * 0.01 or 1.0
+            z_min -= padding
+            z_max += padding
+        levels = (z_min, z_max)
+        pcm = pg.PColorMeshItem(
+            x_corners,
+            y_corners,
+            z_grid,
+            colorMap=self.cmap,
+            levels=levels,
+        )
         self.plot_widget.addItem(pcm)
+        self._show_color_bar(pcm, levels)
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", y_col)
 
