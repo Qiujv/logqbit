@@ -15,6 +15,7 @@ from logqbit.gui.plot.fit import fit_exponential, fit_quadratic
 from logqbit.gui.plot.mesh import (
     _build_grids_rect,
     _is_lexsorted,
+    build_plot_mesh,
     warmup_plotter_jit,
 )
 from logqbit.gui.plot.widget import (
@@ -141,6 +142,7 @@ class TestPlotManagerFitAndColorBar:
         for button in (
             manager.exponential_fit_button,
             manager.quadratic_fit_button,
+            manager.cursor_button,
             manager.copy_plot_button,
         ):
             expected_width = button.fontMetrics().horizontalAdvance(button.text()) + 24
@@ -156,6 +158,27 @@ class TestPlotManagerFitAndColorBar:
         manager._refresh_plot_1d("x", ["a", "b"])
         assert not manager.exponential_fit_button.isEnabled()
         assert not manager.quadratic_fit_button.isEnabled()
+        manager.widget.deleteLater()
+
+    def test_1d_cursor_and_fit_modes_are_mutually_exclusive(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {"x": [0.0, 1.0, 2.0], "z": [1.0, 2.0, 3.0]}
+        )
+        manager._refresh_plot_1d("x", ["z"])
+
+        manager.cursor_button.click()
+        assert manager.cursor_button.isChecked()
+        assert manager.cursor_controller._vertical_line is not None
+
+        manager.exponential_fit_button.click()
+        assert not manager.cursor_button.isChecked()
+        assert manager.exponential_fit_button.isChecked()
+
+        manager.cursor_button.click()
+        assert manager.cursor_button.isChecked()
+        assert not manager.exponential_fit_button.isChecked()
         manager.widget.deleteLater()
 
     def test_copy_plot_temporarily_adds_record_path_to_title(
@@ -211,6 +234,84 @@ class TestPlotManagerFitAndColorBar:
         manager._refresh_plot_1d("x", ["z"])
         assert manager._color_bar is None
         manager.widget.deleteLater()
+
+    def test_2d_cursor_replaces_color_bar_and_target_moves_both_lines(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {
+                "x": [0.0, 0.0, 1.0, 1.0],
+                "y": [0.0, 1.0, 0.0, 1.0],
+                "z": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+        manager._refresh_plot_2d("x", "y", "z")
+        assert manager.plot_layout.columnStretch(1) == 0
+        assert manager.plot_layout.rowStretch(1) == 0
+
+        manager.cursor_button.click()
+        controller = manager.cursor_controller
+        assert manager._color_bar is None
+        assert not manager.horizontal_section_widget.isHidden()
+        assert not manager.vertical_section_widget.isHidden()
+        assert manager.plot_layout.columnStretch(1) == 1
+        assert manager.plot_layout.rowStretch(1) == 1
+
+        controller._target.setPos(0.1, 0.2)
+        assert controller._vertical_line.value() == pytest.approx(0.1)
+        assert controller._horizontal_line.value() == pytest.approx(0.2)
+        assert controller._horizontal_curve.isVisible() is False
+        assert controller._vertical_curve.isVisible() is False
+        assert not manager.section_readout.text()
+        assert not manager.horizontal_section_widget.isHidden()
+
+        controller._finish_2d_drag()
+        assert controller._vertical_line.value() == pytest.approx(0.0)
+        assert controller._horizontal_line.value() == pytest.approx(0.0)
+        assert controller._horizontal_curve.isVisible()
+        assert controller._vertical_curve.isVisible()
+        assert len(controller._horizontal_curve.xData) == 2
+        assert "z = 1" in manager.section_readout.text()
+
+        manager.cursor_button.click()
+        assert manager._color_bar is not None
+        assert manager.horizontal_section_widget.isHidden()
+        assert manager.vertical_section_widget.isHidden()
+        assert manager.plot_layout.columnStretch(1) == 0
+        assert manager.plot_layout.rowStretch(1) == 0
+        manager.widget.deleteLater()
+
+
+class TestPlotMeshSections:
+    def test_sections_use_logical_columns_with_descending_and_ragged_y(self) -> None:
+        mesh = build_plot_mesh(
+            np.array([0.0, 0.0, 0.0, 1.0, 1.0]),
+            np.array([2.0, 1.0, 0.0, 3.0, 1.0]),
+            np.array([20.0, 10.0, 0.0, 31.0, 11.0]),
+        )
+
+        x, y, z = mesh.vertical_section(0.8)
+        assert x == pytest.approx(1.0)
+        assert y == pytest.approx([3.0, 1.0])
+        assert z == pytest.approx([31.0, 11.0])
+
+        section_x, section_z = mesh.horizontal_section(1.2)
+        assert section_x == pytest.approx([0.0, 1.0])
+        assert section_z == pytest.approx([10.0, 11.0])
+
+        assert mesh.nearest_point(0.8, 2.4) == pytest.approx((1.0, 3.0, 31.0))
+
+    def test_horizontal_section_does_not_clamp_outside_each_column(self) -> None:
+        mesh = build_plot_mesh(
+            np.array([0.0, 0.0, 1.0, 1.0]),
+            np.array([0.0, 1.0, 2.0, 3.0]),
+            np.array([10.0, 11.0, 22.0, 23.0]),
+        )
+
+        _, z = mesh.horizontal_section(0.5)
+
+        assert z[0] == pytest.approx(10.0)
+        assert np.isnan(z[1])
 
 
 class TestIsLexsorted:

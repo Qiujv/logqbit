@@ -19,6 +19,63 @@ class PlotMeshData:
     point_count: int
     x_column_count: int
     max_y_count: int
+    x_values: np.ndarray
+    column_sizes: np.ndarray
+
+    def vertical_section(self, x: float) -> tuple[float, np.ndarray, np.ndarray]:
+        """Return the logical data column nearest to ``x``."""
+        column = _nearest_monotonic_index(self.x_values, x)
+        size = int(self.column_sizes[column])
+        render_column = 2 * column
+        return (
+            float(self.x_values[column]),
+            self.y_corners[:size, render_column],
+            self.z_grid[:size, render_column],
+        )
+
+    def horizontal_section(self, y: float) -> tuple[np.ndarray, np.ndarray]:
+        """Return one nearest-y value per logical x column."""
+        z_values = np.full(self.x_column_count, np.nan)
+        for column in range(self.x_column_count):
+            size = int(self.column_sizes[column])
+            render_column = 2 * column
+            column_y = self.y_corners[:size, render_column]
+            if y < min(column_y[0], column_y[-1]) or y > max(
+                column_y[0], column_y[-1]
+            ):
+                continue
+            row = _nearest_monotonic_index(column_y, y)
+            z_values[column] = self.z_grid[row, render_column]
+        return self.x_values, z_values
+
+    def nearest_point(self, x: float, y: float) -> tuple[float, float, float]:
+        """Snap an arbitrary position to the nearest point in its x column."""
+        column = _nearest_monotonic_index(self.x_values, x)
+        size = int(self.column_sizes[column])
+        render_column = 2 * column
+        column_y = self.y_corners[:size, render_column]
+        row = _nearest_monotonic_index(column_y, y)
+        return (
+            float(self.x_values[column]),
+            float(column_y[row]),
+            float(self.z_grid[row, render_column]),
+        )
+
+
+def _nearest_monotonic_index(values: np.ndarray, target: float) -> int:
+    """Find a nearest value in an ascending or descending array."""
+    ascending = values[-1] >= values[0]
+    ordered = values if ascending else -values
+    ordered_target = target if ascending else -target
+    right = int(np.searchsorted(ordered, ordered_target))
+    if right == 0:
+        return 0
+    if right == len(values):
+        return len(values) - 1
+    left = right - 1
+    if abs(values[left] - target) <= abs(values[right] - target):
+        return left
+    return right
 
 
 @njit(cache=True)
@@ -156,6 +213,8 @@ def build_plot_mesh(
         point_count=point_count,
         x_column_count=x_column_count,
         max_y_count=max_y_count,
+        x_values=unique_x,
+        column_sizes=column_sizes,
     )
 
 

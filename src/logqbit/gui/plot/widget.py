@@ -14,6 +14,7 @@ from pyqtgraph.exporters import ImageExporter
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListView,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 if TYPE_CHECKING:
     from logqbit.catalog import LogRecord
 
+from logqbit.gui.plot.cursor import CursorController, CursorSeries
 from logqbit.gui.plot.fit import FitController, FitViewBox
 from logqbit.gui.plot.mesh import build_plot_mesh
 
@@ -190,6 +192,8 @@ class PlotManager:
         self._suppress_updates = False
         self._needs_refresh = False
         self._color_bar: pg.ColorBarItem | None = None
+        self._mesh_item: pg.PColorMeshItem | None = None
+        self._mesh_levels: tuple[float, float] | None = None
         self.widget = self._create_widget(parent)
 
     def _create_widget(self, parent: QWidget | None = None) -> QWidget:
@@ -219,7 +223,39 @@ class PlotManager:
                 plot_item.getAxis(axis).setTextPen("k")
                 plot_item.getAxis(axis).enableAutoSIPrefix(False)
 
-        layout.addWidget(self.plot_widget, stretch=1)
+        plot_area = QWidget()
+        self.plot_layout = QGridLayout(plot_area)
+        self.plot_layout.setContentsMargins(0, 0, 0, 0)
+        self.plot_layout.setSpacing(4)
+        self.plot_layout.addWidget(self.plot_widget, 0, 0)
+
+        self.vertical_section_widget = pg.PlotWidget()
+        self.vertical_section_widget.setBackground("w")
+        self.vertical_section_widget.setMinimumWidth(120)
+        self.horizontal_section_widget = pg.PlotWidget()
+        self.horizontal_section_widget.setBackground("w")
+        self.horizontal_section_widget.setMinimumHeight(100)
+        self.section_readout = QLabel()
+        self.section_readout.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.section_readout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.section_readout.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.plot_layout.addWidget(self.vertical_section_widget, 0, 1)
+        self.plot_layout.addWidget(self.horizontal_section_widget, 1, 0)
+        self.plot_layout.addWidget(self.section_readout, 1, 1)
+        self._set_section_layout_active(False)
+        self.horizontal_section_widget.setXLink(self.plot_widget)
+        self.vertical_section_widget.setYLink(self.plot_widget)
+        for section_widget in (
+            self.horizontal_section_widget,
+            self.vertical_section_widget,
+        ):
+            plot_item = section_widget.getPlotItem()
+            if plot_item is not None:
+                for axis in ("left", "bottom", "top", "right"):
+                    plot_item.getAxis(axis).setTextPen("k")
+                    plot_item.getAxis(axis).enableAutoSIPrefix(False)
+
+        layout.addWidget(plot_area, stretch=1)
 
         # Status row
         status_row = QHBoxLayout()
@@ -230,6 +266,10 @@ class PlotManager:
             QSizePolicy.Preferred,
         )
         status_row.addWidget(self.plot_status_label, stretch=1)
+        self.cursor_button = QPushButton("cursor")
+        self.cursor_button.setCheckable(True)
+        self._make_button_compact(self.cursor_button)
+        status_row.addWidget(self.cursor_button)
         self.exponential_fit_button = QPushButton("fit exp")
         self.exponential_fit_button.setCheckable(True)
         self._make_button_compact(self.exponential_fit_button)
@@ -252,7 +292,40 @@ class PlotManager:
             self.exponential_fit_button,
             self.quadratic_fit_button,
         )
+        self.cursor_controller = CursorController(
+            self.plot_widget,
+            self.horizontal_section_widget,
+            self.vertical_section_widget,
+            self.section_readout,
+            self.cursor_button,
+            self._cursor_visibility_changed,
+            self._cursor_activated,
+        )
+        self.exponential_fit_button.clicked.connect(self._fit_activated)
+        self.quadratic_fit_button.clicked.connect(self._fit_activated)
         return container
+
+    def _cursor_activated(self) -> None:
+        self.fit_controller.cancel_selection()
+
+    def _fit_activated(self, checked: bool) -> None:
+        if checked:
+            self.cursor_controller.disable()
+
+    def _cursor_visibility_changed(self, active: bool) -> None:
+        self._set_section_layout_active(active and self._mesh_item is not None)
+        if self._mesh_item is None or self._mesh_levels is None:
+            return
+        if active:
+            self._hide_color_bar()
+        else:
+            self._show_color_bar(self._mesh_item, self._mesh_levels)
+
+    def _set_section_layout_active(self, active: bool) -> None:
+        self.plot_layout.setColumnStretch(0, 5 if active else 1)
+        self.plot_layout.setColumnStretch(1, 1 if active else 0)
+        self.plot_layout.setRowStretch(0, 5 if active else 1)
+        self.plot_layout.setRowStretch(1, 1 if active else 0)
 
     @staticmethod
     def _make_button_compact(button: QPushButton) -> None:
@@ -369,6 +442,9 @@ class PlotManager:
         *,
         hide_fit_buttons: bool = True,
     ) -> None:
+        self._mesh_item = None
+        self._mesh_levels = None
+        self.cursor_controller.clear()
         self.fit_controller.disable("Fit is available for a single 1D field.")
         if hide_fit_buttons:
             self.fit_controller.set_visible(False)
@@ -445,7 +521,8 @@ class PlotManager:
             "#8B4513",
         ]
         plotted = 0
-        single_series: tuple[np.ndarray, np.ndarray, str] | None = None
+        single_series: tuple[np.ndarray, np.ndarray, str, str] | None = None
+        cursor_series: list[CursorSeries] = []
         for i, y_col in enumerate(y_cols):
             if y_col not in frame.columns:
                 continue
@@ -478,6 +555,13 @@ class PlotManager:
                     y_col,
                     color,
                 )
+            cursor_series.append(
+                CursorSeries(
+                    df["x"].to_numpy(dtype=float),
+                    df["y"].to_numpy(dtype=float),
+                    y_col,
+                )
+            )
             plotted += 1
 
         if plotted == 0:
@@ -491,6 +575,7 @@ class PlotManager:
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", ", ".join(y_cols))
         self.plot_status_label.setText(f"1D plot: {x_col} vs {', '.join(y_cols[:3])}")
+        self.cursor_controller.configure_1d(cursor_series)
         if single_series is not None:
             self.fit_controller.set_series(*single_series)
         else:
@@ -530,6 +615,9 @@ class PlotManager:
         x_data, y_data, z_data = filtered[:, 0], filtered[:, 1], filtered[:, 2]
         mesh_data = build_plot_mesh(x_data, y_data, z_data)
 
+        self._mesh_item = None
+        self._mesh_levels = None
+        self.cursor_controller.clear()
         self.fit_controller.disable("Fit is only available for 1D plots.")
         self.plot_widget.clear()
         pcm = pg.PColorMeshItem(
@@ -540,6 +628,8 @@ class PlotManager:
             levels=mesh_data.levels,
         )
         self.plot_widget.addItem(pcm)
+        self._mesh_item = pcm
+        self._mesh_levels = mesh_data.levels
         self._show_color_bar(pcm, mesh_data.levels)
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", y_col)
@@ -553,6 +643,7 @@ class PlotManager:
             f"2D plot: {mesh_data.point_count} points → "
             f"{mesh_data.x_column_count}×{mesh_data.max_y_count} mesh"
         )
+        self.cursor_controller.configure_2d(mesh_data, x_col, y_col, z_col)
 
     @functools.cached_property
     def cmap(self):
