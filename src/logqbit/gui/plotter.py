@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import logging
+from collections.abc import Sequence
 from importlib.resources import files
 from typing import TYPE_CHECKING
 
@@ -132,6 +133,30 @@ def warmup_plotter_jit() -> None:
     _build_grids_rect(y, z, col_starts, col_sizes, 2, 2, top_y, step_c)
 
 
+def _ordered_unique(items: Sequence[str]) -> list[str]:
+    """Remove duplicates while preserving the first occurrence of each item."""
+    return list(dict.fromkeys(items))
+
+
+def _partition_columns(
+    columns: Sequence[str],
+    plot_axes: Sequence[str],
+    plot_fields: Sequence[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Return ordered, disjoint axes, fields, and ignored columns."""
+    columns = _ordered_unique(columns)
+    axes = [c for c in _ordered_unique(plot_axes) if c in columns]
+    fields = [c for c in _ordered_unique(plot_fields) if c in columns and c not in axes]
+    ignored = [c for c in columns if c not in axes and c not in fields]
+
+    if not axes and ignored:
+        axes.append(ignored.pop(0))
+    if not fields and ignored:
+        fields.append(ignored.pop(0))
+
+    return axes, fields, ignored
+
+
 class TagBar(QWidget):
     """
     Single QListWidget holding axes / fields / ignored items in one row,
@@ -148,7 +173,7 @@ class TagBar(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4,0,4,0)
+        layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(4)
 
         hint = QLabel("axes | fields:")
@@ -214,15 +239,15 @@ class TagBar(QWidget):
 
     def set_columns(
         self,
-        columns: list[str],
-        plot_axes: list[str],
-        plot_fields: list[str],
+        columns: Sequence[str],
+        plot_axes: Sequence[str],
+        plot_fields: Sequence[str],
     ) -> None:
-        col_set = set(columns)
-        axes = [c for c in plot_axes if c in col_set]
-        fields = [c for c in plot_fields if c in col_set]
-        assigned = set(axes) | set(fields)
-        ignored = [c for c in columns if c not in assigned]
+        axes, fields, ignored = _partition_columns(
+            columns,
+            plot_axes,
+            plot_fields,
+        )
 
         self._loading = True
         try:
@@ -265,7 +290,6 @@ class TagBar(QWidget):
 
 
 class PlotManager:
-
     def __init__(self, parent: QWidget | None = None):
         self._plot_record: LogRecord | None = None
         self._plot_frame: pd.DataFrame | None = None
@@ -361,13 +385,6 @@ class PlotManager:
         plot_axes = record.plot_axes
         plot_fields = record.plot_fields
 
-        # If meta has no fields, auto-assign the first non-axes column
-        if not plot_fields:
-            axes_set = set(plot_axes)
-            first_field = next((c for c in columns if c not in axes_set), None)
-            if first_field:
-                plot_fields = [first_field]
-
         self._suppress_updates = True
         self.tag_bar.set_columns(columns, plot_axes, plot_fields)
         self._suppress_updates = False
@@ -429,8 +446,16 @@ class PlotManager:
         x_values = pd.to_numeric(frame[x_col], errors="coerce")
         self.plot_widget.clear()
 
-        COLORS = ["#1E90FF", "#FF6347", "#32CD32", "#FF8C00", "#9370DB",
-                  "#00CED1", "#FF1493", "#8B4513"]
+        COLORS = [
+            "#1E90FF",
+            "#FF6347",
+            "#32CD32",
+            "#FF8C00",
+            "#9370DB",
+            "#00CED1",
+            "#FF1493",
+            "#8B4513",
+        ]
         plotted = 0
         for i, y_col in enumerate(y_cols):
             if y_col not in frame.columns:
@@ -444,14 +469,19 @@ class PlotManager:
             pen = pg.mkPen(color=color, width=2)
             if show_markers:
                 self.plot_widget.plot(
-                    df["x"].values, df["y"].values,
-                    pen=pen, name=y_col,
-                    symbol="o", symbolSize=6,
+                    df["x"].values,
+                    df["y"].values,
+                    pen=pen,
+                    name=y_col,
+                    symbol="o",
+                    symbolSize=6,
                     symbolPen=pg.mkPen(color=color),
                     symbolBrush=pg.mkBrush("#FFFFFF"),
                 )
             else:
-                self.plot_widget.plot(df["x"].values, df["y"].values, pen=pen, name=y_col)
+                self.plot_widget.plot(
+                    df["x"].values, df["y"].values, pen=pen, name=y_col
+                )
             plotted += 1
 
         if plotted == 0:
@@ -519,7 +549,7 @@ class PlotManager:
         max_ny = int(col_sizes.max())
 
         ref_col = int(np.argmax(col_sizes))
-        ref_y = y_data[col_starts[ref_col]: col_ends[ref_col]]
+        ref_y = y_data[col_starts[ref_col] : col_ends[ref_col]]
         typical_dy = float(np.median(np.diff(ref_y))) if len(ref_y) > 1 else 1.0
 
         last_y = y_data[col_ends - 1]
@@ -534,7 +564,14 @@ class PlotManager:
         x_corners = np.broadcast_to(x_edges_rect, (max_ny + 1, 2 * nx_col))
 
         z_grid, y_corners = _build_grids_rect(
-            y_data, z_data, col_starts, col_sizes, max_ny, nx_col, top_y, step_c,
+            y_data,
+            z_data,
+            col_starts,
+            col_sizes,
+            max_ny,
+            nx_col,
+            top_y,
+            step_c,
         )
 
         self.plot_widget.clear()

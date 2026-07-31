@@ -5,7 +5,7 @@ import logging
 import os
 import socket
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +13,8 @@ from typing import Generic, TypeVar, overload
 
 from .file_version import FileVersion
 
-_T = TypeVar("_T")
+_ReadT = TypeVar("_ReadT")
+_WriteT = TypeVar("_WriteT")
 logger = logging.getLogger(__name__)
 
 
@@ -29,26 +30,40 @@ def _default_root(title: str) -> dict[str, object]:
     }
 
 
-class _MetaField(Generic[_T]):
+class _MetaField(Generic[_ReadT, _WriteT]):
     """Descriptor for a single key in LogMetadata.root."""
 
-    def __init__(self, key: str, default: _T, cast: Callable[..., _T]):
+    def __init__(
+        self,
+        key: str,
+        default: _ReadT,
+        cast: Callable[..., _ReadT],
+    ):
         self.key = key
         self.default = default
         self.cast = cast
 
     @overload
-    def __get__(self, obj: None, objtype: type) -> _MetaField[_T]: ...
-    @overload
-    def __get__(self, obj: LogMetadata, objtype: type) -> _T: ...
+    def __get__(
+        self,
+        obj: None,
+        objtype: type,
+    ) -> _MetaField[_ReadT, _WriteT]: ...
 
-    def __get__(self, obj: LogMetadata | None, objtype: type) -> _T | _MetaField[_T]:
+    @overload
+    def __get__(self, obj: LogMetadata, objtype: type) -> _ReadT: ...
+
+    def __get__(
+        self,
+        obj: LogMetadata | None,
+        objtype: type,
+    ) -> _ReadT | _MetaField[_ReadT, _WriteT]:
         if obj is None:
             return self
         obj.reload()
         return self.cast(obj.root.get(self.key, self.default))
 
-    def __set__(self, obj: LogMetadata, value: _T) -> None:
+    def __set__(self, obj: LogMetadata, value: _WriteT) -> None:
         obj[self.key] = self.cast(value)
 
 
@@ -59,21 +74,21 @@ class LogMetadata:
     descriptors and synchronized to ``metadata.json`` on assignment.
     """
 
-    title = _MetaField("title", "untitled", str)
-    star = _MetaField("star", 0, int)
-    trash = _MetaField("trash", False, bool)
-    plot_axes = _MetaField(
+    title = _MetaField[str, str]("title", "untitled", str)
+    star = _MetaField[int, int]("star", 0, int)
+    trash = _MetaField[bool, bool]("trash", False, bool)
+    plot_axes = _MetaField[tuple[str, ...], str | Iterable[str]](
         "plot_axes",
         (),
         lambda v: (v,) if isinstance(v, str) else tuple(str(i) for i in v),
     )
-    plot_fields = _MetaField(
+    plot_fields = _MetaField[tuple[str, ...], str | Iterable[str]](
         "plot_fields",
         (),
         lambda v: (v,) if isinstance(v, str) else tuple(str(i) for i in v),
     )
-    create_time = _MetaField("create_time", "", str)
-    create_machine = _MetaField("create_machine", "", str)
+    create_time = _MetaField[str, str]("create_time", "", str)
+    create_machine = _MetaField[str, str]("create_machine", "", str)
 
     def __init__(
         self,

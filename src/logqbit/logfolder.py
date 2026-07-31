@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 from typing_extensions import deprecated
 
@@ -151,7 +151,7 @@ class LogFolder:
         func: Callable[[float], dict[str, float | list[float]]],
         axes: list[float | list[float]] | dict[str, float | list[float]],
     ):
-        """Run a parameter sweep and append returned rows to this log."""
+        """Capture a parameter sweep."""
         if not isinstance(axes, dict):  # Assumes isinstance(axes, list)
             fsig = inspect.signature(func)
             axes = dict(zip(fsig.parameters.keys(), axes))
@@ -167,7 +167,8 @@ class LogFolder:
             const=const_axs,
             dims={k: len(a) for k, a in run_axs.items()},
         )
-        self.meta.plot_axes = list(run_axs.keys())
+        if len(self.meta.plot_axes) == 0:
+            self.meta.plot_axes = list(run_axs.keys())
 
         step_table = list(itertools.product(*run_axs.values()))
 
@@ -176,6 +177,8 @@ class LogFolder:
                 step_kws = dict(zip(run_axs.keys(), step))
                 ret_kws = func(**step_kws, **const_axs)
                 self.add_row(**step_kws, **ret_kws)
+
+        self.flush()
 
     def add_const(self, meta: dict = None, /, **kwargs):
         """Append constant values to ``const.yaml`` and save immediately."""

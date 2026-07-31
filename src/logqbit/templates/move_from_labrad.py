@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Literal
 
 from labcodes.fileio import labrad
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 
 from logqbit.logfolder import yaml
 

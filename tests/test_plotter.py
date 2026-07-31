@@ -5,7 +5,55 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from logqbit.gui.plotter import _build_grids_rect, _is_lexsorted, warmup_plotter_jit
+from logqbit.gui.plotter import (
+    TagBar,
+    _build_grids_rect,
+    _is_lexsorted,
+    _partition_columns,
+    warmup_plotter_jit,
+)
+
+
+class TestTagBar:
+    def test_set_columns_deduplicates_without_reordering(self) -> None:
+        tag_bar = TagBar()
+
+        tag_bar.set_columns(
+            ["x", "y", "signal", "reference"],
+            ["y", "x", "y"],
+            ["reference", "y", "signal", "reference"],
+        )
+
+        assert tag_bar.axes == ["y", "x"]
+        assert tag_bar.fields == ["reference", "signal"]
+        assert tag_bar._split()[2] == []
+
+    def test_set_columns_uses_first_ignored_column_when_fields_are_empty(
+        self,
+    ) -> None:
+        tag_bar = TagBar()
+
+        tag_bar.set_columns(
+            ["x", "signal", "reference"],
+            ["x", "x"],
+            [],
+        )
+
+        assert tag_bar.axes == ["x"]
+        assert tag_bar.fields == ["signal"]
+        assert tag_bar._split()[2] == ["reference"]
+
+
+def test_partition_columns_fills_axes_before_fields() -> None:
+    axes, fields, ignored = _partition_columns(
+        ["x", "signal", "reference"],
+        [],
+        [],
+    )
+
+    assert axes == ["x"]
+    assert fields == ["signal"]
+    assert ignored == ["reference"]
 
 
 class TestIsLexsorted:
