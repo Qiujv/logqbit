@@ -24,7 +24,7 @@ test:
 
 # Test the installed package without GUI dependencies.
 test-core-isolated python="3.11":
-    uv run --isolated --no-project --python {{python}} --with . --with pytest pytest -q tests/core
+    uv run --isolated --no-project --python {{python}} --with-editable . --with pytest pytest -q tests/core
 
 # Test the core package against the supported Python endpoints.
 test-core-matrix: (test-core-isolated "3.11") (test-core-isolated "3.13")

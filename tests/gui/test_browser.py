@@ -43,43 +43,30 @@ def scan_catalog(directory: Path) -> list[LogRecord]:
 @pytest.fixture
 def sample_logfolder(tmp_path: Path) -> Path:
     """Create a sample log folder with data and return its parent directory."""
-    lf = LogFolder.new(tmp_path, title="test_log")
-    lf.add_row(x=1.0, y=2.0, z=3.0)
-    lf.add_row(x=1.5, y=2.5, z=3.5)
-    lf.add_row(x=2.0, y=3.0, z=4.0)
-    lf.flush()
-    lf.meta.star = 1
-    lf.meta.plot_axes = ["x", "y"]
-    # Return the parent directory path, not the LogFolder object
-    # This ensures the LogFolder is properly closed and data is flushed
+    with LogFolder.new(tmp_path, title="test_log") as lf:
+        lf.add_row(x=1.0, y=2.0, z=3.0)
+        lf.add_row(x=1.5, y=2.5, z=3.5)
+        lf.add_row(x=2.0, y=3.0, z=4.0)
+        lf.meta.star = 1
+        lf.meta.plot_axes = ["x", "y"]
     return tmp_path
     
 
 @pytest.fixture
 def sample_records(tmp_path: Path) -> list[LogRecord]:
     """Create multiple sample log records."""
-    records = []
-    
-    # Record 0: basic log
-    lf0 = LogFolder.new(tmp_path, title="log_zero")
-    lf0.add_row(a=1, b=2)
-    lf0.flush()
-    
-    # Record 1: starred log
-    lf1 = LogFolder.new(tmp_path, title="log_one")
-    lf1.add_row(x=10, y=20)
-    lf1.flush()
-    lf1.meta.star = 2
-    
-    # Record 2: trashed log
-    lf2 = LogFolder.new(tmp_path, title="log_two")
-    lf2.add_row(p=100, q=200)
-    lf2.flush()
-    lf2.meta.trash = True
-    
-    # Scan directory to get records
-    records = scan_catalog(tmp_path)
-    return records
+    with LogFolder.new(tmp_path, title="log_zero") as lf:
+        lf.add_row(a=1, b=2)
+
+    with LogFolder.new(tmp_path, title="log_one") as lf:
+        lf.add_row(x=10, y=20)
+        lf.meta.star = 2
+
+    with LogFolder.new(tmp_path, title="log_two") as lf:
+        lf.add_row(p=100, q=200)
+        lf.meta.trash = True
+
+    return scan_catalog(tmp_path)
 
 
 class TestLogRecord:
@@ -87,9 +74,10 @@ class TestLogRecord:
     
     def test_scan_catalog_finds_logs(self, tmp_path: Path) -> None:
         """Test scanning a directory for log records."""
-        # Create multiple log folders
-        LogFolder.new(tmp_path, title="log1").flush()
-        LogFolder.new(tmp_path, title="log2").flush()
+        with LogFolder.new(tmp_path, title="log1"):
+            pass
+        with LogFolder.new(tmp_path, title="log2"):
+            pass
         
         records = scan_catalog(tmp_path)
         
@@ -133,10 +121,8 @@ class TestLogRecord:
     
     def test_read_yaml_missing_file(self, tmp_path: Path) -> None:
         """Test reading YAML when file doesn't exist."""
-        lf = LogFolder.new(tmp_path)
-        # Don't create yaml file
-        lf.df_path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame({"x": [1]}).to_feather(lf.df_path)
+        with LogFolder.new(tmp_path) as lf:
+            pd.DataFrame({"x": [1]}).to_feather(lf.df_path)
         
         records = scan_catalog(tmp_path)
         record = records[0]
@@ -146,13 +132,12 @@ class TestLogRecord:
     
     def test_list_image_files(self, tmp_path: Path) -> None:
         """Test listing image files in a log folder."""
-        lf = LogFolder.new(tmp_path)
-        lf.flush()
-        
-        # Create some image files
-        (lf.path / "plot.png").touch()
-        (lf.path / "result.jpg").touch()
-        (lf.path / "data.txt").touch()  # Not an image
+        with LogFolder.new(tmp_path) as lf:
+            path = lf.path
+
+        (path / "plot.png").touch()
+        (path / "result.jpg").touch()
+        (path / "data.txt").touch()
         
         records = scan_catalog(tmp_path)
         record = records[0]
@@ -196,16 +181,16 @@ class TestLogRecord:
         source_parent = tmp_path / "source"
         source_parent.mkdir()
 
-        low = LogFolder.new(source_parent, title="low")
-        low.add_row(x=1, y=2)
-        low.flush()
-        (low.path / "note.txt").write_text("low-note", encoding="utf-8")
+        with LogFolder.new(source_parent, title="low") as low:
+            low.add_row(x=1, y=2)
+            (low.path / "note.txt").write_text("low-note", encoding="utf-8")
 
-        high = LogFolder.new(source_parent, title="high")
-        high.add_row(x=10, y=20)
-        high.flush()
-        (high.path / "snapshot.bin").write_bytes(b"abc")
-        (high.path / "import_from").write_text("preserve-me", encoding="utf-8")
+        with LogFolder.new(source_parent, title="high") as high:
+            high.add_row(x=10, y=20)
+            (high.path / "snapshot.bin").write_bytes(b"abc")
+            (high.path / "import_from").write_text(
+                "preserve-me", encoding="utf-8"
+            )
 
         records = scan_catalog(source_parent)
         record_by_title = {record.title: record for record in records}

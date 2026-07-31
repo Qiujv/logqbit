@@ -48,6 +48,21 @@ def test_catalog_uses_metadata_file_as_log_directory_marker(
     assert records[0].title == "named"
 
 
+def test_refresh_orders_numeric_then_named_directories(tmp_path: Path) -> None:
+    for name in ("10", "beta", "2", "Alpha", "1"):
+        LogFolder(tmp_path / name).close()
+
+    records = LogCatalog(tmp_path).refresh()
+
+    assert [record.path.name for record in records] == [
+        "1",
+        "2",
+        "10",
+        "Alpha",
+        "beta",
+    ]
+
+
 def test_refresh_replaces_only_changed_record(sample_logfolder: Path) -> None:
     catalog = LogCatalog()
     record = catalog.refresh(sample_logfolder)[0]

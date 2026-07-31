@@ -1,4 +1,4 @@
-"""Example-data generation for the ``logqbit browser-demo`` command."""
+"""Implementation of the ``logqbit browser-demo`` command."""
 
 from __future__ import annotations
 

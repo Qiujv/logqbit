@@ -23,9 +23,23 @@ yaml = get_parser()
 _ACTIVE_LOGFOLDERS: weakref.WeakSet["LogFolder"] = weakref.WeakSet()
 
 
+def _close_handler_quietly(handler: DataFrameBuffer) -> None:
+    try:
+        handler.close()
+    except Exception:
+        pass
+
+
+def _close_logfolder_quietly(logfolder: "LogFolder") -> None:
+    try:
+        logfolder.close()
+    except Exception:
+        pass
+
+
 def _close_active_logfolders() -> None:
     for logfolder in list(_ACTIVE_LOGFOLDERS):
-        LogFolder._close_quietly(logfolder)
+        _close_logfolder_quietly(logfolder)
 
 
 atexit.register(_close_active_logfolders)
@@ -39,6 +53,10 @@ class LogFolder:
     - ``data.feather`` for tabular records
     - ``metadata.json`` for lightweight metadata
     - ``const.yaml`` for constant parameters and configuration
+
+    Within one process, only one active writer may own a log directory at a
+    time. Closing stops data appends; dataframe snapshots, metadata, and
+    constants remain readable.
     """
 
     def __init__(
@@ -58,9 +76,7 @@ class LogFolder:
         self.path = path
         self.meta = LogMetadata(path / "metadata.json", title, create=True)
         self._handler = DataFrameBuffer(path / "data.feather")
-        self._finalizer = weakref.finalize(
-            self, self._close_handler_quietly, self._handler
-        )
+        self._finalizer = weakref.finalize(self, _close_handler_quietly, self._handler)
         _ACTIVE_LOGFOLDERS.add(self)
 
     def __enter__(self) -> "LogFolder":
@@ -69,19 +85,10 @@ class LogFolder:
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.close()
 
-    @staticmethod
-    def _close_handler_quietly(handler: DataFrameBuffer) -> None:
-        try:
-            handler.close()
-        except Exception:
-            pass
-
-    @staticmethod
-    def _close_quietly(logfolder: "LogFolder") -> None:
-        try:
-            logfolder.close()
-        except Exception:
-            pass
+    @property
+    def closed(self) -> bool:
+        """Whether the dataframe writer has been closed."""
+        return self._handler.closed
 
     @cached_property
     def reg(self) -> Registry:
@@ -94,7 +101,7 @@ class LogFolder:
 
     @property
     def df(self) -> pd.DataFrame:
-        """Get the full dataframe, flushing all data rows."""
+        """Return a snapshot including pending rows, without flushing."""
         return self._handler.get_df()
 
     @property
@@ -132,6 +139,9 @@ class LogFolder:
         Supports both scalar and vector input.
         For vector input, pandas will check length consistency.
         """
+        self._require_open()
+        if not kwargs:
+            raise ValueError("cannot add a row without any columns")
         is_multi_row = [
             k
             for k, v in kwargs.items()
@@ -144,6 +154,7 @@ class LogFolder:
 
     def add_df(self, df: pd.DataFrame) -> None:
         """Append all rows from an existing dataframe."""
+        self._require_open()
         self._handler.add_multi_rows(df)
 
     def capture(
@@ -152,6 +163,7 @@ class LogFolder:
         axes: list[float | list[float]] | dict[str, float | list[float]],
     ):
         """Capture a parameter sweep."""
+        self._require_open()
         if not isinstance(axes, dict):  # Assumes isinstance(axes, list)
             fsig = inspect.signature(func)
             axes = dict(zip(fsig.parameters.keys(), axes))
@@ -206,7 +218,7 @@ class LogFolder:
         return self.add_const_to_head(meta, **kwargs)
 
     def flush(self) -> None:
-        """Flash the pending data immediately, block until done."""
+        """Flush pending data immediately, blocking until done."""
         self._handler.flush()
 
     def close(self) -> None:
@@ -214,3 +226,10 @@ class LogFolder:
         self._handler.close()
         self._finalizer.detach()
         _ACTIVE_LOGFOLDERS.discard(self)
+
+    def _require_open(self) -> None:
+        if self.closed:
+            raise RuntimeError(
+                "Cannot add data after LogFolder.close(); "
+                "create a new LogFolder to add more data."
+            )

@@ -109,17 +109,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         browser_args = [str(args.directory)] if args.directory else []
         return browser_main(browser_args)
     if args.command == "browser-demo":
-        from logqbit.cli_demo import create_example_data
+        from logqbit.cli.demo import create_example_data
 
         return create_example_data()
     if args.command == "shortcuts":
-        from logqbit.cli_shortcuts import create_shortcuts
+        from logqbit.cli.shortcuts import create_shortcuts
 
         return create_shortcuts(args.output)
 
     parser.print_help()
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

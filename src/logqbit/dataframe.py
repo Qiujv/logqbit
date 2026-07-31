@@ -1,10 +1,43 @@
+import logging
 import threading
 import time
 import uuid
-import warnings
+from contextlib import suppress
 from pathlib import Path
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+_AUTOSAVE_RETRY_INTERVAL = 1.0
+_OPEN_BUFFER_PATHS: set[Path] = set()
+_OPEN_BUFFER_PATHS_LOCK = threading.Lock()
+
+
+def _reserve_buffer_path(path: Path) -> Path:
+    resolved = path.resolve()
+    with _OPEN_BUFFER_PATHS_LOCK:
+        if resolved in _OPEN_BUFFER_PATHS:
+            raise RuntimeError(
+                f"Data buffer at '{path}' already has an active writer; "
+                "close it before opening another."
+            )
+        _OPEN_BUFFER_PATHS.add(resolved)
+    return resolved
+
+
+def _release_buffer_path(path: Path) -> None:
+    with _OPEN_BUFFER_PATHS_LOCK:
+        _OPEN_BUFFER_PATHS.discard(path)
+
+
+def _autosave_interval_for_rows(row_count: int) -> float:
+    if row_count < 1000:
+        return 0.1
+    if row_count < 10000:
+        return 0.2
+    if row_count < 100000:
+        return 0.5
+    return 1.0
 
 
 class DataFrameBuffer:
@@ -13,39 +46,56 @@ class DataFrameBuffer:
     The background thread has a small state machine:
     wait until data becomes dirty, wait the current autosave interval to batch
     nearby appends, then write if the buffer is still dirty. ``flush()`` skips
-    that delay and writes synchronously on the caller's thread.
+    that delay and writes synchronously on the caller's thread. Within one
+    process, only one active buffer may own a path at a time.
     """
 
     def __init__(self, path: str | Path, autosave_interval: float = 0.2):
         self.path = Path(path)
-        self._autosave_interval = autosave_interval
-        self._segs: list[pd.DataFrame] = []
-        if self.path.exists():
-            self._segs.append(pd.read_feather(self.path))
-        self._records: list[dict[str, float | int | str]] = []
+        self._path_key = _reserve_buffer_path(self.path)
+        try:
+            self._autosave_interval = autosave_interval
+            self._segs: list[pd.DataFrame] = []
+            if self.path.exists():
+                self._segs.append(pd.read_feather(self.path))
+            self._records: list[dict[str, float | int | str]] = []
 
-        self._dirty = False
-        self._closed = False
-        self._condition = threading.Condition()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+            self._dirty = False
+            self._closed = False
+            self._condition = threading.Condition()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        except BaseException:
+            _release_buffer_path(self._path_key)
+            raise
+
+    @property
+    def closed(self) -> bool:
+        with self._condition:
+            return self._closed
 
     def get_df(self) -> pd.DataFrame:
         with self._condition:
             df = self._get_df_locked()
-        return df
+            return df.copy(deep=True)
 
     def add_one_row(self, kwargs: dict[str, float | int | str]):
         with self._condition:
-            self._records.append(kwargs)
+            self._raise_if_closed()
+            if not kwargs:
+                raise ValueError("cannot add a row without any columns")
+            self._records.append(dict(kwargs))
             self._mark_dirty_locked()
 
     def add_multi_rows(self, df: pd.DataFrame):
         with self._condition:
+            self._raise_if_closed()
+            if df.empty:
+                return
             if self._records:
                 self._segs.append(pd.DataFrame.from_records(self._records))
                 self._records = []
-            self._segs.append(df)
+            self._segs.append(df.copy(deep=True))
             self._mark_dirty_locked()
 
     def flush(self) -> pd.DataFrame:
@@ -60,20 +110,28 @@ class DataFrameBuffer:
         with self._condition:
             if self._closed:
                 return
-
-        self.flush()
-
-        with self._condition:
+            if self._dirty:
+                self._write_locked()
             self._closed = True
             self._condition.notify_all()
-        if self._thread.is_alive() and self._thread is not threading.current_thread():
-            self._thread.join(timeout=2)
+        try:
+            if (
+                self._thread.is_alive()
+                and self._thread is not threading.current_thread()
+            ):
+                self._thread.join(timeout=2)
+        finally:
+            _release_buffer_path(self._path_key)
 
     def _mark_dirty_locked(self) -> None:
         was_dirty = self._dirty
         self._dirty = True
         if not was_dirty:
             self._condition.notify_all()
+
+    def _raise_if_closed(self) -> None:
+        if self._closed:
+            raise RuntimeError("cannot append to a closed DataFrameBuffer")
 
     def _get_df_locked(self) -> pd.DataFrame:
         if self._records:
@@ -102,7 +160,18 @@ class DataFrameBuffer:
                 if self._closed:
                     return
                 if self._dirty:
-                    self._write_locked()
+                    try:
+                        self._write_locked()
+                    except Exception:
+                        self._autosave_interval = max(
+                            self._autosave_interval,
+                            _AUTOSAVE_RETRY_INTERVAL,
+                        )
+                        logger.exception(
+                            "Failed to autosave %s; retrying in %.1f seconds",
+                            self.path,
+                            self._autosave_interval,
+                        )
 
     def _write_locked(
         self,
@@ -111,20 +180,15 @@ class DataFrameBuffer:
     ) -> pd.DataFrame:
         df = self._get_df_locked()
         tmp = self.path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
-        df.to_feather(tmp)
-        self._replace_tmp(tmp, max_retries=max_retries, retry_delay=retry_delay)
+        try:
+            df.to_feather(tmp)
+            self._replace_tmp(tmp, max_retries=max_retries, retry_delay=retry_delay)
+        finally:
+            with suppress(OSError):
+                tmp.unlink()
         self._dirty = False
-        self._autosave_interval = self._autosave_interval_for_rows(df.shape[0])
+        self._autosave_interval = _autosave_interval_for_rows(df.shape[0])
         return df
-
-    def _autosave_interval_for_rows(self, row_count: int) -> float:
-        if row_count < 1000:
-            return 0.1
-        if row_count < 10000:
-            return 0.2
-        if row_count < 100000:
-            return 0.5
-        return 1.0
 
     def _replace_tmp(
         self,
@@ -141,7 +205,4 @@ class DataFrameBuffer:
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                 else:
-                    warnings.warn(
-                        f"Failed to replace {self.path} after {max_retries} attempts"
-                    )
                     raise

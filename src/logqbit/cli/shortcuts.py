@@ -34,7 +34,7 @@ def _browser_icon() -> Path | None:
         return None
 
     try:
-        from logqbit.misc.svg2ico import svg_to_ico
+        from logqbit.cli.svg2ico import svg_to_ico
 
         print("Generating ICO file from SVG...")
         try:

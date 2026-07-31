@@ -186,6 +186,7 @@ class LogCatalog:
         self._records: dict[Path, LogRecord] = {}
 
     def refresh(self, directory: str | Path | None = None) -> list[LogRecord]:
+        """Refresh records, ordered by numeric then named directory."""
         if directory is None:
             if self._directory is None:
                 raise TypeError("directory is required on the first refresh")

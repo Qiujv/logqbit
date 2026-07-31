@@ -7,10 +7,10 @@ The ICO file will contain 7 resolutions: 16x16, 24x24, 32x32, 48x48, 64x64, 128x
 
 Usage:
     # Convert default browser.svg to browser.ico
-    python svg2ico.py
+    python -m logqbit.cli.svg2ico
     
     # Convert any SVG to ICO
-    python svg2ico.py input.svg output.ico
+    python -m logqbit.cli.svg2ico input.svg output.ico
 """
 
 import struct
@@ -133,6 +133,6 @@ if __name__ == "__main__":
         svg_to_ico(str(svg_path), str(ico_path))
     else:
         print("Usage:")
-        print("  python svg2ico.py input.svg output.ico")
-        print("  python svg2ico.py  (converts browser.svg to browser.ico)")
+        print("  python -m logqbit.cli.svg2ico input.svg output.ico")
+        print("  python -m logqbit.cli.svg2ico  (converts browser.svg to browser.ico)")
         sys.exit(1)

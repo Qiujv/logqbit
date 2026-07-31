@@ -97,6 +97,6 @@ logqbit browser ./logqbit_moli/experiment
 ```python
 from logqbit.logfolder import LogFolder
 
-log = LogFolder("./logqbit_moli/experiment", create=False)
-print(log.df.head())
+with LogFolder("./logqbit_moli/experiment", create=False) as log:
+    print(log.df.head())
 ```

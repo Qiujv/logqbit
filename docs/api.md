@@ -30,9 +30,8 @@ with LogFolder.new("./runs", title="cooldown") as log:
 ### 打开已有记录
 
 ```python
-log = LogFolder("./runs/0", create=False)
-print(log.df)
-log.close()
+with LogFolder("./runs/0", create=False) as log:
+    print(log.df)
 ```
 
 如果路径不存在并且 `create=False`，会抛出 `FileNotFoundError`。
@@ -72,9 +71,13 @@ log.flush()
 log.close()
 ```
 
-- `log.df` 返回当前完整 dataframe，包括还没有写入磁盘的缓冲行。
+- `log.df` 返回当前完整 dataframe 的副本，包括还没有写入磁盘的缓冲行，但不会触发 flush。
 - `log.flush()` 立即同步写入 `data.feather`，调用会阻塞直到写入完成。
 - `log.close()` 会先 flush，再停止后台 autosave 线程。它是幂等的，可以重复调用。
+
+同一进程内，同一目录只允许一个活跃的 `LogFolder` writer；也不支持多个进程同时写入同一
+目录。`close()` 后仍可读取该实例的 dataframe 快照，也可读取或修改同步保存的 metadata
+和 constants，但不能再追加数据；重新打开目录即可续写。
 
 如果只需要读取已经写好的数据文件，最简单的方式是直接用 pandas：
 
@@ -198,7 +201,8 @@ buffer.close()
 ```
 
 后台线程的状态机很小：等待数据变 dirty，等待当前 autosave interval 合并连续追加，
-如果仍然 dirty 就写盘。`flush()` 会跳过等待，在调用线程同步写入。
+如果仍然 dirty 就写盘。临时写入失败时会保留 dirty 状态并重试；`flush()` 会跳过等待，
+在调用线程同步写入并直接报告错误。
 
 ## API Reference
 
