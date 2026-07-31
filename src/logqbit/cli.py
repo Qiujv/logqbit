@@ -75,7 +75,7 @@ def _powershell_single_quoted(value: object) -> str:
 
 
 def create_shortcuts(output_dir: Path | None = None) -> int:
-    """Create desktop shortcuts for logqbit-browser and logqbit-live-plotter.
+    """Create a desktop shortcut for logqbit-browser.
     
     Creates .lnk files with custom icons on the desktop or specified directory.
     If ICO files don't exist, they will be automatically generated from SVG files.
@@ -92,9 +92,7 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
         # Get icon paths from package
         assets_dir = files("logqbit") / "assets"
         browser_svg = assets_dir / "browser.svg"
-        plotter_svg = assets_dir / "live_plotter.svg"
         browser_ico = assets_dir / "browser.ico"
-        plotter_ico = assets_dir / "live_plotter.ico"
         
         # Generate ICO files if they don't exist
         icons_to_generate = []
@@ -103,12 +101,6 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
                 print(f"Error: SVG file not found: {browser_svg}", file=sys.stderr)
                 return 1
             icons_to_generate.append(("browser", browser_svg, browser_ico))
-        
-        if not plotter_ico.is_file():
-            if not plotter_svg.is_file():
-                print(f"Error: SVG file not found: {plotter_svg}", file=sys.stderr)
-                return 1
-            icons_to_generate.append(("live_plotter", plotter_svg, plotter_ico))
         
         # Generate missing ICO files
         if icons_to_generate:
@@ -133,10 +125,7 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
                         svg_to_ico(svg_str, str(temp_ico))
                         print(f"  ✓ Created: {temp_ico} (package dir not writable)")
                         # Update ico path to use temp location
-                        if name == "browser":
-                            browser_ico = temp_ico
-                        else:
-                            plotter_ico = temp_ico
+                        browser_ico = temp_ico
                 
             except ImportError as exc:
                 print(f"Error: Could not import svg2ico: {exc}", file=sys.stderr)
@@ -178,13 +167,6 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
                 "arguments": "-m logqbit.gui.browser",
                 "icon": str(browser_ico),
                 "output": output_dir / "LogQbit Browser.lnk"
-            },
-            {
-                "name": "LogQbit Live Plotter",
-                "target": gui_python,
-                "arguments": "-m logqbit.gui.live_plotter",
-                "icon": str(plotter_ico),
-                "output": output_dir / "LogQbit Live Plotter.lnk"
             }
         ]
         
