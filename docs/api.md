@@ -14,24 +14,24 @@ LogQbit 的核心入口是 `LogFolder`。一个 `LogFolder` 对应磁盘上的�
 ### 创建新记录
 
 ```python
-from logqbit.logfolder import LogFolder
+from logqbit import LogFolder
 
-with LogFolder.new("./runs", title="cooldown") as log:
-    log.add_row(time=0.0, temperature=300.0)
-    log.add_row(time=1.0, temperature=295.2)
+log = LogFolder.new("./runs", title="cooldown")
+log.add_row(time=0.0, temperature=300.0)
+log.add_row(time=1.0, temperature=295.2)
 
-    log.add_const(operator="alice", sample="device-a")
-    log.meta.plot_axes = ["time"]
+log.add_const(operator="alice", sample="device-a")
+log.meta.plot_axes = ["time"]
 ```
 
 `LogFolder.new(parent)` 会在 `parent` 下创建下一个数字目录，例如 `0/`、`1/`、`2/`。
-推荐使用 `with` 语句；退出代码块时会自动 `close()`，确保末段数据完成写入并关闭后台线程。
+创建后可以直接持续追加数据；后台线程会自动保存，程序正常退出时也会完成最后一次写入。
 
 ### 打开已有记录
 
 ```python
-with LogFolder("./runs/0", create=False) as log:
-    print(log.df)
+log = LogFolder("./runs/0", create=False)
+print(log.df)
 ```
 
 如果路径不存在并且 `create=False`，会抛出 `FileNotFoundError`。
@@ -63,6 +63,30 @@ import pandas as pd
 log.add_df(pd.DataFrame({"x": [3.0, 4.0], "y": [2.4, 2.8]}))
 ```
 
+### 参数扫描
+
+`capture()` 可以执行简单的参数扫描。可迭代参数会参与笛卡尔积扫描，标量参数会作为常量
+传给测量函数：
+
+```python
+def measure(frequency, bias):
+    return {"signal": frequency * bias}
+
+
+log = LogFolder.new("./runs", title="frequency sweep")
+log.capture(
+    measure,
+    {
+        "frequency": [4.0, 4.5, 5.0],
+        "bias": 0.1,
+    },
+)
+```
+
+测量函数返回的字典会和当前扫描坐标合并为数据行。`capture()` 还会把标量参数和扫描维度
+写入 `const.yaml`；仅当 `plot_axes` 为空时，才自动使用扫描参数作为绘图轴。扫描完成后会
+立即 flush。
+
 ### 读取和保存
 
 ```python
@@ -75,9 +99,18 @@ log.close()
 - `log.flush()` 立即同步写入 `data.feather`，调用会阻塞直到写入完成。
 - `log.close()` 会先 flush，再停止后台 autosave 线程。它是幂等的，可以重复调用。
 
+没有追加过数据的记录在关闭时不会创建空的 `data.feather`，但已经同步写入的
+`metadata.json` 和 `const.yaml` 仍会保留。
+
 同一进程内，同一目录只允许一个活跃的 `LogFolder` writer；也不支持多个进程同时写入同一
 目录。`close()` 后仍可读取该实例的 dataframe 快照，也可读取或修改同步保存的 metadata
-和 constants，但不能再追加数据；重新打开目录即可续写。
+和 constants，但不能再追加数据；创建一个指向同一目录的新 `LogFolder` 即可续写：
+
+```python
+log.close()
+log = LogFolder("./runs/0", create=False)
+log.add_row(time=2.0, temperature=291.4)
+```
 
 如果只需要读取已经写好的数据文件，最简单的方式是直接用 pandas：
 
@@ -90,25 +123,55 @@ df = pd.read_feather("./runs/0/data.feather")
 这适合做只读分析、导出脚本或不需要创建 `LogFolder` 对象的场景。
 
 普通脚本自然退出时，LogQbit 也会通过 `atexit` 尝试关闭仍然活跃的 `LogFolder`。
-对象被垃圾回收时还有 `weakref.finalize` 兜底。不过需要强保证时，仍然推荐使用 `with`
-或显式调用 `close()`。
+对象被垃圾回收时还有 `weakref.finalize` 兜底。如果需要立即确认数据已经写入，调用
+`flush()`；不再使用该对象时也可以显式调用 `close()`。进程崩溃或被强制终止时不能依赖
+退出清理，因此重要阶段仍应主动 flush。
 
-### 常量和元数据
+### 常量
 
 ```python
 log.add_const(temperature="300 K", bias=0.1)
 log.add_const_to_head(run_group="calibration")
 
 log.const["instrument/name"] = "scope-a"
-log.meta.star = True
-log.meta.plot_axes = ["time"]
 ```
 
 - `log.const` 是 `log.reg` 的别名，类型是 `Registry`，对应 `const.yaml`。
 - `add_const()` 会把键值追加到 YAML 文件并立即保存。
 - `add_const_to_head()` 会把键值插入到 YAML 顶部，适合放最重要的运行参数。
-- `log.meta` 对应 `metadata.json`，主要用于和 LogBrowser 交互，例如标题、收藏、
-  回收站状态、绘图轴等 GUI 展示相关的轻量状态。
+
+## LogMetadata
+
+`log.meta` 是一个 `LogMetadata`，对应记录目录中的 `metadata.json`。常用字段会在赋值时
+立即保存，主要用于控制 LogBrowser 的显示和绘图：
+
+```python
+log.meta.title = "cooldown"
+log.meta.star = 2
+log.meta.trash = False
+log.meta.plot_axes = ["time"]
+log.meta.plot_fields = ["temperature"]
+```
+
+`plot_axes` 和 `plot_fields` 读取时是不可变 tuple；赋值时可以传一个字符串或任意字符串
+序列。单个字符串会被当成一个列名，而不是拆成字符。
+
+如果要一次更新多个字段，使用 `update()` 只写一次文件：
+
+```python
+from logqbit import LogMetadata
+
+meta = LogMetadata("./runs/0/metadata.json", create=False)
+meta.update(
+    title="cooldown",
+    star=1,
+    plot_axes="time",
+    plot_fields=["temperature", "pressure"],
+)
+```
+
+`reload()` 会在磁盘文件发生变化时重新加载。直接创建的 `LogMetadata` 默认严格报告无效
+JSON；Catalog 和 LogBrowser 则使用容错读取，避免单个损坏记录阻止整个列表打开。
 
 ## LogCatalog
 
@@ -119,7 +182,7 @@ Catalog 以 `metadata.json` 文件作为日志目录的标记，因此目录名�
 `metadata.json` 的普通子目录会被忽略。
 
 ```python
-from logqbit.catalog import LogCatalog
+from logqbit import LogCatalog
 
 catalog = LogCatalog()
 records = catalog.refresh("./runs")
@@ -127,6 +190,8 @@ records = catalog.refresh("./runs")
 for record in records:
     print(record.log_id, record.title, record.row_count)
 ```
+
+结果中数字目录排在前面并按数值递增，其他目录随后按名称排序。
 
 `LogRecord` 缓存 dataframe 的行数、列名和文件版本；未变化的日志会复用同一个 record
 实例。Metadata 直接来自 `record.meta` 当前已经加载的内存值。
@@ -138,6 +203,7 @@ df = record.read_dataframe()
 
 `read_dataframe()` 是明确的一次读取，不保留隐藏的进程级缓存。LogBrowser 的 detail
 view 会按窗口和文件版本缓存完整 dataframe，因此多个 detail 窗口的刷新状态互不影响。
+记录还没有 `data.feather`，或数据读取失败时，返回 `None`。
 
 ```python
 record.meta.update(
@@ -161,7 +227,7 @@ record.meta.reload()
 `Registry` 是基于 YAML 文件的轻量键值注册表。它支持使用 `/` 分隔路径访问嵌套字段：
 
 ```python
-from logqbit.registry import Registry
+from logqbit import Registry
 
 reg = Registry("const.yaml")
 reg["device/name"] = "sample-a"
@@ -180,7 +246,7 @@ reg.save()
 `reload()` 会在文件变化后重新读取磁盘内容。本地未保存的修改会被新的磁盘内容覆盖。
 `undo()` 和 `redo()` 可以撤销或重做最近的保存快照。
 
-## DataFrameBuffer
+## 低层组件：DataFrameBuffer
 
 `DataFrameBuffer` 是 `LogFolder` 内部使用的低层组件，负责把追加进来的 dataframe
 片段缓冲在内存里，并后台 autosave 到 feather 文件。普通用户通常不需要直接使用它；

@@ -6,7 +6,7 @@
 接口时，直接安装核心包：
 
 ```bash
-uv pip install logqbit
+pip install logqbit
 ```
 
 ## GUI 功能
@@ -14,17 +14,17 @@ uv pip install logqbit
 浏览器、实时绘图和 Windows 桌面快捷方式使用单独的 `gui` extra：
 
 ```bash
-uv pip install "logqbit[gui]"
+pip install "logqbit[gui]"
 ```
 
-它会额外安装 `PySide6`、`pyqtgraph`、`numba` 和 `send2trash`。
+它会额外安装 `PySide6`、`pyqtgraph`、`numba`、`scipy` 和 `send2trash`。
 
 ## 不解析依赖的安装方式
 
 如果你已有一个稳定环境，不希望安装 logqbit 时触发依赖升级、降级或重新解析，可以使用：
 
 ```bash
-uv pip install --no-deps logqbit
+pip install --no-deps logqbit
 ```
 
 这会跳过依赖安装，只安装 logqbit 本体。
@@ -53,5 +53,7 @@ uv pip install --no-deps logqbit
 如果你后续需要这些功能，可以把 GUI extra 补装到现有环境：
 
 ```bash
-uv pip install "logqbit[gui]"
+pip install "logqbit[gui]"
 ```
+
+安装后可参考 [LogBrowser 使用指南](browser.md)。

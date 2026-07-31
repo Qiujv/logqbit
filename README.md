@@ -4,7 +4,7 @@ LogQbit 是一个面向实验室场景的轻量数据记录工具包，适合记
 
 它的核心设计目标是：
 
-- 用简单的接口和运行逻辑实验数据。
+- 用简单的接口记录和管理实验数据。
 - 基于目录的实验数据组织，用通用可读的格式储存数据。
 - 在需要时再启用浏览器和实时绘图等 GUI 能力。
 
@@ -31,9 +31,7 @@ pip install "logqbit[gui]"
 ### 用例 1：记录一组实验数据
 
 ```python
-from pathlib import Path
-
-from logqbit.logfolder import LogFolder
+from logqbit import LogFolder
 
 lf = LogFolder.new("./demo_data", title="My Experiment")
 
@@ -55,17 +53,19 @@ logqbit browser
 
 或者也可以通过 `logqbit shortcuts` 创建桌面快捷方式（仅 Windows 可用）。
 
-### 用例 3：快速生成示例数据并打开浏览器
+### 用例 3：生成示例数据并打开浏览器
 
 ```bash
 logqbit browser-demo
 ```
 
-这会在当前目录创建 `logqbit_example/`，生成多组示例数据，并启动图形化浏览器。
+这会在当前目录创建 `logqbit_example/`，生成五组示例数据并启动图形化浏览器。其中两组
+包含一百万个数据点，首次生成可能需要一点时间。
 
 更多内容：
 
 - 文档首页：https://qiujv.github.io/logqbit/
+- LogBrowser：https://qiujv.github.io/logqbit/browser/
 - 命令行工具：https://qiujv.github.io/logqbit/cli/
 - LabRAD 迁移：https://qiujv.github.io/logqbit/migration_guide/
 - Python API：https://qiujv.github.io/logqbit/api/

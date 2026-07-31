@@ -21,12 +21,12 @@ runs/0/
 最小写入示例：
 
 ```python
-from logqbit.logfolder import LogFolder
+from logqbit import LogFolder
 
-with LogFolder.new("./runs", title="cooldown") as log:
-    log.add_row(time=0.0, temperature=300.0)
-    log.add_row(time=1.0, temperature=295.2)
-    log.add_const(operator="alice", sample="device-a")
+log = LogFolder.new("./runs", title="cooldown")
+log.add_row(time=0.0, temperature=300.0)
+log.add_row(time=1.0, temperature=295.2)
+log.add_const(operator="alice", sample="device-a")
 ```
 
 如果只想读取已经写好的数据，最简单的方式是直接用 pandas：
@@ -43,7 +43,7 @@ LogQbit 的主要图形界面是 LogBrowser，用来浏览一组实验记录、�
 并打开绘图视图。使用前请安装 GUI extra：
 
 ```bash
-uv pip install "logqbit[gui]"
+pip install "logqbit[gui]"
 ```
 
 安装后可以运行：
@@ -75,6 +75,7 @@ LogBrowser 会直接预览常见图片文件，例如 `.png`、`.jpg`、`.jpeg`�
 ## 文档目录
 
 - [安装](install.md)
+- [LogBrowser 使用指南](browser.md)
 - [Python API](api.md)
 - [命令行工具和 GUI](cli.md)
 - [LabRAD 迁移](migration_guide.md)

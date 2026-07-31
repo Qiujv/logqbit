@@ -1,11 +1,11 @@
-# 命令行工具和 GUI
+# 命令行工具
 
-## 图形界面命令
+## LogBrowser
 
 以下命令需要先安装 GUI extra：
 
 ```bash
-uv pip install "logqbit[gui]"
+pip install "logqbit[gui]"
 ```
 
 启动 LogBrowser，浏览一组 `LogFolder` 记录。
@@ -20,7 +20,17 @@ logqbit-browser ./runs
 logqbit browser ./runs
 ```
 
-启动实时绘图窗口。
+也可以通过 Python 模块启动：
+
+```bash
+python -m logqbit.gui.browser ./runs
+```
+
+界面和绘图交互见 [LogBrowser 使用指南](browser.md)。
+
+## Live Plotter
+
+旧的独立实时绘图窗口仍保留兼容入口，但不再是主要界面：
 
 ```bash
 logqbit-live-plotter
@@ -28,7 +38,8 @@ logqbit-live-plotter
 
 ## 实用命令
 
-在当前目录创建 `logqbit_example/`，写入示例数据，并尝试启动浏览器。
+在当前目录创建 `logqbit_example/`，写入五组示例数据，并尝试启动浏览器。其中两组
+包含一百万个数据点，生成过程可能需要一点时间。
 
 ```bash
 logqbit browser-demo

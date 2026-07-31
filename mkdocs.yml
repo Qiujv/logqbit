@@ -27,6 +27,7 @@ plugins:
 nav:
   - 首页: index.md
   - 安装: install.md
+  - LogBrowser: browser.md
   - 命令行工具: cli.md
   - LabRAD 迁移: migration_guide.md
   - Python API: api.md

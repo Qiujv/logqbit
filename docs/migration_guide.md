@@ -1,6 +1,8 @@
 # 从 LabRAD 迁移数据
 
-本指南介绍如何把已有的 LabRAD 数据目录迁移为 logqbit 的目录结构。
+本指南介绍如何把已有的 LabRAD 数据目录迁移为 logqbit 的目录结构。随包附带的模板只是
+参考脚本，需要根据实际数据布局和已有环境自行修改；不适用时也可以直接编写转换脚本，
+只要生成下文所示的目录和文件即可。
 
 ## 快速开始
 
@@ -95,8 +97,8 @@ logqbit browser ./logqbit_moli/experiment
 也可以在 Python 中访问：
 
 ```python
-from logqbit.logfolder import LogFolder
+from logqbit import LogFolder
 
-with LogFolder("./logqbit_moli/experiment", create=False) as log:
-    print(log.df.head())
+log = LogFolder("./logqbit_moli/experiment/1", create=False)
+print(log.df.head())
 ```

@@ -33,8 +33,12 @@ test-core-matrix: (test-core-isolated "3.11") (test-core-isolated "3.13")
 build:
     uv build
 
+# Build the documentation and treat warnings as errors.
+docs:
+    uv run mkdocs build --strict
+
 # Run the usual local checks before committing.
-check: lint test
+check: lint test docs
 
 # Run the comprehensive local checks before releasing.
-release-check: lint test-core-matrix test build
+release-check: lint test-core-matrix test docs build
