@@ -37,6 +37,9 @@ packages = ["src/logqbit"]
 [tool.hatch.build.targets.sdist]
 include = ["src/", "tests/", "README.md", "LICENSE", "pyproject.toml"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [dependency-groups]
 dev = [
     "ipykernel>=6.30.1",

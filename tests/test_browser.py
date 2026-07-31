@@ -577,6 +577,32 @@ class TestRecordDetailWidgets:
         assert view._data_cache.dataframe is dataframe
         assert read_count == 0
 
+    def test_data_refresh_does_not_rebuild_tag_bar(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        record = scan_catalog(sample_logfolder)[0]
+        view = RecordDetailView()
+        view.load_record(record)
+        view.set_current_tab(TAB_PLOT)
+        set_columns_calls: list[tuple] = []
+        monkeypatch.setattr(
+            view.plot_manager.tag_bar,
+            "set_columns",
+            lambda *args: set_columns_calls.append(args),
+        )
+
+        pd.DataFrame({"x": range(5), "y": range(5), "z": range(5)}).to_feather(
+            record.data_path
+        )
+        view.refresh_current_record()
+
+        assert set_columns_calls == []
+
+        record.meta.update(plot_axes=["y"], plot_fields=["z"])
+        view.refresh_current_record()
+
+        assert len(set_columns_calls) == 1
+
     def test_const_view_uses_system_fixed_font(self) -> None:
         view = RecordDetailView()
         expected = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
@@ -879,6 +905,47 @@ class TestRecordDetailWidgets:
             assert record.row_count == 3
             assert window._selected_record is not None
             assert window._selected_record.row_count == 10
+        finally:
+            window.close()
+
+    def test_detail_data_refresh_updates_log_list_rows(
+        self, sample_logfolder: Path
+    ) -> None:
+        app = ensure_application()
+        window = LogBrowserWindow(sample_logfolder)
+        app.processEvents()
+        try:
+            record = window._selected_record
+            assert record is not None
+            pd.DataFrame({"x": range(9), "y": range(9)}).to_feather(
+                record.data_path
+            )
+
+            window.detail_view.refresh_current_record()
+
+            refreshed = window._selected_record
+            assert refreshed is not None
+            assert refreshed is window.detail_view.current_record
+            assert refreshed.row_count == 9
+            source_row = next(
+                row
+                for row in range(window.table_model.rowCount())
+                if window.table_model.get_record(row) is refreshed
+            )
+            assert (
+                window.table_model.data(
+                    window.table_model.index(source_row, COL_ROWS),
+                    Qt.DisplayRole,
+                )
+                == "9"
+            )
+
+            dataframe = window.detail_view._data_cache.dataframe
+            window.refresh_logs()
+
+            assert window._selected_record is window.detail_view.current_record
+            assert window._selected_record.row_count == 9
+            assert window.detail_view._data_cache.dataframe is dataframe
         finally:
             window.close()
 

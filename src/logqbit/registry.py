@@ -16,6 +16,8 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from typing_extensions import deprecated
 
+from .file_version import FileVersion
+
 if TYPE_CHECKING:
     from ruamel.yaml.constructor import BaseConstructor
     from ruamel.yaml.nodes import ScalarNode
@@ -23,30 +25,6 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 _sentinel = object()
-
-
-class FileSnap:
-    """Track a file's modification time and size for cheap change detection."""
-
-    __slots__ = ("path", "mtime_ns", "size", "inode")
-
-    def __init__(self, path: Path):
-        self.path = Path(path)
-        self.refresh()
-
-    def refresh(self):
-        st = self.path.stat()
-        self.mtime_ns = st.st_mtime_ns
-        self.size = st.st_size
-        self.inode = st.st_ino
-
-    def changed(self) -> bool:
-        st = self.path.stat()
-        return (st.st_mtime_ns, st.st_size, st.st_ino) != (
-            self.mtime_ns,
-            self.size,
-            self.inode,
-        )
 
 
 class Registry:
@@ -81,7 +59,7 @@ class Registry:
         self.path = path
         self._yaml = _RecoverableYAML()
         self._root: CommentedMap = self.load()
-        self._snap = FileSnap(self.path)
+        self._file_version = FileVersion.require(self.path)
         self._root_dirty: bool = False
 
         self._undo_stack: deque[CommentedMap] = deque(maxlen=history_size)
@@ -141,9 +119,10 @@ class Registry:
         self._yaml.dump(self._root, sys.stdout)
 
     def reload(self):
-        if self._root_dirty or self._snap.changed():
+        current_version = FileVersion.require(self.path)
+        if self._root_dirty or current_version != self._file_version:
             self._root = self.load()
-            self._snap.refresh()
+            self._file_version = current_version
             self._root_dirty = False
 
     def load(self, path: str | Path | None = None) -> CommentedMap:
@@ -174,7 +153,7 @@ class Registry:
                 tmp_path.unlink()
 
         if is_primary_path:
-            self._snap.refresh()
+            self._file_version = FileVersion.require(self.path)
             self._root_dirty = False
         if previous is not None:
             self._undo_stack.append(previous)

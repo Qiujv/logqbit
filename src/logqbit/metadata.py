@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Generic, TypeVar, overload
 
-from .registry import FileSnap
+from .file_version import FileVersion
 
 _T = TypeVar("_T")
 logger = logging.getLogger(__name__)
@@ -95,12 +95,13 @@ class LogMetadata:
         self.path = path
         self._default_on_error = default_on_error
         self.root = self._load()
-        self._snap = FileSnap(self.path)
+        self._file_version = FileVersion.require(self.path)
 
     def reload(self):
-        if self._snap.changed():
+        current_version = FileVersion.require(self.path)
+        if current_version != self._file_version:
             self.root = self._load()
-            self._snap.refresh()
+            self._file_version = current_version
 
     def _load(self) -> dict:
         try:
@@ -131,7 +132,7 @@ class LogMetadata:
                 tmp_path.unlink()
 
         if path == self.path:
-            self._snap.refresh()
+            self._file_version = FileVersion.require(self.path)
 
     def update(
         self,

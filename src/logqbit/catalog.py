@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import shutil
-import stat
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import cached_property
@@ -14,6 +13,7 @@ import pandas as pd
 import pyarrow
 import pyarrow.ipc
 
+from .file_version import FileVersion
 from .metadata import LogMetadata
 
 logger = logging.getLogger(__name__)
@@ -22,28 +22,7 @@ _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 _KNOWN_LOG_FILENAMES = {"const.yaml", "data.feather", "metadata.json"}
 
 
-@dataclass(frozen=True)
-class _FileVersion:
-    mtime_ns: int
-    size: int
-    inode: int
-
-    @classmethod
-    def from_path(cls, path: Path) -> _FileVersion | None:
-        try:
-            file_stat = path.stat()
-        except OSError:
-            return None
-        if not stat.S_ISREG(file_stat.st_mode):
-            return None
-        return cls(
-            file_stat.st_mtime_ns,
-            file_stat.st_size,
-            file_stat.st_ino,
-        )
-
-
-_RETRY_VERSION = _FileVersion(mtime_ns=-1, size=-1, inode=-1)
+_RETRY_VERSION = FileVersion(mtime_ns=-1, size=-1, inode=-1)
 
 
 @dataclass(frozen=True)
@@ -53,7 +32,7 @@ class LogRecord:
     path: Path
     row_count: int = 0
     columns: tuple[str, ...] = ()
-    data_version: _FileVersion | None = None
+    data_version: FileVersion | None = None
 
     def __post_init__(self) -> None:
         path = Path(self.path)
@@ -126,6 +105,26 @@ class LogRecord:
             logger.error("Failed to read feather file %s: %s", self.data_path, exc)
             return None
 
+    def refresh(self) -> LogRecord:
+        """Return a record whose metadata and data summary match the disk state."""
+        self.meta.reload()
+        data_version = FileVersion.from_path(self.data_path)
+        if self.data_version == data_version:
+            return self
+
+        try:
+            row_count, columns = _inspect_data(self.data_path, data_version)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to inspect feather file %s: %s", self.data_path, exc)
+            row_count, columns = 0, ()
+            data_version = _RETRY_VERSION
+        return LogRecord(
+            path=self.path,
+            row_count=row_count,
+            columns=columns,
+            data_version=data_version,
+        )
+
     def read_yaml_text(self) -> str:
         if not self.const_path.exists():
             return "const.yaml not found."
@@ -166,7 +165,7 @@ def _read_data_buffer(data_path: Path) -> pyarrow.BufferReader:
 
 def _inspect_data(
     data_path: Path,
-    version: _FileVersion | None,
+    version: FileVersion | None,
 ) -> tuple[int, tuple[str, ...]]:
     if version is None:
         return 0, ()
@@ -177,32 +176,6 @@ def _inspect_data(
         )
         columns = tuple(str(name) for name in reader.schema.names)
     return row_count, columns
-
-
-def _refresh_record(path: Path, previous: LogRecord | None = None) -> LogRecord:
-    if previous is not None:
-        previous.meta.reload()
-
-    data_version = _FileVersion.from_path(path / "data.feather")
-    if previous is not None and previous.data_version == data_version:
-        return previous
-
-    try:
-        row_count, columns = _inspect_data(path / "data.feather", data_version)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(
-            "Failed to inspect feather file %s: %s",
-            path / "data.feather",
-            exc,
-        )
-        row_count, columns = 0, ()
-        data_version = _RETRY_VERSION
-    return LogRecord(
-        path=path,
-        row_count=row_count,
-        columns=columns,
-        data_version=data_version,
-    )
 
 
 class LogCatalog:
@@ -234,7 +207,10 @@ class LogCatalog:
             del self._records[removed_path]
 
         for path in paths:
-            self._records[path] = _refresh_record(path, self._records.get(path))
+            previous = self._records.get(path)
+            if previous is None:
+                previous = LogRecord(path)
+            self._records[path] = previous.refresh()
 
         return sorted(
             self._records.values(),

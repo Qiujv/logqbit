@@ -7,6 +7,7 @@ import numbers
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -49,6 +50,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from ..file_version import FileVersion
 from .plotter import PlotManager
 
 if TYPE_CHECKING:
@@ -228,13 +230,32 @@ class PandasTableModel(QAbstractTableModel):
         return str(self._df.index[section])
 
 
+@dataclass
+class DetailMetadataCache:
+    """Track whether plot controls need to be synchronized from metadata."""
+
+    path: Path | None = None
+    version: FileVersion | None = None
+
+    def clear(self) -> None:
+        self.path = None
+        self.version = None
+
+    def update(self, record: LogRecord) -> bool:
+        version = FileVersion.from_path(record.meta_path)
+        changed = self.path != record.path or self.version != version
+        self.path = record.path
+        self.version = version
+        return changed
+
+
 class DetailDataCache:
     """Full-data cache owned by one detail view."""
 
     def __init__(self) -> None:
         self.dataframe: pd.DataFrame | None = None
         self.path: Path | None = None
-        self.version: tuple[int, int, int] | None = None
+        self.version: FileVersion | None = None
 
     def clear(self) -> None:
         self.dataframe = None
@@ -243,11 +264,7 @@ class DetailDataCache:
 
     def load(self, record: LogRecord) -> pd.DataFrame | None:
         data_path = record.data_path
-        try:
-            stat = data_path.stat()
-            version = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
-        except OSError:
-            version = None
+        version = FileVersion.from_path(data_path)
         if (
             self.dataframe is not None
             and self.path == record.path
@@ -402,6 +419,7 @@ class RecordDetailView(QWidget):
         super().__init__(parent)
         self._record: LogRecord | None = None
         self._data_cache = DetailDataCache()
+        self._metadata_cache = DetailMetadataCache()
         self._file_open_callback = file_open_callback
         self._enable_tab_shortcuts = enable_tab_shortcuts
         self._shortcuts: list[QAction] = []
@@ -445,6 +463,7 @@ class RecordDetailView(QWidget):
         self.tab_widget.setCurrentIndex((current + step) % count)
 
     def load_record(self, record: LogRecord) -> None:
+        update_plot_controls = self._metadata_cache.update(record)
         dataframe = self._data_cache.load(record)
         self._record = record
         self.detail_id_label.setText(f"#{record.log_id}")
@@ -458,11 +477,9 @@ class RecordDetailView(QWidget):
         self._update_image_tabs(record.list_image_files())
         self.files_button.setEnabled(True)
         defer_plot = self.tab_widget.currentIndex() != TAB_PLOT
-        self.plot_manager.update_plot_and_controls(
-            record,
-            dataframe,
-            defer_plot=defer_plot,
-        )
+        if update_plot_controls:
+            self.plot_manager.update_controls(record, dataframe)
+        self.plot_manager.update_plot(record, dataframe, defer=defer_plot)
         self._sync_detail_watcher()
 
     def refresh_current_record(self, *, force: bool = False) -> None:
@@ -470,7 +487,7 @@ class RecordDetailView(QWidget):
             return
         if force:
             self._data_cache.clear()
-        self._record.meta.reload()
+        self._record = self._record.refresh()
         self.load_record(self._record)
         self.record_refreshed.emit(self._record)
 
@@ -479,6 +496,7 @@ class RecordDetailView(QWidget):
         self._clear_detail_watcher()
         self._record = None
         self._data_cache.clear()
+        self._metadata_cache.clear()
         self.detail_id_label.setText("")
         self.detail_label.setText(message)
         self.yaml_view.setPlainText("")

@@ -348,20 +348,13 @@ class PlotManager:
             self._needs_refresh = False
             self.refresh_plot()
 
-    def update_plot_and_controls(
+    def update_controls(
         self,
         record: LogRecord,
         frame: pd.DataFrame | None,
-        defer_plot: bool = False,
     ) -> None:
-        self._plot_record = record
-        self._plot_frame = frame
-
         if frame is None or frame.empty or not len(frame.columns):
             self.tag_bar.set_columns([], [], [])
-            self.plot_widget.clear()
-            self.plot_status_label.setText("No columns available to plot.")
-            self._needs_refresh = False
             return
 
         columns = list(frame.columns)
@@ -379,7 +372,21 @@ class PlotManager:
         self.tag_bar.set_columns(columns, plot_axes, plot_fields)
         self._suppress_updates = False
 
-        if defer_plot:
+    def update_plot(
+        self,
+        record: LogRecord,
+        frame: pd.DataFrame | None,
+        *,
+        defer: bool = False,
+    ) -> None:
+        self._plot_record = record
+        self._plot_frame = frame
+
+        if frame is None or frame.empty or not len(frame.columns):
+            self.plot_widget.clear()
+            self.plot_status_label.setText("No columns available to plot.")
+            self._needs_refresh = False
+        elif defer:
             self._needs_refresh = True
         else:
             self.refresh_plot()
