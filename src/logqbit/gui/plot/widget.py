@@ -30,38 +30,10 @@ from PySide6.QtWidgets import (
 if TYPE_CHECKING:
     from logqbit.catalog import LogRecord
 
+from logqbit.catalog import resolve_plot_columns
 from logqbit.gui.plot.cursor import CursorController, CursorSeries
 from logqbit.gui.plot.fit import FitController, FitViewBox
 from logqbit.gui.plot.mesh import build_plot_mesh
-
-
-def _ordered_unique(items: Sequence[str]) -> list[str]:
-    """Remove duplicates while preserving their first occurrence."""
-    return list(dict.fromkeys(items))
-
-
-def _partition_columns(
-    columns: Sequence[str],
-    plot_axes: Sequence[str],
-    plot_fields: Sequence[str],
-) -> tuple[list[str], list[str], list[str]]:
-    """Return ordered, disjoint axes, fields, and ignored columns."""
-    columns = _ordered_unique(columns)
-    axes = [column for column in _ordered_unique(plot_axes) if column in columns]
-    fields = [
-        column
-        for column in _ordered_unique(plot_fields)
-        if column in columns and column not in axes
-    ]
-    ignored = [
-        column for column in columns if column not in axes and column not in fields
-    ]
-
-    if not axes and ignored:
-        axes.append(ignored.pop(0))
-    if not fields and ignored:
-        fields.append(ignored.pop(0))
-    return axes, fields, ignored
 
 
 class TagBar(QWidget):
@@ -143,18 +115,18 @@ class TagBar(QWidget):
         plot_axes: Sequence[str],
         plot_fields: Sequence[str],
     ) -> None:
-        axes, fields, ignored = _partition_columns(columns, plot_axes, plot_fields)
+        resolved = resolve_plot_columns(columns, plot_axes, plot_fields)
 
         self._loading = True
         try:
             self._list.clear()
-            for name in axes:
+            for name in resolved.axes:
                 self._list.addItem(name)
             self._list.addItem(self._make_sep())
-            for name in fields:
+            for name in resolved.fields:
                 self._list.addItem(name)
             self._list.addItem(self._make_sep())
-            for name in ignored:
+            for name in resolved.ignored:
                 item = QListWidgetItem(name)
                 item.setForeground(self._GRAY)
                 self._list.addItem(item)
@@ -395,11 +367,10 @@ class PlotManager:
             return
 
         columns = list(frame.columns)
-        plot_axes = record.plot_axes
-        plot_fields = record.plot_fields
+        resolved = record.resolved_plot_columns
 
         self._suppress_updates = True
-        self.tag_bar.set_columns(columns, plot_axes, plot_fields)
+        self.tag_bar.set_columns(columns, resolved.axes, resolved.fields)
         self._suppress_updates = False
 
     def update_plot(

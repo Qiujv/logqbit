@@ -146,10 +146,10 @@ class LogListTableModel(QAbstractTableModel):
             if column == COL_CREATE_MACHINE:
                 return record.create_machine
             if column == COL_PLOT_AXES:
-                if record.plot_axes:
+                plot_axes = record.resolved_plot_columns.axes
+                if plot_axes:
                     return ",".join(
-                        [str(len(record.plot_axes))]
-                        + [axis[:3] for axis in record.plot_axes]
+                        [str(len(plot_axes))] + [axis[:3] for axis in plot_axes]
                     )
                 return ""
 
@@ -167,10 +167,9 @@ class LogListTableModel(QAbstractTableModel):
             if column == COL_TITLE:
                 return record.title or "(untitled)"
             if column == COL_PLOT_AXES:
+                plot_axes = record.resolved_plot_columns.axes
                 return (
-                    ", ".join(record.plot_axes)
-                    if record.plot_axes
-                    else "(no plot axes)"
+                    ", ".join(plot_axes) if plot_axes else "(no plot axes)"
                 )
         if role == Qt.UserRole and column == COL_ID:
             return record

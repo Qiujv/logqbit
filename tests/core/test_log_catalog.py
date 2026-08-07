@@ -4,7 +4,12 @@ import pandas as pd
 import pytest
 
 from logqbit import catalog as catalog_module
-from logqbit.catalog import LogCatalog, LogRecord
+from logqbit.catalog import (
+    LogCatalog,
+    LogRecord,
+    PlotColumns,
+    resolve_plot_columns,
+)
 from logqbit.logfolder import LogFolder
 from logqbit.metadata import LogMetadata
 
@@ -32,6 +37,29 @@ def test_refresh_reuses_unchanged_records(
     second_record = catalog.refresh(sample_logfolder)[0]
 
     assert second_record is first_record
+
+
+def test_resolve_plot_columns_applies_preferences_and_defaults() -> None:
+    assert resolve_plot_columns(
+        ["x", "y", "signal", "reference"],
+        ["missing", "y", "y"],
+        ["y", "signal", "signal"],
+    ) == PlotColumns(
+        axes=("y",),
+        fields=("signal",),
+        ignored=("x", "reference"),
+    )
+
+    assert resolve_plot_columns(["x", "signal", "reference"], [], []) == PlotColumns(
+        axes=("x",),
+        fields=("signal",),
+        ignored=("reference",),
+    )
+    assert resolve_plot_columns(["x", "signal"], "x", "signal") == PlotColumns(
+        axes=("x",),
+        fields=("signal",),
+        ignored=(),
+    )
 
 
 def test_catalog_uses_metadata_file_as_log_directory_marker(
@@ -117,8 +145,9 @@ def test_record_uses_editable_defaults_for_invalid_metadata(
     assert record.title == "<invalid metadata>"
     assert record.star == 0
     assert record.trash is False
-    assert record.plot_axes == ()
-    assert record.plot_fields == ()
+    assert record.meta.plot_axes == ()
+    assert record.meta.plot_fields == ()
+    assert record.resolved_plot_columns == PlotColumns((), (), ())
 
     record.meta.update(title="repaired")
 
@@ -195,8 +224,39 @@ def test_record_reads_current_in_memory_metadata(
     assert record.title == "updated"
     assert record.star == 2
     assert record.trash is True
-    assert record.plot_axes == ("x",)
-    assert record.plot_fields == ("z",)
+    assert record.meta.plot_axes == ("x",)
+    assert record.meta.plot_fields == ("z",)
+    assert record.resolved_plot_columns == PlotColumns(
+        axes=("x",),
+        fields=("z",),
+        ignored=("y",),
+    )
+
+
+def test_metadata_refresh_resolves_plot_columns_without_inspecting_data(
+    sample_logfolder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = LogCatalog(sample_logfolder)
+    record = catalog.refresh()[0]
+    LogMetadata(record.meta_path, create=False).update(
+        plot_axes=["missing", "z"],
+        plot_fields=["x"],
+    )
+
+    def fail_open_file(*args, **kwargs):
+        raise AssertionError("metadata-only refresh should not inspect Feather")
+
+    monkeypatch.setattr(catalog_module.pyarrow.ipc, "open_file", fail_open_file)
+
+    refreshed = catalog.refresh()[0]
+
+    assert refreshed is record
+    assert refreshed.resolved_plot_columns == PlotColumns(
+        axes=("z",),
+        fields=("x",),
+        ignored=("y",),
+    )
 
 
 def test_logfolder_and_record_share_metadata_interface(tmp_path: Path) -> None:

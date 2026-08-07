@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -23,6 +23,53 @@ _KNOWN_LOG_FILENAMES = {"const.yaml", "data.feather", "metadata.json"}
 
 
 _RETRY_VERSION = FileVersion(mtime_ns=-1, size=-1, inode=-1)
+
+
+@dataclass(frozen=True)
+class PlotColumns:
+    """Plot roles resolved against the columns available in one record."""
+
+    axes: tuple[str, ...]
+    fields: tuple[str, ...]
+    ignored: tuple[str, ...]
+
+
+def resolve_plot_columns(
+    columns: Sequence[str],
+    preferred_axes: Sequence[str],
+    preferred_fields: Sequence[str],
+) -> PlotColumns:
+    """Resolve stored plot preferences into ordered, disjoint column roles."""
+
+    columns = _ordered_unique(columns)
+    available = set(columns)
+    axes = [
+        column for column in _ordered_unique(preferred_axes) if column in available
+    ]
+    axes_set = set(axes)
+    fields = [
+        column
+        for column in _ordered_unique(preferred_fields)
+        if column in available and column not in axes_set
+    ]
+    fields_set = set(fields)
+    ignored = [
+        column
+        for column in columns
+        if column not in axes_set and column not in fields_set
+    ]
+
+    if not axes and ignored:
+        axes.append(ignored.pop(0))
+    if not fields and ignored:
+        fields.append(ignored.pop(0))
+    return PlotColumns(tuple(axes), tuple(fields), tuple(ignored))
+
+
+def _ordered_unique(items: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(items, str):
+        return (items,)
+    return tuple(dict.fromkeys(str(item) for item in items))
 
 
 @dataclass(frozen=True)
@@ -80,12 +127,13 @@ class LogRecord:
         return bool(self.meta.root.get("trash", False))
 
     @property
-    def plot_axes(self) -> tuple[str, ...]:
-        return tuple(str(item) for item in self.meta.root.get("plot_axes", []))
-
-    @property
-    def plot_fields(self) -> tuple[str, ...]:
-        return tuple(str(item) for item in self.meta.root.get("plot_fields", []))
+    def resolved_plot_columns(self) -> PlotColumns:
+        """Return the effective plot roles for the current data columns."""
+        return resolve_plot_columns(
+            self.columns,
+            self.meta.root.get("plot_axes", ()),
+            self.meta.root.get("plot_fields", ()),
+        )
 
     @property
     def create_time(self) -> str:

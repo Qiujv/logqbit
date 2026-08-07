@@ -11,6 +11,7 @@ import pytest
 from PySide6.QtCore import QRectF
 from PySide6.QtWidgets import QSizePolicy
 
+from logqbit.catalog import PlotColumns, resolve_plot_columns
 from logqbit.gui.plot.fit import fit_exponential, fit_quadratic
 from logqbit.gui.plot.mesh import (
     _build_grids_rect,
@@ -21,7 +22,6 @@ from logqbit.gui.plot.mesh import (
 from logqbit.gui.plot.widget import (
     PlotManager,
     TagBar,
-    _partition_columns,
 )
 
 
@@ -55,16 +55,18 @@ class TestTagBar:
         assert tag_bar._split()[2] == ["reference"]
 
 
-def test_partition_columns_fills_axes_before_fields() -> None:
-    axes, fields, ignored = _partition_columns(
+def test_resolve_plot_columns_fills_axes_before_fields() -> None:
+    resolved = resolve_plot_columns(
         ["x", "signal", "reference"],
         [],
         [],
     )
 
-    assert axes == ["x"]
-    assert fields == ["signal"]
-    assert ignored == ["reference"]
+    assert resolved == PlotColumns(
+        axes=("x",),
+        fields=("signal",),
+        ignored=("reference",),
+    )
 
 
 class TestFits:

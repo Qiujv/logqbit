@@ -264,7 +264,7 @@ class DataViewManager:
         model = PandasTableModel(
             dataframe,
             self.data_table,
-            highlight_columns=record.plot_axes,
+            highlight_columns=record.resolved_plot_columns.axes,
             preview_limit=preview_limit,
         )
         self.data_table.setModel(model)

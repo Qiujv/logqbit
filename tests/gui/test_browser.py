@@ -315,6 +315,23 @@ class TestLogListTableModel:
         tooltip = model.data(index, Qt.ToolTipRole)
         
         assert tooltip == "x, y"
+
+    def test_data_display_uses_resolved_plot_axes(
+        self,
+        sample_logfolder: Path,
+    ) -> None:
+        record = scan_catalog(sample_logfolder)[0]
+        record.meta.update(
+            plot_axes=["missing", "y", "y"],
+            plot_fields=["x"],
+        )
+        model = LogListTableModel()
+        model.set_records([record])
+        index = model.index(0, COL_PLOT_AXES)
+
+        assert record.meta.plot_axes == ("missing", "y", "y")
+        assert model.data(index, Qt.DisplayRole) == "1,y"
+        assert model.data(index, Qt.ToolTipRole) == "y"
     
     def test_data_font_role_starred(self, sample_records: list[LogRecord]) -> None:
         """Test font styling for starred items."""
