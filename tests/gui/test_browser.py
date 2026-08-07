@@ -649,7 +649,7 @@ class TestRecordDetailWidgets:
         assert image.save(str(image_path))
 
         empty_path = sample_logfolder / "999"
-        LogFolder(empty_path).close()
+        LogFolder(empty_path)
         record_without_image = next(
             record
             for record in scan_catalog(sample_logfolder)

@@ -92,25 +92,25 @@ log.capture(
 ```python
 df = log.df
 log.flush()
-log.close()
 ```
 
 - `log.df` 返回当前完整 dataframe 的副本，包括还没有写入磁盘的缓冲行，但不会触发 flush。
 - `log.flush()` 立即同步写入 `data.feather`，调用会阻塞直到写入完成。
-- `log.close()` 会先 flush，再停止后台 autosave 线程。它是幂等的，可以重复调用。
 
-没有追加过数据的记录在关闭时不会创建空的 `data.feather`，但已经同步写入的
+没有追加过数据的记录不会创建空的 `data.feather`，但已经同步写入的
 `metadata.json` 和 `const.yaml` 仍会保留。
 
-同一进程内，同一目录只允许一个活跃的 `LogFolder` writer；也不支持多个进程同时写入同一
-目录。`close()` 后仍可读取该实例的 dataframe 快照，也可读取或修改同步保存的 metadata
-和 constants，但不能再追加数据；创建一个指向同一目录的新 `LogFolder` 即可续写：
+同一进程内，指向同一目录的 `LogFolder` 实例会共享一个 dataframe buffer，因此可以从
+任一实例追加、读取或 flush 数据：
 
 ```python
-log.close()
-log = LogFolder("./runs/0", create=False)
-log.add_row(time=2.0, temperature=291.4)
+first = LogFolder("./runs/0", create=False)
+second = LogFolder("./runs/0", create=False)
+first.add_row(time=2.0, temperature=291.4)
+second.flush()
 ```
+
+这只协调当前 Python 进程内的访问；仍不支持多个进程同时写入同一目录。
 
 如果只需要读取已经写好的数据文件，最简单的方式是直接用 pandas：
 
@@ -122,10 +122,10 @@ df = pd.read_feather("./runs/0/data.feather")
 
 这适合做只读分析、导出脚本或不需要创建 `LogFolder` 对象的场景。
 
-普通脚本自然退出时，LogQbit 也会通过 `atexit` 尝试关闭仍然活跃的 `LogFolder`。
-对象被垃圾回收时还有 `weakref.finalize` 兜底。如果需要立即确认数据已经写入，调用
-`flush()`；不再使用该对象时也可以显式调用 `close()`。进程崩溃或被强制终止时不能依赖
-退出清理，因此重要阶段仍应主动 flush。
+最后一个共享 buffer 的 Python 引用消失时，LogQbit 会自动 flush 并停止对应的 autosave
+线程；普通脚本自然退出时也会执行这项清理。`with LogFolder(...)` 会在退出代码块时 flush，
+但不会让该对象失效，之后仍可继续使用。如果需要立即确认数据已经写入，应主动调用
+`flush()`。进程崩溃或被强制终止时不能依赖自动清理，因此重要阶段仍应主动 flush。
 
 ### 常量
 
@@ -250,7 +250,7 @@ reg.save()
 
 `DataFrameBuffer` 是 `LogFolder` 内部使用的低层组件，负责把追加进来的 dataframe
 片段缓冲在内存里，并后台 autosave 到 feather 文件。普通用户通常不需要直接使用它；
-优先使用 `LogFolder.add_row()`、`LogFolder.flush()` 和 `LogFolder.close()`。
+优先使用 `LogFolder.add_row()` 和 `LogFolder.flush()`。
 
 如果需要单独使用 dataframe 缓冲，可以这样写：
 
@@ -259,16 +259,16 @@ import pandas as pd
 
 from logqbit.dataframe import DataFrameBuffer
 
-buffer = DataFrameBuffer("data.feather")
+buffer = DataFrameBuffer.open("data.feather")
 buffer.add_one_row({"x": 1.0, "y": 2.0})
 buffer.add_multi_rows(pd.DataFrame({"x": [2.0, 3.0], "y": [4.0, 6.0]}))
 buffer.flush()
-buffer.close()
 ```
 
 后台线程的状态机很小：等待数据变 dirty，等待当前 autosave interval 合并连续追加，
 如果仍然 dirty 就写盘。临时写入失败时会保留 dirty 状态并重试；`flush()` 会跳过等待，
-在调用线程同步写入并直接报告错误。
+在调用线程同步写入并直接报告错误。同一进程中，对相同路径调用 `open()` 会复用现有
+buffer；最后一个引用消失时，它会自动 flush 并停止后台线程。
 
 ## API Reference
 

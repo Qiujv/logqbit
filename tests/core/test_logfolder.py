@@ -3,6 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import gc
 from pathlib import Path
+import subprocess
+import sys
 import weakref
 
 import pandas as pd
@@ -105,71 +107,27 @@ def test_load_raises_for_missing_directory(tmp_path: Path) -> None:
         LogFolder(tmp_path / "nonexistent", create=False)
 
 
-def test_context_manager_closes_and_flushes(tmp_path: Path) -> None:
+def test_context_manager_flushes_without_invalidating_logfolder(tmp_path: Path) -> None:
     with LogFolder.new(tmp_path) as lf:
         path = lf.df_path
         lf.add_row(x=1)
 
     saved_df = pd.read_feather(path)
-    pd.testing.assert_frame_equal(saved_df.reset_index(drop=True), pd.DataFrame([{"x": 1}]))
+    pd.testing.assert_frame_equal(saved_df, pd.DataFrame({"x": [1]}))
+
+    lf.add_row(x=2)
+    lf.flush()
+    pd.testing.assert_frame_equal(pd.read_feather(path), pd.DataFrame({"x": [1, 2]}))
 
 
-def test_context_manager_closes_after_body_error(tmp_path: Path) -> None:
+def test_context_manager_flushes_after_body_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="experiment failed"):
         with LogFolder.new(tmp_path) as lf:
             path = lf.df_path
             lf.add_row(x=1)
             raise ValueError("experiment failed")
 
-    assert lf.closed
     pd.testing.assert_frame_equal(pd.read_feather(path), pd.DataFrame({"x": [1]}))
-
-
-def test_close_is_idempotent(tmp_path: Path) -> None:
-    lf = LogFolder.new(tmp_path)
-    lf.add_row(x=1)
-
-    lf.close()
-    lf.close()
-
-    saved_df = pd.read_feather(lf.df_path)
-    pd.testing.assert_frame_equal(saved_df.reset_index(drop=True), pd.DataFrame([{"x": 1}]))
-
-
-def test_close_empty_logfolder_does_not_create_feather(tmp_path: Path) -> None:
-    lf = LogFolder.new(tmp_path)
-
-    lf.close()
-
-    assert not lf.df_path.exists()
-    assert lf.df.empty
-
-
-def test_closed_logfolder_is_readable_but_rejects_new_data(tmp_path: Path) -> None:
-    lf = LogFolder.new(tmp_path)
-    lf.add_row(x=1)
-    lf.close()
-
-    assert lf.closed
-    pd.testing.assert_frame_equal(lf.df, pd.DataFrame({"x": [1]}))
-    message = "create a new LogFolder"
-    with pytest.raises(RuntimeError, match=message):
-        lf.add_row(x=2)
-    with pytest.raises(RuntimeError, match=message):
-        lf.add_df(pd.DataFrame({"x": [2]}))
-    with pytest.raises(RuntimeError, match=message):
-        lf.add_row(x=[1, 2], y=[1])
-    with pytest.raises(RuntimeError, match=message):
-        lf.capture(lambda x: {"y": x}, {"x": [1, 2]})
-
-    pd.testing.assert_frame_equal(lf.df, pd.DataFrame({"x": [1]}))
-    assert not (lf.path / "const.yaml").exists()
-    assert lf.meta.plot_axes == ()
-
-    lf.meta.title = "closed snapshot"
-    lf.add_const(note="still editable")
-    assert lf.meta.title == "closed snapshot"
-    assert lf.reg["note"] == "still editable"
 
 
 def test_logfolder_rejects_empty_row_and_ignores_empty_dataframe(
@@ -184,26 +142,39 @@ def test_logfolder_rejects_empty_row_and_ignores_empty_dataframe(
     assert not path.exists()
 
 
-def test_only_one_active_writer_can_own_a_logfolder(tmp_path: Path) -> None:
+def test_logfolders_for_same_path_share_dataframe_buffer(tmp_path: Path) -> None:
     first = LogFolder.new(tmp_path)
     path = first.path
-    try:
-        first.add_row(x=1)
-        with pytest.raises(RuntimeError, match="active writer"):
-            LogFolder(path, create=False)
-    finally:
-        first.close()
-    first_snapshot = first.df
+    second = LogFolder(path, create=False)
 
-    with LogFolder(path, create=False) as reopened:
-        reopened.add_row(x=2)
+    assert second._handler is first._handler
+    first.add_row(x=1)
+    second.add_row(x=2)
+    second.flush()
 
     pd.testing.assert_frame_equal(
         pd.read_feather(path / "data.feather"),
         pd.DataFrame({"x": [1, 2]}),
     )
-    pd.testing.assert_frame_equal(first_snapshot, pd.DataFrame({"x": [1]}))
-    pd.testing.assert_frame_equal(first.df, first_snapshot)
+    pd.testing.assert_frame_equal(first.df, second.df)
+
+
+def test_collecting_one_logfolder_keeps_shared_buffer_alive(tmp_path: Path) -> None:
+    first = LogFolder.new(tmp_path)
+    second = LogFolder(first.path, create=False)
+    state = first._handler._state
+    first_ref = weakref.ref(first)
+
+    del first
+    gc.collect()
+
+    assert first_ref() is None
+    assert state.thread.is_alive()
+    second.add_row(x=1)
+    second.flush()
+    pd.testing.assert_frame_equal(
+        pd.read_feather(second.df_path), pd.DataFrame({"x": [1]})
+    )
 
 
 def test_capture_records_data_axes_and_constants(tmp_path: Path) -> None:
@@ -227,13 +198,35 @@ def test_finalize_flushes_when_logfolder_is_collected(tmp_path: Path) -> None:
     path = lf.df_path
     lf.add_row(x=1)
     ref = weakref.ref(lf)
+    buffer_ref = weakref.ref(lf._handler)
+    state = lf._handler._state
 
     del lf
     gc.collect()
 
     assert ref() is None
+    assert buffer_ref() is None
+    assert not state.thread.is_alive()
     saved_df = pd.read_feather(path)
-    pd.testing.assert_frame_equal(saved_df.reset_index(drop=True), pd.DataFrame([{"x": 1}]))
+    pd.testing.assert_frame_equal(
+        saved_df.reset_index(drop=True), pd.DataFrame([{"x": 1}])
+    )
 
-    with LogFolder(path.parent, create=False) as reopened:
-        assert not reopened.closed
+    reopened = LogFolder(path.parent, create=False)
+    assert reopened._handler._state is not state
+
+
+def test_normal_process_exit_flushes_pending_rows(tmp_path: Path) -> None:
+    path = tmp_path / "run"
+    script = (
+        "from logqbit import LogFolder\n"
+        f"log = LogFolder({str(path)!r})\n"
+        "log.add_row(x=1)\n"
+    )
+
+    subprocess.run([sys.executable, "-c", script], check=True)
+
+    pd.testing.assert_frame_equal(
+        pd.read_feather(path / "data.feather"),
+        pd.DataFrame({"x": [1]}),
+    )

@@ -38,7 +38,7 @@ def test_catalog_uses_metadata_file_as_log_directory_marker(
     tmp_path: Path,
 ) -> None:
     named_path = tmp_path / "named-run"
-    LogFolder(named_path, title="named").close()
+    LogFolder(named_path, title="named")
     numeric_without_metadata = tmp_path / "123"
     numeric_without_metadata.mkdir()
 
@@ -50,7 +50,7 @@ def test_catalog_uses_metadata_file_as_log_directory_marker(
 
 def test_refresh_orders_numeric_then_named_directories(tmp_path: Path) -> None:
     for name in ("10", "beta", "2", "Alpha", "1"):
-        LogFolder(tmp_path / name).close()
+        LogFolder(tmp_path / name)
 
     records = LogCatalog(tmp_path).refresh()
 

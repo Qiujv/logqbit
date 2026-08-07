@@ -1,8 +1,6 @@
-import atexit
 import inspect
 import itertools
 import os
-import weakref
 from collections.abc import Callable
 from functools import cached_property
 from pathlib import Path
@@ -20,31 +18,6 @@ from .registry import Registry, get_parser
 yaml = get_parser()
 
 
-_ACTIVE_LOGFOLDERS: weakref.WeakSet["LogFolder"] = weakref.WeakSet()
-
-
-def _close_handler_quietly(handler: DataFrameBuffer) -> None:
-    try:
-        handler.close()
-    except Exception:
-        pass
-
-
-def _close_logfolder_quietly(logfolder: "LogFolder") -> None:
-    try:
-        logfolder.close()
-    except Exception:
-        pass
-
-
-def _close_active_logfolders() -> None:
-    for logfolder in list(_ACTIVE_LOGFOLDERS):
-        _close_logfolder_quietly(logfolder)
-
-
-atexit.register(_close_active_logfolders)
-
-
 class LogFolder:
     """Directory-backed experiment log with data, metadata, and constants.
 
@@ -54,9 +27,7 @@ class LogFolder:
     - ``metadata.json`` for lightweight metadata
     - ``const.yaml`` for constant parameters and configuration
 
-    Within one process, only one active writer may own a log directory at a
-    time. Closing stops data appends; dataframe snapshots, metadata, and
-    constants remain readable.
+    Instances for the same directory share one process-local dataframe buffer.
     """
 
     def __init__(
@@ -75,20 +46,13 @@ class LogFolder:
 
         self.path = path
         self.meta = LogMetadata(path / "metadata.json", title, create=True)
-        self._handler = DataFrameBuffer(path / "data.feather")
-        self._finalizer = weakref.finalize(self, _close_handler_quietly, self._handler)
-        _ACTIVE_LOGFOLDERS.add(self)
+        self._handler = DataFrameBuffer.open(path / "data.feather")
 
     def __enter__(self) -> "LogFolder":
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.close()
-
-    @property
-    def closed(self) -> bool:
-        """Whether the dataframe writer has been closed."""
-        return self._handler.closed
+        self.flush()
 
     @cached_property
     def reg(self) -> Registry:
@@ -139,7 +103,6 @@ class LogFolder:
         Supports both scalar and vector input.
         For vector input, pandas will check length consistency.
         """
-        self._require_open()
         if not kwargs:
             raise ValueError("cannot add a row without any columns")
         is_multi_row = [
@@ -154,7 +117,6 @@ class LogFolder:
 
     def add_df(self, df: pd.DataFrame) -> None:
         """Append all rows from an existing dataframe."""
-        self._require_open()
         self._handler.add_multi_rows(df)
 
     def capture(
@@ -163,7 +125,6 @@ class LogFolder:
         axes: list[float | list[float]] | dict[str, float | list[float]],
     ):
         """Capture a parameter sweep."""
-        self._require_open()
         if not isinstance(axes, dict):  # Assumes isinstance(axes, list)
             fsig = inspect.signature(func)
             axes = dict(zip(fsig.parameters.keys(), axes))
@@ -220,16 +181,3 @@ class LogFolder:
     def flush(self) -> None:
         """Flush pending data immediately, blocking until done."""
         self._handler.flush()
-
-    def close(self) -> None:
-        """Flush pending data and stop the background autosave thread."""
-        self._handler.close()
-        self._finalizer.detach()
-        _ACTIVE_LOGFOLDERS.discard(self)
-
-    def _require_open(self) -> None:
-        if self.closed:
-            raise RuntimeError(
-                "Cannot add data after LogFolder.close(); "
-                "create a new LogFolder to add more data."
-            )

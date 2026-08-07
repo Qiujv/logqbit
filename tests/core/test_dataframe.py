@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 import time
+import weakref
 from pathlib import Path
 
 import pandas as pd
@@ -12,39 +14,34 @@ from logqbit.dataframe import DataFrameBuffer, _autosave_interval_for_rows
 
 def test_flush_writes_pending_rows(tmp_path: Path) -> None:
     path = tmp_path / "data.feather"
-    frame = DataFrameBuffer(path)
-    try:
-        frame.add_one_row({"x": 1, "y": 2.0})
+    frame = DataFrameBuffer.open(path)
+    frame.add_one_row({"x": 1, "y": 2.0})
 
-        saved = frame.flush()
+    saved = frame.flush()
 
-        expected = pd.DataFrame([{"x": 1, "y": 2.0}])
-        pd.testing.assert_frame_equal(saved.reset_index(drop=True), expected)
-        pd.testing.assert_frame_equal(
-            pd.read_feather(path).reset_index(drop=True),
-            expected,
-        )
-    finally:
-        frame.close()
+    expected = pd.DataFrame([{"x": 1, "y": 2.0}])
+    pd.testing.assert_frame_equal(saved.reset_index(drop=True), expected)
+    pd.testing.assert_frame_equal(
+        pd.read_feather(path).reset_index(drop=True),
+        expected,
+    )
 
 
 def test_autosave_writes_pending_rows(tmp_path: Path) -> None:
     path = tmp_path / "data.feather"
-    frame = DataFrameBuffer(path, autosave_interval=0.01)
-    try:
-        frame.add_multi_rows(pd.DataFrame({"x": [1, 2], "y": [3.0, 4.0]}))
+    frame = DataFrameBuffer.open(path)
+    frame._state.autosave_interval = 0.01
+    frame.add_multi_rows(pd.DataFrame({"x": [1, 2], "y": [3.0, 4.0]}))
 
-        deadline = time.monotonic() + 1
-        while not path.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
+    deadline = time.monotonic() + 1
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
 
-        expected = pd.DataFrame({"x": [1, 2], "y": [3.0, 4.0]})
-        pd.testing.assert_frame_equal(
-            pd.read_feather(path).reset_index(drop=True),
-            expected,
-        )
-    finally:
-        frame.close()
+    expected = pd.DataFrame({"x": [1, 2], "y": [3.0, 4.0]})
+    pd.testing.assert_frame_equal(
+        pd.read_feather(path).reset_index(drop=True),
+        expected,
+    )
 
 
 @pytest.mark.parametrize(
@@ -61,8 +58,10 @@ def test_autosave_recovers_and_cleans_up_after_write_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     path = tmp_path / "data.feather"
-    frame = DataFrameBuffer(path, autosave_interval=0.01)
-    original_replace = frame._replace_tmp
+    frame = DataFrameBuffer.open(path)
+    frame._state.autosave_interval = 0.01
+    state = frame._state
+    original_replace = state._replace_tmp
     replace_count = 0
 
     def replace_once_failed(*args, **kwargs) -> None:
@@ -73,37 +72,48 @@ def test_autosave_recovers_and_cleans_up_after_write_error(
         original_replace(*args, **kwargs)
 
     monkeypatch.setattr(dataframe_module, "_AUTOSAVE_RETRY_INTERVAL", 0.01)
-    monkeypatch.setattr(frame, "_replace_tmp", replace_once_failed)
-    try:
-        frame.add_one_row({"x": 1})
-        deadline = time.monotonic() + 1
-        while not path.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-
-        assert path.exists()
-        assert frame._thread.is_alive()
-        assert replace_count >= 2
-        assert not list(tmp_path.glob("data.*.tmp"))
-        assert "temporary write failure" in caplog.text
-    finally:
-        frame.close()
-
-
-def test_closed_buffer_remains_readable_but_rejects_appends(tmp_path: Path) -> None:
-    frame = DataFrameBuffer(tmp_path / "data.feather")
+    monkeypatch.setattr(state, "_replace_tmp", replace_once_failed)
     frame.add_one_row({"x": 1})
-    frame.close()
+    deadline = time.monotonic() + 1
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
 
-    assert frame.closed
-    assert not frame._thread.is_alive()
-    pd.testing.assert_frame_equal(frame.get_df(), pd.DataFrame({"x": [1]}))
-    with pytest.raises(RuntimeError, match="closed DataFrameBuffer"):
-        frame.add_one_row({"x": 2})
-    with pytest.raises(RuntimeError, match="closed DataFrameBuffer"):
-        frame.add_multi_rows(pd.DataFrame({"x": [2]}))
+    assert path.exists()
+    assert state.thread.is_alive()
+    assert replace_count >= 2
+    assert not list(tmp_path.glob("data.*.tmp"))
+    assert "temporary write failure" in caplog.text
 
 
-def test_failed_initialization_releases_writer_path(
+def test_same_path_reuses_buffer(tmp_path: Path) -> None:
+    path = tmp_path / "data.feather"
+
+    first = DataFrameBuffer.open(path)
+    second = DataFrameBuffer.open(path)
+
+    assert second is first
+    assert second._state is first._state
+
+
+def test_last_reference_flushes_and_stops_worker(tmp_path: Path) -> None:
+    path = tmp_path / "data.feather"
+    frame = DataFrameBuffer.open(path)
+    state = frame._state
+    frame.add_one_row({"x": 1})
+    frame_ref = weakref.ref(frame)
+
+    del frame
+    gc.collect()
+
+    assert frame_ref() is None
+    assert not state.thread.is_alive()
+    pd.testing.assert_frame_equal(pd.read_feather(path), pd.DataFrame({"x": [1]}))
+
+    reopened = DataFrameBuffer.open(path)
+    assert reopened._state is not state
+
+
+def test_failed_initialization_does_not_cache_buffer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -116,8 +126,31 @@ def test_failed_initialization_releases_writer_path(
     with monkeypatch.context() as scoped:
         scoped.setattr(dataframe_module.pd, "read_feather", fail_read)
         with pytest.raises(OSError, match="invalid feather"):
-            DataFrameBuffer(path)
+            DataFrameBuffer.open(path)
 
     path.unlink()
-    frame = DataFrameBuffer(path)
-    frame.close()
+    assert DataFrameBuffer.open(path).path == path
+
+
+def test_failed_finalizer_state_can_be_reacquired(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    path = tmp_path / "data.feather"
+    frame = DataFrameBuffer.open(path)
+    state = frame._state
+    original_shutdown = state.shutdown
+
+    def fail_shutdown() -> None:
+        raise OSError("temporary shutdown failure")
+
+    monkeypatch.setattr(state, "shutdown", fail_shutdown)
+    del frame
+    gc.collect()
+
+    assert "temporary shutdown failure" in caplog.text
+    reopened = DataFrameBuffer.open(path)
+    assert reopened._state is state
+
+    monkeypatch.setattr(state, "shutdown", original_shutdown)
