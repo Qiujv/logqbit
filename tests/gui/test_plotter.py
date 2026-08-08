@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
-from PySide6.QtCore import QRectF
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QSizePolicy
 
 from logqbit.catalog import PlotColumns, resolve_plot_columns
@@ -131,7 +132,7 @@ class TestPlotManagerFitAndColorBar:
         assert manager.fit_view_box._fit_kind is None
         manager.widget.deleteLater()
 
-    def test_fit_buttons_require_one_1d_field(self) -> None:
+    def test_fit_buttons_use_first_plotted_1d_field(self) -> None:
         manager = PlotManager()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
@@ -147,7 +148,7 @@ class TestPlotManagerFitAndColorBar:
             manager.cursor_button,
             manager.copy_plot_button,
         ):
-            expected_width = button.fontMetrics().horizontalAdvance(button.text()) + 24
+            expected_width = button.fontMetrics().horizontalAdvance(button.text()) + 12
             assert button.width() == expected_width
         assert not manager.exponential_fit_button.isHidden()
         assert manager.exponential_fit_button.isEnabled()
@@ -158,8 +159,57 @@ class TestPlotManagerFitAndColorBar:
         )
 
         manager._refresh_plot_1d("x", ["a", "b"])
-        assert not manager.exponential_fit_button.isEnabled()
-        assert not manager.quadratic_fit_button.isEnabled()
+        assert manager.exponential_fit_button.isEnabled()
+        assert manager.quadratic_fit_button.isEnabled()
+        assert manager.fit_controller._field == "a"
+        manager.widget.deleteLater()
+
+    def test_points_context_menu_is_hidden(self) -> None:
+        manager = PlotManager()
+        plot_item = manager.plot_widget.getPlotItem()
+
+        points_action = next(
+            action
+            for action in plot_item.ctrlMenu.actions()
+            if action.text() == "Points"
+        )
+
+        assert not points_action.isVisible()
+        manager.widget.deleteLater()
+
+    def test_view_context_menu_has_save_plot_action(self) -> None:
+        manager = PlotManager()
+
+        assert manager.save_plot_action.text() == "Save plot"
+        assert manager.save_plot_action in manager.fit_view_box.getMenu(None).actions()
+        manager.widget.deleteLater()
+
+    def test_view_context_menu_mirrors_log_mode_controls(self) -> None:
+        manager = PlotManager()
+        plot_item = manager.plot_widget.getPlotItem()
+        menu_actions = manager.fit_view_box.getMenu(None).actions()
+
+        assert manager.log_x_action in menu_actions
+        assert manager.log_y_action in menu_actions
+        manager.log_x_action.trigger()
+        assert plot_item.ctrl.logXCheck.isChecked()
+        plot_item.ctrl.logYCheck.setChecked(True)
+        assert manager.log_y_action.isChecked()
+
+        manager.log_x_action.trigger()
+        plot_item.ctrl.logYCheck.setChecked(False)
+        assert not plot_item.ctrl.logXCheck.isChecked()
+        assert not manager.log_y_action.isChecked()
+        manager.widget.deleteLater()
+
+    def test_copy_shortcut_is_scoped_to_plot_widget(self) -> None:
+        manager = PlotManager()
+
+        assert manager.copy_plot_shortcut.key() == QKeySequence.Copy
+        assert (
+            manager.copy_plot_shortcut.context() == Qt.WidgetWithChildrenShortcut
+        )
+        assert manager.copy_plot_shortcut.parent() is manager.plot_widget
         manager.widget.deleteLater()
 
     def test_1d_cursor_and_fit_modes_are_mutually_exclusive(self) -> None:
@@ -211,6 +261,68 @@ class TestPlotManagerFitAndColorBar:
             "visible": True,
         }
         assert not manager.plot_widget.getPlotItem().titleLabel.isVisible()
+        manager.widget.deleteLater()
+
+    def test_save_plot_writes_png_with_record_path_title(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        manager = PlotManager()
+        manager._plot_record = SimpleNamespace(path=tmp_path)
+        observed: dict[str, object] = {}
+
+        class FakeExporter:
+            def __init__(self, plot_item) -> None:
+                self.plot_item = plot_item
+
+            def export(self, *, toBytes: bool):
+                observed["to_bytes"] = toBytes
+                observed["title"] = self.plot_item.titleLabel.text
+
+                class FakeImage:
+                    def save(self, path: str, image_format: str) -> bool:
+                        observed["path"] = path
+                        observed["format"] = image_format
+                        return True
+
+                return FakeImage()
+
+        monkeypatch.setattr("logqbit.gui.plot.widget.ImageExporter", FakeExporter)
+
+        manager.save_plot_action.trigger()
+
+        assert observed == {
+            "to_bytes": True,
+            "title": str(tmp_path),
+            "path": str(tmp_path / "plot.png"),
+            "format": "PNG",
+        }
+        assert manager.plot_status_label.text() == f"Saved plot to {tmp_path / 'plot.png'}"
+        assert not manager.plot_widget.getPlotItem().titleLabel.isVisible()
+        manager.widget.deleteLater()
+
+    def test_save_plot_does_not_overwrite_existing_image(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        (tmp_path / "plot.png").touch()
+        (tmp_path / "plot-1.png").touch()
+        manager = PlotManager()
+        manager._plot_record = SimpleNamespace(path=tmp_path)
+        saved_paths: list[str] = []
+
+        class FakeImage:
+            def save(self, path: str, image_format: str) -> bool:
+                saved_paths.append(path)
+                return True
+
+        monkeypatch.setattr(manager, "_render_plot_image", FakeImage)
+
+        manager.save_plot()
+
+        assert saved_paths == [str(tmp_path / "plot-2.png")]
         manager.widget.deleteLater()
 
     def test_color_bar_is_reused_and_removed_when_switching_to_1d(self) -> None:

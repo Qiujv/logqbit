@@ -22,7 +22,15 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPalette
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QPalette,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -384,6 +392,7 @@ class LogBrowserWindow(QMainWindow):
         self._base_dir = Path(directory) if directory else Path.cwd()
         self._selected_record: LogRecord | None = None
         self._show_trash = True
+        self._show_starred_only = False
         self._shortcuts: list[QAction] = []
         self._list_refresh_pending = False
         self._detail_windows: list[RecordDetailWindow] = []
@@ -500,6 +509,8 @@ class LogBrowserWindow(QMainWindow):
         header.setSectionResizeMode(COL_CREATE_MACHINE, QHeaderView.ResizeToContents)
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(False)  # For compact view.
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._open_header_context_menu)
 
         table.setColumnHidden(COL_CREATE_TIME, True)
         table.setColumnHidden(COL_CREATE_MACHINE, True)
@@ -544,6 +555,18 @@ class LogBrowserWindow(QMainWindow):
         add_shortcut(Qt.Key_3, lambda: self._shortcut_set_star(3))
         add_shortcut(Qt.Key_Left, lambda: self.detail_view.switch_tab(-1))
         add_shortcut(Qt.Key_Right, lambda: self.detail_view.switch_tab(1))
+
+        self.open_explorer_shortcut = QShortcut(
+            QKeySequence("Ctrl+Return"),
+            self.log_table,
+        )
+        self.open_explorer_shortcut.setKeys(
+            [QKeySequence("Ctrl+Return"), QKeySequence("Ctrl+Enter")]
+        )
+        self.open_explorer_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.open_explorer_shortcut.activated.connect(
+            self._shortcut_open_in_explorer
+        )
 
     def _rebuild_directory_menu(self) -> None:
         if self._directory_menu is None:
@@ -620,6 +643,8 @@ class LogBrowserWindow(QMainWindow):
             records = all_records
         else:
             records = [record for record in all_records if not record.trash]
+        if self._show_starred_only:
+            records = [record for record in records if record.star > 0]
 
         self.table_model.set_records(records)
 
@@ -693,9 +718,6 @@ class LogBrowserWindow(QMainWindow):
     def _load_log(self, record: LogRecord) -> None:
         self.detail_view.load_record(record)
 
-    def _clear_preview_panels(self) -> None:
-        self.detail_view.clear()
-
     def _on_detail_record_refreshed(self, record: LogRecord) -> None:
         if (
             self._selected_record is not None
@@ -759,27 +781,16 @@ class LogBrowserWindow(QMainWindow):
         toggle_star_action.setCheckable(True)
         toggle_trash_action = menu.addAction("Toggle 🗑️Trash (T)")
         toggle_trash_action.setCheckable(True)
+        send_to_recycle_action = menu.addAction("Send to Recycle Bin (Del)")
+        open_explorer = menu.addAction("Open in Explorer (Ctrl+Enter)")
+        menu.addSeparator()
         show_trash_action = menu.addAction("Show Trashed Items")
         show_trash_action.setCheckable(True)
         show_trash_action.setChecked(self._show_trash)
-        send_to_recycle_action = menu.addAction("Send to Recycle Bin (Del)")
-        menu.addSeparator()
-        plot_axes_action = menu.addAction("Show Plot Axes Column")
-        plot_axes_action.setCheckable(True)
-        plot_axes_action.setChecked(not self.log_table.isColumnHidden(COL_PLOT_AXES))
-        create_time_action = menu.addAction("Show Create Time Column")
-        create_time_action.setCheckable(True)
-        create_time_action.setChecked(
-            not self.log_table.isColumnHidden(COL_CREATE_TIME)
-        )
-        create_machine_action = menu.addAction("Show Create Machine Column")
-        create_machine_action.setCheckable(True)
-        create_machine_action.setChecked(
-            not self.log_table.isColumnHidden(COL_CREATE_MACHINE)
-        )
-        menu.addSeparator()
-        open_explorer = menu.addAction("Open in Explorer")
-        export_action = menu.addAction("Export...")
+        show_starred_action = menu.addAction("Show Starred Items Only")
+        show_starred_action.setCheckable(True)
+        show_starred_action.setChecked(self._show_starred_only)
+        export_action = menu.addAction("Export items...")
         if not records:
             rename_action.setEnabled(False)
             toggle_star_action.setEnabled(False)
@@ -812,12 +823,8 @@ class LogBrowserWindow(QMainWindow):
             self._send_records_to_recycle_bin(records)
         elif chosen == show_trash_action:
             self._toggle_show_trash()
-        elif chosen == create_time_action:
-            self._toggle_column(COL_CREATE_TIME, create_time_action.isChecked())
-        elif chosen == create_machine_action:
-            self._toggle_column(COL_CREATE_MACHINE, create_machine_action.isChecked())
-        elif chosen == plot_axes_action:
-            self._toggle_column(COL_PLOT_AXES, plot_axes_action.isChecked())
+        elif chosen == show_starred_action:
+            self._toggle_show_starred_only()
         elif chosen == open_explorer and records:
             self._open_path_in_explorer(
                 records[0].path,
@@ -826,11 +833,37 @@ class LogBrowserWindow(QMainWindow):
         elif chosen == export_action and records:
             self._export_records(records)
 
+    def _open_header_context_menu(self, point) -> None:
+        menu = self._create_header_context_menu()
+        header = self.log_table.horizontalHeader()
+        menu.exec(header.mapToGlobal(point))
+
+    def _create_header_context_menu(self) -> QMenu:
+        menu = QMenu(self)
+        for label, column in (
+            ("Show Plot Axes Column", COL_PLOT_AXES),
+            ("Show Create Time Column", COL_CREATE_TIME),
+            ("Show Create Machine Column", COL_CREATE_MACHINE),
+        ):
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(not self.log_table.isColumnHidden(column))
+            action.triggered.connect(
+                lambda checked=False, target=column: self._toggle_column(
+                    target, checked
+                )
+            )
+        return menu
+
     def _toggle_column(self, column: int, visible: bool) -> None:
         self.log_table.setColumnHidden(column, not visible)
 
     def _toggle_show_trash(self) -> None:
         self._show_trash = not self._show_trash
+        self.refresh_logs()
+
+    def _toggle_show_starred_only(self) -> None:
+        self._show_starred_only = not self._show_starred_only
         self.refresh_logs()
 
     def _rename_record_title(self, record: LogRecord) -> None:
@@ -1015,6 +1048,12 @@ class LogBrowserWindow(QMainWindow):
             return
         all_trashed = all(record.trash for record in records)
         self._set_records_trash(records, not all_trashed)
+
+    def _shortcut_open_in_explorer(self) -> None:
+        records = self._get_selected_records()
+        if not records:
+            return
+        self._open_path_in_explorer(records[0].path, len(records) != 1)
 
     def _shortcut_rename_title(self) -> None:
         records = self._get_selected_records()

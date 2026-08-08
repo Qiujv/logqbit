@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import functools
 import html
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -12,7 +14,7 @@ import pandas as pd
 import pyqtgraph as pg
 from pyqtgraph.exporters import ImageExporter
 from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -187,13 +189,13 @@ class PlotManager:
         self.plot_widget.setBackground("w")
         self.plot_widget.useOpenGL(True)
         self.plot_widget.setMinimumHeight(220)
+        self._setup_plot_context_menu(plot_item)
 
-        plot_item = self.plot_widget.getPlotItem()
-        if plot_item is not None:
-            # plot_item.setDownsampling(auto=True, mode="subsample")
-            for axis in ["left", "bottom", "top", "right"]:
-                plot_item.getAxis(axis).setTextPen("k")
-                plot_item.getAxis(axis).enableAutoSIPrefix(False)
+        # plot_item.setDownsampling(auto=True, mode="subsample")
+        plot_item.setContextMenuActionVisible("Points", False)
+        for axis in ["left", "bottom", "top", "right"]:
+            plot_item.getAxis(axis).setTextPen("k")
+            plot_item.getAxis(axis).enableAutoSIPrefix(False)
 
         plot_area = QWidget()
         self.plot_layout = QGridLayout(plot_area)
@@ -223,6 +225,7 @@ class PlotManager:
         ):
             plot_item = section_widget.getPlotItem()
             if plot_item is not None:
+                plot_item.setContextMenuActionVisible("Points", False)
                 for axis in ("left", "bottom", "top", "right"):
                     plot_item.getAxis(axis).setTextPen("k")
                     plot_item.getAxis(axis).enableAutoSIPrefix(False)
@@ -255,6 +258,9 @@ class PlotManager:
         self.copy_plot_button.clicked.connect(self.copy_plot_to_clipboard)
         self._make_button_compact(self.copy_plot_button)
         status_row.addWidget(self.copy_plot_button)
+        self.copy_plot_shortcut = QShortcut(QKeySequence.Copy, self.plot_widget)
+        self.copy_plot_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.copy_plot_shortcut.activated.connect(self.copy_plot_to_clipboard)
         layout.addLayout(status_row)
 
         self.fit_controller = FitController(
@@ -276,6 +282,22 @@ class PlotManager:
         self.exponential_fit_button.clicked.connect(self._fit_activated)
         self.quadratic_fit_button.clicked.connect(self._fit_activated)
         return container
+
+    def _setup_plot_context_menu(self, plot_item: pg.PlotItem) -> None:
+        menu = self.fit_view_box.getMenu(None)
+        menu.addSeparator()
+        self.save_plot_action = menu.addAction("Save plot")
+        self.save_plot_action.triggered.connect(self.save_plot)
+
+        self.log_x_action = menu.addAction("Log X")
+        self.log_x_action.setCheckable(True)
+        self.log_x_action.toggled.connect(plot_item.ctrl.logXCheck.setChecked)
+        plot_item.ctrl.logXCheck.toggled.connect(self.log_x_action.setChecked)
+
+        self.log_y_action = menu.addAction("Log Y")
+        self.log_y_action.setCheckable(True)
+        self.log_y_action.toggled.connect(plot_item.ctrl.logYCheck.setChecked)
+        plot_item.ctrl.logYCheck.toggled.connect(self.log_y_action.setChecked)
 
     def _cursor_activated(self) -> None:
         self.fit_controller.cancel_selection()
@@ -302,11 +324,13 @@ class PlotManager:
     @staticmethod
     def _make_button_compact(button: QPushButton) -> None:
         text_width = button.fontMetrics().horizontalAdvance(button.text())
-        button.setFixedWidth(text_width + 24)
+        button.setFixedWidth(text_width + 12)
 
-    def copy_plot_to_clipboard(self) -> None:
+    @contextmanager
+    def _plot_with_record_title(self) -> Iterator[pg.PlotItem | None]:
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is None:
+            yield None
             return
 
         title_label = plot_item.titleLabel
@@ -322,14 +346,47 @@ class PlotManager:
             )
             plot_item.layout.activate()
         try:
-            exporter = ImageExporter(plot_item)
-            exporter.export(copy=True)
+            yield plot_item
         finally:
             if title_was_visible:
                 plot_item.setTitle(previous_title, **previous_options)
             else:
                 plot_item.setTitle(None)
             plot_item.layout.activate()
+
+    def _render_plot_image(self) -> QImage | None:
+        with self._plot_with_record_title() as plot_item:
+            if plot_item is None:
+                return None
+            return ImageExporter(plot_item).export(toBytes=True)
+
+    def copy_plot_to_clipboard(self) -> None:
+        with self._plot_with_record_title() as plot_item:
+            if plot_item is not None:
+                ImageExporter(plot_item).export(copy=True)
+
+    def save_plot(self) -> None:
+        record = self._plot_record
+        if record is None:
+            return
+        image = self._render_plot_image()
+        if image is None:
+            return
+
+        output_path = self._next_plot_path(record.path)
+        if image.save(str(output_path), "PNG"):
+            self.plot_status_label.setText(f"Saved plot to {output_path}")
+        else:
+            self.plot_status_label.setText(f"Failed to save plot to {output_path}")
+
+    @staticmethod
+    def _next_plot_path(folder: Path) -> Path:
+        output_path = folder / "plot.png"
+        suffix = 1
+        while output_path.exists():
+            output_path = folder / f"plot-{suffix}.png"
+            suffix += 1
+        return output_path
 
     # ── record loading ────────────────────────────────────────────────────────
 
@@ -492,7 +549,7 @@ class PlotManager:
             "#8B4513",
         ]
         plotted = 0
-        single_series: tuple[np.ndarray, np.ndarray, str, str] | None = None
+        fit_series: tuple[np.ndarray, np.ndarray, str, str] | None = None
         cursor_series: list[CursorSeries] = []
         for i, y_col in enumerate(y_cols):
             if y_col not in frame.columns:
@@ -502,7 +559,7 @@ class PlotManager:
             if df.empty:
                 continue
             color = COLORS[i % len(COLORS)]
-            show_markers = len(df) <= 500
+            show_markers = len(df) <= 2001
             pen = pg.mkPen(color=color, width=2)
             if show_markers:
                 self.plot_widget.plot(
@@ -519,8 +576,8 @@ class PlotManager:
                 self.plot_widget.plot(
                     df["x"].values, df["y"].values, pen=pen, name=y_col
                 )
-            if len(y_cols) == 1:
-                single_series = (
+            if fit_series is None:
+                fit_series = (
                     df["x"].to_numpy(dtype=float),
                     df["y"].to_numpy(dtype=float),
                     y_col,
@@ -547,12 +604,10 @@ class PlotManager:
         self.plot_widget.setLabel("left", ", ".join(y_cols))
         self.plot_status_label.setText(f"1D plot: {x_col} vs {', '.join(y_cols[:3])}")
         self.cursor_controller.configure_1d(cursor_series)
-        if single_series is not None:
-            self.fit_controller.set_series(*single_series)
+        if fit_series is not None:
+            self.fit_controller.set_series(*fit_series)
         else:
-            self.fit_controller.disable(
-                "Keep exactly one field in the TagBar to enable fitting."
-            )
+            self.fit_controller.disable("No numeric field is available for fitting.")
 
     def _refresh_plot_2d(self, x_col: str, y_col: str, z_col: str) -> None:
         self.fit_controller.set_visible(False)

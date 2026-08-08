@@ -15,6 +15,7 @@ import pandas as pd
 from PySide6.QtCore import (
     QAbstractTableModel,
     QFileSystemWatcher,
+    QMimeData,
     QModelIndex,
     Signal,
     Qt,
@@ -25,9 +26,9 @@ from PySide6.QtGui import (
     QAction,
     QDesktopServices,
     QFont,
-    QFontDatabase,
     QKeySequence,
     QPixmap,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -37,7 +38,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QTabWidget,
@@ -51,6 +51,8 @@ from PySide6.QtWidgets import (
 from logqbit.file_version import FileVersion
 
 from logqbit.gui.plot.widget import PlotManager
+
+from .yaml_view import YamlView
 
 if TYPE_CHECKING:
     from logqbit.catalog import LogRecord
@@ -157,20 +159,20 @@ class DetailMetadataCache:
         return changed
 
 
+@dataclass
 class DetailDataCache:
     """Full-data cache owned by one detail view."""
 
-    def __init__(self) -> None:
-        self.dataframe: pd.DataFrame | None = None
-        self.path: Path | None = None
-        self.version: FileVersion | None = None
+    dataframe: pd.DataFrame | None = None
+    path: Path | None = None
+    version: FileVersion | None = None
 
     def clear(self) -> None:
         self.dataframe = None
         self.path = None
         self.version = None
 
-    def load(self, record: LogRecord) -> pd.DataFrame | None:
+    def update(self, record: LogRecord) -> bool:
         version = FileVersion.from_path(record.data_path)
         if (
             self.dataframe is not None
@@ -178,14 +180,14 @@ class DetailDataCache:
             and self.version == version
             and version is not None
         ):
-            return self.dataframe
+            return False
         self.clear()
         dataframe = record.read_dataframe()
         if dataframe is not None:
             self.dataframe = dataframe
             self.path = record.path
             self.version = version
-        return dataframe
+        return True
 
 
 class DataViewManager:
@@ -320,7 +322,6 @@ def record_watch_paths(record: LogRecord) -> list[str]:
         record.data_path,
         record.meta_path,
         *record.list_image_files(),
-        *record.list_other_files(),
     ):
         if extra and extra.exists():
             paths.append(str(extra))
@@ -352,6 +353,12 @@ def _open_path_in_explorer(path: Path, parent: QWidget | None = None) -> None:
             )
 
 
+def _copy_file_to_clipboard(path: Path) -> None:
+    mime_data = QMimeData()
+    mime_data.setUrls([QUrl.fromLocalFile(str(path.resolve()))])
+    QApplication.clipboard().setMimeData(mime_data)
+
+
 class ScaledImageLabel(QLabel):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -370,10 +377,6 @@ class ScaledImageLabel(QLabel):
         self.setText("")
         self._update_scaled_pixmap()
         return True
-
-    def copy_image_to_clipboard(self) -> None:
-        if self._pixmap is not None and not self._pixmap.isNull():
-            QApplication.clipboard().setPixmap(self._pixmap)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override naming
         super().resizeEvent(event)
@@ -445,23 +448,26 @@ class RecordDetailView(QWidget):
         self.tab_widget.setCurrentIndex((current + step) % count)
 
     def load_record(self, record: LogRecord) -> None:
-        update_plot_controls = self._metadata_cache.update(record)
-        dataframe = self._data_cache.load(record)
+        metadata_changed = self._metadata_cache.update(record)
+        data_changed = self._data_cache.update(record)
+        dataframe = self._data_cache.dataframe
         self._record = record
         self.detail_id_label.setText(f"#{record.log_id}")
         self.detail_label.setText(str(record.path))
-        self.yaml_view.setPlainText(record.read_yaml_text())
-        self.data_view_manager.show_data_table(
-            record,
-            dataframe,
-            preview_only=True,
-        )
+        self.yaml_view.set_yaml_text(record.read_yaml_text())
+        if metadata_changed or data_changed:
+            self.data_view_manager.show_data_table(
+                record,
+                dataframe,
+                preview_only=True,
+            )
         self._update_image_tabs(record.list_image_files())
         self.files_button.setEnabled(True)
         defer_plot = self.tab_widget.currentIndex() != TAB_PLOT
-        if update_plot_controls:
+        if metadata_changed:
             self.plot_manager.update_controls(record, dataframe)
-        self.plot_manager.update_plot(record, dataframe, defer=defer_plot)
+        if metadata_changed or data_changed:
+            self.plot_manager.update_plot(record, dataframe, defer=defer_plot)
         self._sync_detail_watcher()
 
     def refresh_current_record(self, *, force: bool = False) -> None:
@@ -481,7 +487,7 @@ class RecordDetailView(QWidget):
         self._metadata_cache.clear()
         self.detail_id_label.setText("")
         self.detail_label.setText(message)
-        self.yaml_view.setPlainText("")
+        self.yaml_view.set_yaml_text("")
         self.data_view_manager.set_empty("")
         self._clear_dynamic_tabs()
         self.files_button.setEnabled(False)
@@ -521,11 +527,7 @@ class RecordDetailView(QWidget):
         self.files_button.setMenu(self.files_menu)
         self.tab_widget.setCornerWidget(self.files_button, Qt.TopRightCorner)
 
-        self.yaml_view = QPlainTextEdit()
-        self.yaml_view.setReadOnly(True)
-        self.yaml_view.setFont(
-            QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        )
+        self.yaml_view = YamlView()
         self.tab_widget.addTab(self.yaml_view, "Const.")
 
         self.data_view_manager = DataViewManager(
@@ -564,7 +566,7 @@ class RecordDetailView(QWidget):
         if self._record:
             self.data_view_manager.load_more_data(
                 self._record,
-                self._data_cache.load(self._record),
+                self._data_cache.dataframe,
             )
 
     def _on_watch_toggled(self, enabled: bool) -> None:
@@ -595,40 +597,68 @@ class RecordDetailView(QWidget):
             pass
 
     def _sync_detail_watcher(self) -> None:
-        self._clear_detail_watcher()
         if not self.watch_enabled or self._record is None:
+            self._clear_detail_watcher()
             return
         watch_paths = record_watch_paths(self._record)
+        current_paths = set(
+            self._detail_watcher.files() + self._detail_watcher.directories()
+        )
+        if current_paths == set(watch_paths):
+            return
+        self._clear_detail_watcher()
         if watch_paths:
             self._detail_watcher.addPaths(watch_paths)
 
     def _clear_dynamic_tabs(self) -> None:
         for index in range(self.tab_widget.count() - 1, TAB_PLOT, -1):
+            widget = self.tab_widget.widget(index)
             self.tab_widget.removeTab(index)
+            if widget is not None:
+                widget.deleteLater()
+
+    def _create_image_tab(self, image_path: Path) -> QWidget:
+        image_tab = QWidget()
+        layout = QVBoxLayout(image_tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        image_label = ScaledImageLabel()
+        image_label.setToolTip(str(image_path))
+        image_label.load_image(image_path)
+        layout.addWidget(image_label, stretch=1)
+
+        def copy_file(_checked: bool = False) -> None:
+            _copy_file_to_clipboard(image_path)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        copy_button = QPushButton("Copy file")
+        copy_button.setToolTip("Copy the image file to the clipboard")
+        copy_button.clicked.connect(copy_file)
+        button_row.addWidget(copy_button)
+        layout.addLayout(button_row)
+
+        copy_shortcut = QShortcut(QKeySequence.Copy, image_tab)
+        copy_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        copy_shortcut.activated.connect(copy_file)
+        return image_tab
 
     def _update_image_tabs(self, image_files: list[Path]) -> None:
-        self._clear_dynamic_tabs()
-        for image_path in image_files:
-            image_tab = QWidget()
-            layout = QVBoxLayout(image_tab)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(4)
+        first_image_index = TAB_PLOT + 1
+        selected_image_offset = self.tab_widget.currentIndex() - first_image_index
+        was_blocked = self.tab_widget.blockSignals(True)
+        try:
+            self._clear_dynamic_tabs()
+            for image_path in image_files:
+                image_tab = self._create_image_tab(image_path)
+                self.tab_widget.addTab(image_tab, image_path.name)
 
-            image_label = ScaledImageLabel()
-            image_label.setToolTip(str(image_path))
-            image_loaded = image_label.load_image(image_path)
-            layout.addWidget(image_label, stretch=1)
-
-            button_row = QHBoxLayout()
-            button_row.addStretch(1)
-            copy_button = QPushButton("Copy image")
-            copy_button.setEnabled(image_loaded)
-            copy_button.setToolTip("Copy the original image to the clipboard")
-            copy_button.clicked.connect(image_label.copy_image_to_clipboard)
-            button_row.addWidget(copy_button)
-            layout.addLayout(button_row)
-
-            self.tab_widget.addTab(image_tab, image_path.name)
+            if selected_image_offset >= 0 and image_files:
+                restored_offset = min(selected_image_offset, len(image_files) - 1)
+                self.tab_widget.setCurrentIndex(first_image_index + restored_offset)
+        finally:
+            self.tab_widget.blockSignals(was_blocked)
 
     def _rebuild_files_menu(self) -> None:
         self.files_menu.clear()

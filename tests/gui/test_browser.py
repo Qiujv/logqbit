@@ -5,7 +5,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFontDatabase, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QKeySequence,
+    QPixmap,
+    QShortcut,
+)
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QPushButton
 
@@ -23,6 +28,7 @@ from logqbit.gui.browser.detail import (
     record_watch_paths,
 )
 from logqbit.gui.browser.window import (
+    COL_CREATE_TIME,
     COL_ID,
     COL_PLOT_AXES,
     COL_ROWS,
@@ -163,19 +169,27 @@ class TestLogRecord:
 
         assert [path.name for path in other_files] == ["notes.txt", "snapshot.bin"]
 
-    def test_record_watch_paths_include_extra_files(self, sample_logfolder: Path) -> None:
-        """Test watch path helper tracks record files beyond the standard trio."""
+    def test_record_watch_paths_ignore_unrendered_extra_files(
+        self,
+        sample_logfolder: Path,
+    ) -> None:
         records = scan_catalog(sample_logfolder)
         record = records[0]
 
         extra_file = record.path / "notes.txt"
         extra_file.write_text("watch me", encoding="utf-8")
+        hidden_file = record.path / ".DS_Store"
+        hidden_file.write_bytes(b"finder")
+        image_file = record.path / "plot.png"
+        image_file.touch()
 
         watch_paths = set(record_watch_paths(record))
 
         assert str(record.path) in watch_paths
         assert str(record.meta_path) in watch_paths
-        assert str(extra_file) in watch_paths
+        assert str(image_file) in watch_paths
+        assert str(extra_file) not in watch_paths
+        assert str(hidden_file) not in watch_paths
 
     def test_export_records_copies_selected_logs_in_id_order(self, tmp_path: Path) -> None:
         source_parent = tmp_path / "source"
@@ -494,13 +508,11 @@ class TestPandasTableModel:
 
 
 class TestRecordDetailWidgets:
-    def test_image_tab_copies_original_image(self, sample_logfolder: Path) -> None:
+    def test_image_tab_copies_image_file(self, sample_logfolder: Path) -> None:
         app = ensure_application()
         record = scan_catalog(sample_logfolder)[0]
         image_path = record.path / "copy-test.png"
-        source = QPixmap(13, 7)
-        source.fill(QColor("red"))
-        assert source.save(str(image_path))
+        image_path.write_bytes(b"not a renderable image")
 
         view = RecordDetailView()
         view.load_record(record)
@@ -509,11 +521,24 @@ class TestRecordDetailWidgets:
         assert image_tab is not None
         copy_button = image_tab.findChild(QPushButton)
         assert copy_button is not None
+        assert copy_button.isEnabled()
+        copy_shortcut = image_tab.findChild(QShortcut)
+        assert copy_shortcut is not None
+        assert copy_shortcut.key() == QKeySequence.Copy
+        assert copy_shortcut.context() == Qt.WidgetWithChildrenShortcut
+
+        app.clipboard().clear()
+        copy_shortcut.activated.emit()
+        mime_data = app.clipboard().mimeData()
+        assert mime_data.hasUrls()
+        assert [url.toLocalFile() for url in mime_data.urls()] == [str(image_path)]
+        assert not mime_data.hasImage()
 
         app.clipboard().clear()
         copy_button.click()
-        copied = app.clipboard().pixmap()
-        assert copied.size() == source.size()
+        assert [
+            url.toLocalFile() for url in app.clipboard().mimeData().urls()
+        ] == [str(image_path)]
 
     def test_plot_tab_copies_current_view(self, sample_logfolder: Path) -> None:
         app = ensure_application()
@@ -527,16 +552,16 @@ class TestRecordDetailWidgets:
         try:
             app.clipboard().clear()
             view.plot_manager.copy_plot_button.click()
-            copied = app.clipboard().pixmap()
+            copied = app.clipboard().image()
             assert not copied.isNull()
-            image = copied.toImage()
-            first_pixel = image.pixel(0, 0)
+            first_pixel = copied.pixel(0, 0)
             assert any(
-                image.pixel(x, y) != first_pixel
-                for y in range(image.height())
-                for x in range(image.width())
+                copied.pixel(x, y) != first_pixel
+                for y in range(copied.height())
+                for x in range(copied.width())
             )
         finally:
+            app.clipboard().clear()
             view.close()
 
     def test_detail_header_separates_id_and_selectable_wrapped_path(
@@ -559,6 +584,7 @@ class TestRecordDetailWidgets:
         view = RecordDetailView()
         view.load_record(record)
         dataframe = view._data_cache.dataframe
+        table_model = view.data_view_manager.data_table.model()
         assert dataframe is not None
 
         (record.path / "notes.txt").write_text("updated", encoding="utf-8")
@@ -577,7 +603,48 @@ class TestRecordDetailWidgets:
         view.refresh_current_record()
 
         assert view._data_cache.dataframe is dataframe
+        assert view.data_view_manager.data_table.model() is table_model
         assert read_count == 0
+
+    def test_noop_refresh_preserves_plot_range_and_fit_selection(
+        self,
+        sample_logfolder: Path,
+    ) -> None:
+        record = scan_catalog(sample_logfolder)[0]
+        record.meta.update(plot_axes=["x"], plot_fields=["y"])
+        view = RecordDetailView()
+        view.load_record(record)
+        view.set_current_tab(TAB_PLOT)
+        plot_item = view.plot_manager.plot_widget.getPlotItem()
+        plot_item.getViewBox().setXRange(1.0, 2.0, padding=0)
+        view.plot_manager.exponential_fit_button.click()
+        expected_range = plot_item.getViewBox().viewRange()[0]
+
+        (record.path / "notes.txt").write_text("updated", encoding="utf-8")
+        view.refresh_current_record()
+
+        assert plot_item.getViewBox().viewRange()[0] == pytest.approx(expected_range)
+        assert view.plot_manager.exponential_fit_button.isChecked()
+
+    def test_sync_detail_watcher_keeps_unchanged_paths(
+        self,
+        sample_logfolder: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        record = scan_catalog(sample_logfolder)[0]
+        view = RecordDetailView()
+        view.load_record(record)
+        clear_calls = 0
+
+        def count_clear() -> None:
+            nonlocal clear_calls
+            clear_calls += 1
+
+        monkeypatch.setattr(view, "_clear_detail_watcher", count_clear)
+
+        view._sync_detail_watcher()
+
+        assert clear_calls == 0
 
     def test_data_refresh_does_not_rebuild_tag_bar(
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
@@ -604,12 +671,6 @@ class TestRecordDetailWidgets:
         view.refresh_current_record()
 
         assert len(set_columns_calls) == 1
-
-    def test_const_view_uses_system_fixed_font(self) -> None:
-        view = RecordDetailView()
-        expected = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-
-        assert view.yaml_view.font().family() == expected.family()
 
     def test_data_table_has_no_custom_context_menu(self) -> None:
         view = RecordDetailView()
@@ -676,9 +737,42 @@ class TestRecordDetailWidgets:
         view = RecordDetailView()
         view.load_record(record_with_image)
         assert view.tab_widget.count() == TAB_PLOT + 2
+        view.set_current_tab(TAB_PLOT + 1)
 
         view.load_record(record_without_image)
         assert view.tab_widget.count() == TAB_PLOT + 1
+        assert view.current_tab_index() == TAB_PLOT
+
+    def test_switching_records_preserves_image_tab_position(
+        self,
+        sample_logfolder: Path,
+    ) -> None:
+        first_record = scan_catalog(sample_logfolder)[0]
+        second_path = sample_logfolder / "999"
+        LogFolder(second_path)
+
+        for record_path, color in (
+            (first_record.path, "blue"),
+            (second_path, "green"),
+        ):
+            for name in ("first.png", "second.png"):
+                image = QPixmap(8, 8)
+                image.fill(QColor(color))
+                assert image.save(str(record_path / name))
+
+        second_record = next(
+            record
+            for record in scan_catalog(sample_logfolder)
+            if record.path == second_path
+        )
+        view = RecordDetailView()
+        view.load_record(first_record)
+        view.set_current_tab(TAB_PLOT + 2)
+
+        view.load_record(second_record)
+
+        assert view.current_tab_index() == TAB_PLOT + 2
+        assert view.tab_widget.tabText(view.current_tab_index()) == "second.png"
 
     def test_detail_window_watch_toggle_controls_watcher(
         self, sample_logfolder: Path
@@ -773,7 +867,7 @@ class TestRecordDetailWidgets:
             )
             watched_files = set(window.detail_view._detail_watcher.files())
             assert str(record.meta_path) in watched_files
-            assert str(extra_file) in watched_files
+            assert str(extra_file) not in watched_files
 
             window.detail_view.yaml_view.setFocus()
             QTest.keyClick(window.detail_view.yaml_view, Qt.Key_Right)
@@ -804,6 +898,89 @@ class TestRecordDetailWidgets:
             QTest.keyClick(window.detail_view.data_view_manager.data_table, Qt.Key_Left)
             app.processEvents()
             assert window.detail_view.current_tab_index() == 0
+        finally:
+            window.close()
+
+    def test_browser_can_show_starred_records_only(
+        self,
+        sample_records: list[LogRecord],
+    ) -> None:
+        app = ensure_application()
+        window = LogBrowserWindow(sample_records[0].path.parent)
+        app.processEvents()
+        try:
+            assert window.table_model.rowCount() == 3
+
+            window._toggle_show_starred_only()
+
+            assert window.table_model.rowCount() == 1
+            record = window.table_model.get_record(0)
+            assert record is not None
+            assert record.star > 0
+
+            window._toggle_show_starred_only()
+            assert window.table_model.rowCount() == 3
+        finally:
+            window.close()
+
+    def test_column_visibility_actions_are_in_header_context_menu(
+        self,
+        sample_logfolder: Path,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        try:
+            assert window.log_table.isColumnHidden(COL_CREATE_TIME)
+
+            menu = window._create_header_context_menu()
+            actions = menu.actions()
+
+            assert [action.text() for action in actions] == [
+                "Show Plot Axes Column",
+                "Show Create Time Column",
+                "Show Create Machine Column",
+            ]
+            actions[1].trigger()
+            assert not window.log_table.isColumnHidden(COL_CREATE_TIME)
+        finally:
+            window.close()
+
+    def test_open_explorer_shortcut_is_scoped_to_log_table(
+        self,
+        sample_logfolder: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        app = ensure_application()
+        window = LogBrowserWindow(sample_logfolder)
+        window.show()
+        app.processEvents()
+        try:
+            assert set(window.open_explorer_shortcut.keys()) == {
+                QKeySequence("Ctrl+Return"),
+                QKeySequence("Ctrl+Enter"),
+            }
+            assert (
+                window.open_explorer_shortcut.context()
+                == Qt.WidgetWithChildrenShortcut
+            )
+            assert window.open_explorer_shortcut.parent() is window.log_table
+
+            opened: list[tuple[Path, bool]] = []
+            monkeypatch.setattr(
+                window,
+                "_open_path_in_explorer",
+                lambda path, select=False: opened.append((path, select)),
+            )
+            window.detail_view.yaml_view.setFocus()
+            QTest.keyClick(
+                window.detail_view.yaml_view,
+                Qt.Key_Return,
+                Qt.ControlModifier,
+            )
+            assert not opened
+
+            window.log_table.setFocus()
+            QTest.keyClick(window.log_table, Qt.Key_Return, Qt.ControlModifier)
+            assert opened == [(window._selected_record.path, False)]
         finally:
             window.close()
 
