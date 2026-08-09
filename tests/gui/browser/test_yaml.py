@@ -3,7 +3,7 @@
 from PySide6.QtGui import QColor, QPalette, QTextCursor
 from PySide6.QtWidgets import QTextEdit
 
-from logqbit.gui.browser.yaml_view import YamlView
+from logqbit.gui.browser.views.yaml import YamlView
 
 
 def test_yaml_view_uses_readable_font_and_syntax_highlighting() -> None:

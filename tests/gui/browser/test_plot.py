@@ -13,14 +13,14 @@ from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QSizePolicy
 
 from logqbit.catalog import PlotColumns, resolve_plot_columns
-from logqbit.gui.plot.fit import fit_exponential, fit_quadratic
-from logqbit.gui.plot.mesh import (
+from logqbit.gui.browser.plot.fitting import fit_exponential, fit_quadratic
+from logqbit.gui.browser.plot.mesh import (
     _build_grids_rect,
     _is_lexsorted,
     build_plot_mesh,
     warmup_plotter_jit,
 )
-from logqbit.gui.plot.widget import (
+from logqbit.gui.browser.plot.manager import (
     PlotManager,
     TagBar,
 )
@@ -247,7 +247,9 @@ class TestPlotManagerFitAndColorBar:
                 observed["title"] = self.plot_item.titleLabel.text
                 observed["visible"] = self.plot_item.titleLabel.isVisible()
 
-        monkeypatch.setattr("logqbit.gui.plot.widget.ImageExporter", FakeExporter)
+        monkeypatch.setattr(
+            "logqbit.gui.browser.plot.manager.ImageExporter", FakeExporter
+        )
 
         manager.copy_plot_to_clipboard()
 
@@ -284,7 +286,9 @@ class TestPlotManagerFitAndColorBar:
 
                 return FakeImage()
 
-        monkeypatch.setattr("logqbit.gui.plot.widget.ImageExporter", FakeExporter)
+        monkeypatch.setattr(
+            "logqbit.gui.browser.plot.manager.ImageExporter", FakeExporter
+        )
 
         manager.save_plot_action.trigger()
 

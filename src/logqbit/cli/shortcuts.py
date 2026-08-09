@@ -9,7 +9,7 @@ import traceback
 from importlib.resources import files
 from pathlib import Path
 
-from logqbit.gui.browser.launcher import windows_gui_executable
+from logqbit.gui.browser.startup.launcher import windows_gui_executable
 
 
 def _powershell_single_quoted(value: object) -> str:
@@ -78,7 +78,7 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut({_powershell_single_quoted(shortcut_path)})
 $Shortcut.TargetPath = {_powershell_single_quoted(windows_gui_executable(sys.executable))}
-$Shortcut.Arguments = '-m logqbit.gui.browser.launcher'
+$Shortcut.Arguments = '-m logqbit.gui.browser.startup.launcher'
 $Shortcut.IconLocation = {_powershell_single_quoted(browser_ico)}
 $Shortcut.Save()
 """

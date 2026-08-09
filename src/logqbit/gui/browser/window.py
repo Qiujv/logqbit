@@ -52,8 +52,8 @@ from send2trash import send2trash
 
 from logqbit.catalog import LogCatalog, export_records
 
-from logqbit.gui.browser.detail import RecordDetailView, RecordDetailWindow
-from logqbit.gui.plot.mesh import warmup_plotter_jit
+from logqbit.gui.browser.plot.mesh import warmup_plotter_jit
+from logqbit.gui.browser.views.detail import RecordDetailView, RecordDetailWindow
 
 if TYPE_CHECKING:
     from logqbit.catalog import LogRecord
@@ -767,7 +767,7 @@ class LogBrowserWindow(QMainWindow):
     def _open_new_window(self, directory: Path) -> None:
         """Launch a new browser window in a separate process."""
         try:
-            from logqbit.gui.browser.launcher import start_browser
+            from logqbit.gui.browser.startup.launcher import start_browser
 
             start_browser(directory)
         except Exception as exc:

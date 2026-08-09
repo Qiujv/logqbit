@@ -44,8 +44,8 @@ logqbit = "logqbit.cli:main"
 
 [project.gui-scripts]
 logqbit-live-plotter = "logqbit.gui.live_plotter:main"
-logqbit-browser = "logqbit.gui.browser.bootstrap:main"
-logqbit-browser-detached = "logqbit.gui.browser.launcher:main"
+logqbit-browser = "logqbit.gui.browser.startup.bootstrap:main"
+logqbit-browser-detached = "logqbit.gui.browser.startup.launcher:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

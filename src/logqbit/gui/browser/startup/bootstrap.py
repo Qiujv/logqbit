@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
-from logqbit.gui.browser.application import ensure_application
+from logqbit.gui.browser.startup.application import ensure_application
 
 
 def _show_startup_notice(app: QApplication) -> QSplashScreen:

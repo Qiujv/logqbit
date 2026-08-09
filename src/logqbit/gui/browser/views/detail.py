@@ -52,9 +52,9 @@ from PySide6.QtWidgets import (
 
 from logqbit.file_version import FileVersion
 
-from logqbit.gui.plot.widget import PlotManager
+from logqbit.gui.browser.plot.manager import PlotManager
 
-from .yaml_view import YamlView
+from .yaml import YamlView
 
 if TYPE_CHECKING:
     from logqbit.catalog import LogRecord

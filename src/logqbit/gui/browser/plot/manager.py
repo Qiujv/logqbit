@@ -33,9 +33,9 @@ if TYPE_CHECKING:
     from logqbit.catalog import LogRecord
 
 from logqbit.catalog import resolve_plot_columns
-from logqbit.gui.plot.cursor import CursorController, CursorSeries
-from logqbit.gui.plot.fit import FitController, FitViewBox
-from logqbit.gui.plot.mesh import build_plot_mesh
+from logqbit.gui.browser.plot.cursor import CursorController, CursorSeries
+from logqbit.gui.browser.plot.fitting import FitController, FitViewBox
+from logqbit.gui.browser.plot.mesh import build_plot_mesh
 
 
 class TagBar(QWidget):

@@ -20,8 +20,8 @@ from logqbit.catalog import (
     LogRecord,
     export_records,
 )
-from logqbit.gui.browser.application import ensure_application
-from logqbit.gui.browser.detail import (
+from logqbit.gui.browser.startup.application import ensure_application
+from logqbit.gui.browser.views.detail import (
     TAB_PLOT,
     DataViewManager,
     PandasTableModel,
@@ -752,7 +752,7 @@ class TestRecordDetailWidgets:
         record = scan_catalog(sample_logfolder)[0]
         opened_paths: list[Path] = []
         monkeypatch.setattr(
-            "logqbit.gui.browser.detail._open_path_in_explorer",
+            "logqbit.gui.browser.views.detail._open_path_in_explorer",
             lambda path, parent=None: opened_paths.append(path),
         )
         view = RecordDetailView()

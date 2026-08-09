@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from logqbit.gui.browser import launcher
+from logqbit.gui.browser.startup import launcher
 
 
 def test_windows_gui_executable_prefers_pythonw(monkeypatch) -> None:

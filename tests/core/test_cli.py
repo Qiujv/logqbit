@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from logqbit import cli
 from logqbit.cli import shortcuts
-from logqbit.gui.browser import launcher
+from logqbit.gui.browser.startup import launcher
 
 
 def test_copy_template(tmp_path: Path) -> None:
@@ -54,5 +54,5 @@ def test_shortcuts_create_only_browser_shortcut(
     assert len(commands) == 1
     powershell_script = commands[0][2]
     assert str(gui_python) in powershell_script
-    assert "logqbit.gui.browser.launcher" in powershell_script
+    assert "logqbit.gui.browser.startup.launcher" in powershell_script
     assert "live_plotter" not in powershell_script

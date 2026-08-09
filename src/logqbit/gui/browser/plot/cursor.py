@@ -10,7 +10,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtWidgets import QLabel, QPushButton
 
-from logqbit.gui.plot.mesh import PlotMeshData
+from logqbit.gui.browser.plot.mesh import PlotMeshData
 
 
 @dataclass(frozen=True)

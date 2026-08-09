@@ -124,7 +124,7 @@ def create_example_data() -> int:
 
         print(f"\n✓ Created 5 example log folders in: {example_dir}")
         print("\nLaunching browser...")
-        from logqbit.gui.browser.bootstrap import main as browser_main
+        from logqbit.gui.browser.startup.bootstrap import main as browser_main
 
         return browser_main([str(example_dir)])
     except ImportError as exc:

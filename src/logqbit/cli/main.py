@@ -110,11 +110,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return copy_template(args.template, args.output)
     if args.command == "browser":
         if args.detach:
-            from logqbit.gui.browser.launcher import start_browser
+            from logqbit.gui.browser.startup.launcher import start_browser
 
             start_browser(args.directory)
             return 0
-        from logqbit.gui.browser.bootstrap import main as browser_main
+        from logqbit.gui.browser.startup.bootstrap import main as browser_main
 
         browser_args = [str(args.directory)] if args.directory else []
         return browser_main(browser_args)
