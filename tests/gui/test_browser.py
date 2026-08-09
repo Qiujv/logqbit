@@ -22,6 +22,7 @@ from logqbit.catalog import (
 )
 from logqbit.gui.browser.detail import (
     TAB_PLOT,
+    DataViewManager,
     PandasTableModel,
     RecordDetailView,
     RecordDetailWindow,
@@ -452,6 +453,15 @@ class TestPandasTableModel:
         model.set_preview_limit(None)
         assert model.rowCount() == 100
 
+    def test_column_values_ignores_preview_and_uses_column_position(self) -> None:
+        frame = pd.DataFrame(
+            [[1, "a"], [2, "a"], [3, "b"]],
+            columns=["value", "value"],
+        )
+        model = PandasTableModel(frame, preview_limit=1)
+
+        assert model.column_values(1).tolist() == ["a", "a", "b"]
+
     def test_highlight_columns(self) -> None:
         """Test highlighting specific columns."""
         df = pd.DataFrame({"x": [1], "y": [2], "z": [3]})
@@ -678,13 +688,20 @@ class TestRecordDetailWidgets:
 
         assert len(set_columns_calls) == 1
 
-    def test_data_table_has_no_custom_context_menu(self) -> None:
-        view = RecordDetailView()
-
-        assert (
-            view.data_view_manager.data_table.contextMenuPolicy()
-            == Qt.DefaultContextMenu
+    def test_data_table_unique_values_use_full_column(self) -> None:
+        manager = DataViewManager()
+        frame = pd.DataFrame({"value": [1, 2, 1, None, 2]})
+        manager.data_table.setModel(
+            PandasTableModel(frame, manager.data_table, preview_limit=1)
         )
+
+        values = manager._unique_values_for_column(0)
+
+        assert values is not None
+        assert values.iloc[:2].tolist() == [1.0, 2.0]
+        assert pd.isna(values.iloc[2])
+        assert len(values) == 3
+        assert manager.data_table.contextMenuPolicy() == Qt.CustomContextMenu
 
     def test_files_corner_menu_lists_and_opens_all_record_files(
         self, sample_logfolder: Path

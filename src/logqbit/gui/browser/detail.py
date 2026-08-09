@@ -33,6 +33,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -74,10 +76,12 @@ class PandasTableModel(QAbstractTableModel):
         parent: QWidget | None = None,
         highlight_columns: Iterable[str] | None = None,
         preview_limit: int | None = None,
+        missing_display: str = "",
     ) -> None:
         super().__init__(parent)
         self._df = frame
         self._preview_limit = preview_limit
+        self._missing_display = missing_display
         self._highlight = (
             {str(name) for name in highlight_columns} if highlight_columns else set()
         )
@@ -98,6 +102,10 @@ class PandasTableModel(QAbstractTableModel):
     def get_total_rows(self) -> int:
         return self._df.shape[0]
 
+    def column_values(self, column: int) -> pd.Series:
+        """Return one full column by position, independent of the preview limit."""
+        return self._df.iloc[:, column]
+
     def set_preview_limit(self, limit: int | None) -> None:
         old_count = self.rowCount()
         self._preview_limit = limit
@@ -115,7 +123,7 @@ class PandasTableModel(QAbstractTableModel):
             return None
         value = self._df.iat[index.row(), index.column()]
         if pd.isna(value):
-            return ""
+            return self._missing_display
         if isinstance(value, numbers.Real) and not isinstance(value, bool):
             try:
                 return format(value, ".6g")
@@ -138,6 +146,46 @@ class PandasTableModel(QAbstractTableModel):
         if orientation == Qt.Horizontal:
             return str(self._df.columns[section])
         return str(self._df.index[section])
+
+
+class UniqueValuesDialog(QDialog):
+    """Display the distinct values from one DataFrame column."""
+
+    def __init__(
+        self,
+        column_name: str,
+        values: pd.Series,
+        source_row_count: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Unique Values — {column_name}")
+        self.resize(480, 560)
+
+        layout = QVBoxLayout(self)
+        table = QTableView(self)
+        table.setWordWrap(False)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        table.verticalHeader().setDefaultSectionSize(table.fontMetrics().height() + 6)
+        table.setModel(
+            PandasTableModel(
+                values.to_frame(name=column_name),
+                table,
+                missing_display="<NA>",
+            )
+        )
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table)
+
+        status = QLabel(
+            f"{len(values):,} unique values from {source_row_count:,} rows.",
+            self,
+        )
+        layout.addWidget(status)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, parent=self)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
 
 @dataclass
@@ -211,6 +259,8 @@ class DataViewManager:
         self.data_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.data_table.setSortingEnabled(False)
         self.data_table.setWordWrap(False)
+        self.data_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.data_table.customContextMenuRequested.connect(self._open_context_menu)
         self.data_table.horizontalHeader().setStretchLastSection(False)
         self.data_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeToContents
@@ -237,6 +287,58 @@ class DataViewManager:
         controls.addWidget(self.data_load_button)
         data_layout.addLayout(controls)
         return data_tab
+
+    def _open_context_menu(self, point) -> None:
+        index = self.data_table.indexAt(point)
+        if not index.isValid():
+            return
+        self.data_table.setCurrentIndex(index)
+        menu = QMenu(self.data_table)
+        show_unique_action = menu.addAction("Show Unique Values")
+        show_unique_action.triggered.connect(
+            lambda _checked=False, column=index.column(): self._show_unique_values(
+                column
+            )
+        )
+        menu.exec(self.data_table.viewport().mapToGlobal(point))
+
+    def _unique_values_for_column(self, column: int) -> pd.Series | None:
+        model = self.data_table.model()
+        if not isinstance(model, PandasTableModel):
+            return None
+        return model.column_values(column).drop_duplicates(ignore_index=True)
+
+    def _show_unique_values(self, column: int) -> None:
+        model = self.data_table.model()
+        if not isinstance(model, PandasTableModel):
+            return
+        error_message = ""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            values = self._unique_values_for_column(column)
+        except Exception as exc:  # pragma: no cover - defensive
+            values = None
+            error_message = str(exc)
+            logger.error("Failed to collect unique values: %s", error_message)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if error_message:
+            QMessageBox.warning(
+                self.widget,
+                "Show Unique Values",
+                f"Failed to collect unique values: {error_message}",
+            )
+            return
+        if values is None:
+            return
+        column_name = str(model.headerData(column, Qt.Horizontal, Qt.DisplayRole))
+        dialog = UniqueValuesDialog(
+            column_name,
+            values,
+            model.get_total_rows(),
+            self.widget,
+        )
+        dialog.exec()
 
     def set_empty(self, message: str = "No data to display.") -> None:
         self.data_table.setModel(None)
