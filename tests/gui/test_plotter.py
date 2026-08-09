@@ -206,18 +206,14 @@ class TestPlotManagerFitAndColorBar:
         manager = PlotManager()
 
         assert manager.copy_plot_shortcut.key() == QKeySequence.Copy
-        assert (
-            manager.copy_plot_shortcut.context() == Qt.WidgetWithChildrenShortcut
-        )
+        assert manager.copy_plot_shortcut.context() == Qt.WidgetWithChildrenShortcut
         assert manager.copy_plot_shortcut.parent() is manager.plot_widget
         manager.widget.deleteLater()
 
     def test_1d_cursor_and_fit_modes_are_mutually_exclusive(self) -> None:
         manager = PlotManager()
         manager._plot_record = object()
-        manager._plot_frame = pd.DataFrame(
-            {"x": [0.0, 1.0, 2.0], "z": [1.0, 2.0, 3.0]}
-        )
+        manager._plot_frame = pd.DataFrame({"x": [0.0, 1.0, 2.0], "z": [1.0, 2.0, 3.0]})
         manager._refresh_plot_1d("x", ["z"])
 
         manager.cursor_button.click()
@@ -298,7 +294,9 @@ class TestPlotManagerFitAndColorBar:
             "path": str(tmp_path / "plot.png"),
             "format": "PNG",
         }
-        assert manager.plot_status_label.text() == f"Saved plot to {tmp_path / 'plot.png'}"
+        assert (
+            manager.plot_status_label.text() == f"Saved plot to {tmp_path / 'plot.png'}"
+        )
         assert not manager.plot_widget.getPlotItem().titleLabel.isVisible()
         manager.widget.deleteLater()
 
@@ -491,9 +489,15 @@ class TestBuildGridsRect:
         top_y = last_y + step_c
 
         return (
-            x_data, y_data, z_data,
-            col_starts, col_sizes, max_ny, nx_col,
-            top_y, step_c,
+            x_data,
+            y_data,
+            z_data,
+            col_starts,
+            col_sizes,
+            max_ny,
+            nx_col,
+            top_y,
+            step_c,
         )
 
     def test_uniform_grid_shape(self) -> None:
@@ -509,8 +513,8 @@ class TestBuildGridsRect:
             y, z, col_starts, col_sizes, max_ny, nx_col, top_y, step_c
         )
 
-        assert z_final.shape == (max_ny, 2 * nx_col - 1)   # (2, 5)
-        assert y_final.shape == (max_ny + 1, 2 * nx_col)   # (3, 6)
+        assert z_final.shape == (max_ny, 2 * nx_col - 1)  # (2, 5)
+        assert y_final.shape == (max_ny + 1, 2 * nx_col)  # (3, 6)
 
     def test_z_values_placed_correctly(self) -> None:
         """Data columns sit at even indices; odd separator columns are NaN."""

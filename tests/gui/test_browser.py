@@ -56,7 +56,7 @@ def sample_logfolder(tmp_path: Path) -> Path:
         lf.meta.star = 1
         lf.meta.plot_axes = ["x", "y"]
     return tmp_path
-    
+
 
 @pytest.fixture
 def sample_records(tmp_path: Path) -> list[LogRecord]:
@@ -77,65 +77,65 @@ def sample_records(tmp_path: Path) -> list[LogRecord]:
 
 class TestLogRecord:
     """Tests for LogRecord class."""
-    
+
     def test_scan_catalog_finds_logs(self, tmp_path: Path) -> None:
         """Test scanning a directory for log records."""
         with LogFolder.new(tmp_path, title="log1"):
             pass
         with LogFolder.new(tmp_path, title="log2"):
             pass
-        
+
         records = scan_catalog(tmp_path)
-        
+
         assert len(records) == 2
         assert all(isinstance(r, LogRecord) for r in records)
         assert {r.log_id for r in records} == {0, 1}
-    
+
     def test_scan_empty_directory(self, tmp_path: Path) -> None:
         """Test scanning an empty directory."""
         records = scan_catalog(tmp_path)
         assert records == []
-    
+
     def test_scan_nonexistent_directory(self, tmp_path: Path) -> None:
         """Test scanning a directory that doesn't exist."""
         records = scan_catalog(tmp_path / "nonexistent")
         assert records == []
-    
+
     def test_entry_reads_dataframe(self, sample_logfolder: Path) -> None:
         """Test loading dataframe through the passive entry."""
         records = scan_catalog(sample_logfolder)
         assert len(records) == 1
-        
+
         record = records[0]
         df = record.read_dataframe()
-        
+
         assert df is not None
         assert len(df) == 3
         assert list(df.columns) == ["x", "y", "z"]
         assert record.row_count == 3
         assert record.columns == ("x", "y", "z")
-    
+
     def test_read_yaml_text(self, sample_logfolder: Path) -> None:
         """Test reading YAML text from a log record."""
         records = scan_catalog(sample_logfolder)
         record = records[0]
-        
+
         yaml_text = record.read_yaml_text()
-        
+
         assert isinstance(yaml_text, str)
         assert len(yaml_text) > 0
-    
+
     def test_read_yaml_missing_file(self, tmp_path: Path) -> None:
         """Test reading YAML when file doesn't exist."""
         with LogFolder.new(tmp_path) as lf:
             pd.DataFrame({"x": [1]}).to_feather(lf.df_path)
-        
+
         records = scan_catalog(tmp_path)
         record = records[0]
-        
+
         yaml_text = record.read_yaml_text()
         assert "const.yaml not found" in yaml_text
-    
+
     def test_list_image_files(self, tmp_path: Path) -> None:
         """Test listing image files in a log folder."""
         with LogFolder.new(tmp_path) as lf:
@@ -144,12 +144,12 @@ class TestLogRecord:
         (path / "plot.png").touch()
         (path / "result.jpg").touch()
         (path / "data.txt").touch()
-        
+
         records = scan_catalog(tmp_path)
         record = records[0]
-        
+
         images = record.list_image_files()
-        
+
         assert len(images) == 2
         assert all(img.suffix.lower() in {".png", ".jpg"} for img in images)
 
@@ -191,7 +191,9 @@ class TestLogRecord:
         assert str(extra_file) not in watch_paths
         assert str(hidden_file) not in watch_paths
 
-    def test_export_records_copies_selected_logs_in_id_order(self, tmp_path: Path) -> None:
+    def test_export_records_copies_selected_logs_in_id_order(
+        self, tmp_path: Path
+    ) -> None:
         source_parent = tmp_path / "source"
         source_parent.mkdir()
 
@@ -202,9 +204,7 @@ class TestLogRecord:
         with LogFolder.new(source_parent, title="high") as high:
             high.add_row(x=10, y=20)
             (high.path / "snapshot.bin").write_bytes(b"abc")
-            (high.path / "import_from").write_text(
-                "preserve-me", encoding="utf-8"
-            )
+            (high.path / "import_from").write_text("preserve-me", encoding="utf-8")
 
         records = scan_catalog(source_parent)
         record_by_title = {record.title: record for record in records}
@@ -222,10 +222,16 @@ class TestLogRecord:
         )
 
         assert [path.name for path in exported_paths] == ["1", "2"]
-        assert (exported_paths[0] / "note.txt").read_text(encoding="utf-8") == "low-note"
+        assert (exported_paths[0] / "note.txt").read_text(
+            encoding="utf-8"
+        ) == "low-note"
         assert (exported_paths[1] / "snapshot.bin").read_bytes() == b"abc"
-        assert (exported_paths[0] / "import_from").read_text(encoding="utf-8") == str(record_by_title["low"].path)
-        assert (exported_paths[1] / "import_from").read_text(encoding="utf-8") == "preserve-me"
+        assert (exported_paths[0] / "import_from").read_text(encoding="utf-8") == str(
+            record_by_title["low"].path
+        )
+        assert (exported_paths[1] / "import_from").read_text(
+            encoding="utf-8"
+        ) == "preserve-me"
 
         exported_records = scan_catalog(destination_parent)
         exported_titles = {record.log_id: record.title for record in exported_records}
@@ -235,66 +241,66 @@ class TestLogRecord:
 
 class TestLogListTableModel:
     """Tests for LogListTableModel class."""
-    
+
     def test_initial_state(self) -> None:
         """Test initial state of the table model."""
         model = LogListTableModel()
-        
+
         assert model.rowCount() == 0
         assert model.columnCount() == 6
-    
+
     def test_set_records(self, sample_records: list[LogRecord]) -> None:
         """Test setting records in the model."""
         model = LogListTableModel()
         model.set_records(sample_records)
-        
+
         assert model.rowCount() == len(sample_records)
-    
+
     def test_get_record(self, sample_records: list[LogRecord]) -> None:
         """Test getting a record by row index."""
         model = LogListTableModel()
         model.set_records(sample_records)
-        
+
         record = model.get_record(0)
         assert record is not None
         assert record.log_id == sample_records[0].log_id
-        
+
         # Test out of bounds
         assert model.get_record(-1) is None
         assert model.get_record(999) is None
-    
+
     def test_data_display_id(self, sample_records: list[LogRecord]) -> None:
         """Test displaying ID column."""
         model = LogListTableModel()
         model.set_records(sample_records)
-        
+
         index = model.index(0, COL_ID)
         data = model.data(index, Qt.DisplayRole)
-        
+
         assert data == sample_records[0].log_id
-    
+
     def test_data_display_title(self, sample_records: list[LogRecord]) -> None:
         """Test displaying title with stars and trash."""
         model = LogListTableModel()
         model.set_records(sample_records)
-        
+
         # Regular title
         index0 = model.index(0, COL_TITLE)
         data0 = model.data(index0, Qt.DisplayRole)
         assert "log_zero" in data0
-        
+
         # Starred title
         index1 = model.index(1, COL_TITLE)
         data1 = model.data(index1, Qt.DisplayRole)
         assert "⭐⭐" in data1
         assert "log_one" in data1
-        
+
         # Trashed title
         index2 = model.index(2, COL_TITLE)
         data2 = model.data(index2, Qt.DisplayRole)
         assert "🗑️" in data2
         assert "log_two" in data2
-    
+
     def test_data_display_rows(self, sample_records: list[LogRecord]) -> None:
         """Test displaying row count."""
         record = LogRecord(sample_records[0].path, row_count=1_234)
@@ -306,28 +312,28 @@ class TestLogListTableModel:
 
         assert data == "1,234"
         assert model.data(index, SORT_ROLE) == 1_234
-    
+
     def test_data_display_plot_axes(self, sample_logfolder: Path) -> None:
         """Test displaying plot axes with abbreviations."""
         records = scan_catalog(sample_logfolder)
         model = LogListTableModel()
         model.set_records(records)
-        
+
         index = model.index(0, COL_PLOT_AXES)
         data = model.data(index, Qt.DisplayRole)
-        
+
         # Should show first 3 characters of each axis
         assert data == "2,x,y"  # "x" + "y"
-    
+
     def test_data_tooltip_plot_axes(self, sample_logfolder: Path) -> None:
         """Test tooltip showing full plot axes names."""
         records = scan_catalog(sample_logfolder)
         model = LogListTableModel()
         model.set_records(records)
-        
+
         index = model.index(0, COL_PLOT_AXES)
         tooltip = model.data(index, Qt.ToolTipRole)
-        
+
         assert tooltip == "x, y"
 
     def test_data_display_uses_resolved_plot_axes(
@@ -346,29 +352,29 @@ class TestLogListTableModel:
         assert record.meta.plot_axes == ("missing", "y", "y")
         assert model.data(index, Qt.DisplayRole) == "1,y"
         assert model.data(index, Qt.ToolTipRole) == "y"
-    
+
     def test_data_font_role_starred(self, sample_records: list[LogRecord]) -> None:
         """Test font styling for starred items."""
         model = LogListTableModel()
         model.set_records(sample_records)
-        
+
         # Starred item should be bold
         index1 = model.index(1, COL_TITLE)
         font = model.data(index1, Qt.FontRole)
         assert font is not None
         assert font.bold()
-    
+
     def test_data_font_role_trashed(self, sample_records: list[LogRecord]) -> None:
         """Test font styling for trashed items."""
         model = LogListTableModel()
         model.set_records(sample_records)
-        
+
         # Trashed item should be strikeout
         index2 = model.index(2, COL_TITLE)
         font = model.data(index2, Qt.FontRole)
         assert font is not None
         assert font.strikeOut()
-    
+
     def test_notify_record_changed(self, sample_records: list[LogRecord]) -> None:
         """Test notifying views after a record has been refreshed."""
         model = LogListTableModel()
@@ -378,20 +384,20 @@ class TestLogListTableModel:
         record.meta.update(title="updated_title")
 
         model.notify_record_changed(record)
-        
+
         index = model.index(0, COL_TITLE)
         data = model.data(index, Qt.DisplayRole)
         assert "updated_title" in data
-    
+
     def test_header_data(self) -> None:
         """Test header data."""
         model = LogListTableModel()
-        
+
         headers = []
         for col in range(6):
             header = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
             headers.append(header)
-        
+
         expected = ["ID", "Title", "Rows", "Axes", "Create Time", "Create Machine"]
         assert headers == expected
 
@@ -411,97 +417,97 @@ class TestSettingsManager:
 
 class TestPandasTableModel:
     """Tests for PandasTableModel class."""
-    
+
     def test_basic_dataframe_display(self) -> None:
         """Test displaying a basic dataframe."""
         df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
         model = PandasTableModel(df)
-        
+
         assert model.rowCount() == 3
         assert model.columnCount() == 2
-        
+
         # Test data access
         index = model.index(0, 0)
         data = model.data(index, Qt.DisplayRole)
         assert data == "1"
-    
+
     def test_preview_limit(self) -> None:
         """Test preview limit functionality."""
         df = pd.DataFrame({"x": range(100)})
         model = PandasTableModel(df, preview_limit=10)
-        
+
         assert model.rowCount() == 10
         assert model.get_total_rows() == 100
-    
+
     def test_set_preview_limit(self) -> None:
         """Test changing preview limit."""
         df = pd.DataFrame({"x": range(100)})
         model = PandasTableModel(df, preview_limit=10)
-        
+
         assert model.rowCount() == 10
-        
+
         model.set_preview_limit(50)
         assert model.rowCount() == 50
-        
+
         model.set_preview_limit(None)
         assert model.rowCount() == 100
-    
+
     def test_highlight_columns(self) -> None:
         """Test highlighting specific columns."""
         df = pd.DataFrame({"x": [1], "y": [2], "z": [3]})
         model = PandasTableModel(df, highlight_columns=["x", "z"])
-        
+
         # Highlighted column should have bold font
         index_x = model.index(0, 0)
         font = model.data(index_x, Qt.FontRole)
         assert font is not None
         assert font.bold()
-        
+
         # Non-highlighted column should have no special font
         index_y = model.index(0, 1)
         font_y = model.data(index_y, Qt.FontRole)
         assert font_y is None
-    
+
     def test_numeric_formatting(self) -> None:
         """Test numeric value formatting."""
         df = pd.DataFrame({"value": [1.234567890, 0.000123, 1234567.89]})
         model = PandasTableModel(df)
-        
+
         # Should format to 6 significant figures
         data0 = model.data(model.index(0, 0), Qt.DisplayRole)
         assert "1.23457" in data0
-    
+
     def test_nan_display(self) -> None:
         """Test displaying NaN values."""
         df = pd.DataFrame({"x": [1.0, float("nan"), 3.0]})
         model = PandasTableModel(df)
-        
+
         # NaN should display as empty string
         index = model.index(1, 0)
         data = model.data(index, Qt.DisplayRole)
         assert data == ""
-    
+
     def test_header_data(self) -> None:
         """Test column headers."""
         df = pd.DataFrame({"alpha": [1], "beta": [2]})
         model = PandasTableModel(df)
-        
+
         header0 = model.headerData(0, Qt.Horizontal, Qt.DisplayRole)
         header1 = model.headerData(1, Qt.Horizontal, Qt.DisplayRole)
-        
+
         assert header0 == "alpha"
         assert header1 == "beta"
-    
+
     def test_header_font_for_highlighted_columns(self) -> None:
         """Test that highlighted columns have bold headers."""
         df = pd.DataFrame({"x": [1], "y": [2]})
         model = PandasTableModel(df, highlight_columns=["x"])
-        
+
         # Highlighted column header should be bold
         font = model.headerData(0, Qt.Horizontal, Qt.FontRole)
         assert font is not None
         assert font.bold()
-        
+
         # Non-highlighted column header should have no special font
         font_y = model.headerData(1, Qt.Horizontal, Qt.FontRole)
         assert font_y is None
@@ -536,9 +542,9 @@ class TestRecordDetailWidgets:
 
         app.clipboard().clear()
         copy_button.click()
-        assert [
-            url.toLocalFile() for url in app.clipboard().mimeData().urls()
-        ] == [str(image_path)]
+        assert [url.toLocalFile() for url in app.clipboard().mimeData().urls()] == [
+            str(image_path)
+        ]
 
     def test_plot_tab_copies_current_view(self, sample_logfolder: Path) -> None:
         app = ensure_application()
@@ -572,7 +578,9 @@ class TestRecordDetailWidgets:
         view.load_record(record)
 
         assert view.detail_id_label.text() == f"#{record.log_id}"
-        assert not (view.detail_id_label.textInteractionFlags() & Qt.TextSelectableByMouse)
+        assert not (
+            view.detail_id_label.textInteractionFlags() & Qt.TextSelectableByMouse
+        )
         assert view.detail_label.text() == str(record.path)
         assert view.detail_label.textInteractionFlags() & Qt.TextSelectableByMouse
         assert view.detail_label.wordWrap()
@@ -596,9 +604,7 @@ class TestRecordDetailWidgets:
             read_count += 1
             return original_read_feather(*args, **kwargs)
 
-        monkeypatch.setattr(
-            catalog_module.pd, "read_feather", count_read_feather
-        )
+        monkeypatch.setattr(catalog_module.pd, "read_feather", count_read_feather)
 
         view.refresh_current_record()
 
@@ -675,7 +681,10 @@ class TestRecordDetailWidgets:
     def test_data_table_has_no_custom_context_menu(self) -> None:
         view = RecordDetailView()
 
-        assert view.data_view_manager.data_table.contextMenuPolicy() == Qt.DefaultContextMenu
+        assert (
+            view.data_view_manager.data_table.contextMenuPolicy()
+            == Qt.DefaultContextMenu
+        )
 
     def test_files_corner_menu_lists_and_opens_all_record_files(
         self, sample_logfolder: Path
@@ -697,7 +706,9 @@ class TestRecordDetailWidgets:
         assert action_names[-1] == "Show in Explorer"
 
         next(
-            action for action in view.files_menu.actions() if action.text() == "notes.txt"
+            action
+            for action in view.files_menu.actions()
+            if action.text() == "notes.txt"
         ).trigger()
         assert opened_paths == [extra_file]
 
@@ -809,19 +820,13 @@ class TestRecordDetailWidgets:
             first_view.load_record(record)
             second_view.load_record(record)
 
-            assert str(record.path) in set(
-                first_view._detail_watcher.directories()
-            )
-            assert str(record.path) in set(
-                second_view._detail_watcher.directories()
-            )
+            assert str(record.path) in set(first_view._detail_watcher.directories())
+            assert str(record.path) in set(second_view._detail_watcher.directories())
 
             first_view.set_watch_enabled(False)
 
             assert not first_view._detail_watcher.directories()
-            assert str(record.path) in set(
-                second_view._detail_watcher.directories()
-            )
+            assert str(record.path) in set(second_view._detail_watcher.directories())
         finally:
             first_view.close()
             second_view.close()
@@ -901,6 +906,34 @@ class TestRecordDetailWidgets:
         finally:
             window.close()
 
+    def test_browser_f5_runs_manual_refresh(
+        self,
+        sample_logfolder: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        calls: list[tuple[str, bool | None]] = []
+        monkeypatch.setattr(
+            window,
+            "refresh_logs",
+            lambda: calls.append(("logs", None)),
+        )
+        monkeypatch.setattr(
+            window,
+            "refresh_current_log",
+            lambda *, force=False: calls.append(("detail", force)),
+        )
+        refresh_action = next(
+            action
+            for action in window._shortcuts
+            if action.shortcut() == QKeySequence(Qt.Key_F5)
+        )
+
+        refresh_action.trigger()
+
+        assert calls == [("logs", None), ("detail", True)]
+        window.close()
+
     def test_browser_can_show_starred_records_only(
         self,
         sample_records: list[LogRecord],
@@ -959,8 +992,7 @@ class TestRecordDetailWidgets:
                 QKeySequence("Ctrl+Enter"),
             }
             assert (
-                window.open_explorer_shortcut.context()
-                == Qt.WidgetWithChildrenShortcut
+                window.open_explorer_shortcut.context() == Qt.WidgetWithChildrenShortcut
             )
             assert window.open_explorer_shortcut.parent() is window.log_table
 
@@ -1004,9 +1036,7 @@ class TestRecordDetailWidgets:
                 read_count += 1
                 return original_read_feather(*args, **kwargs)
 
-            monkeypatch.setattr(
-                catalog_module.pd, "read_feather", count_read_feather
-            )
+            monkeypatch.setattr(catalog_module.pd, "read_feather", count_read_feather)
 
             window.refresh_logs()
 
@@ -1031,9 +1061,7 @@ class TestRecordDetailWidgets:
                 read_count += 1
                 return original_read_feather(*args, **kwargs)
 
-            monkeypatch.setattr(
-                catalog_module.pd, "read_feather", count_read_feather
-            )
+            monkeypatch.setattr(catalog_module.pd, "read_feather", count_read_feather)
 
             window._on_refresh_clicked()
 
@@ -1051,9 +1079,7 @@ class TestRecordDetailWidgets:
             record = window._selected_record
             assert record is not None
             assert record.data_path.exists()
-            pd.DataFrame({"x": range(10), "y": range(10)}).to_feather(
-                record.data_path
-            )
+            pd.DataFrame({"x": range(10), "y": range(10)}).to_feather(record.data_path)
 
             inspect_count = 0
             read_count = 0
@@ -1073,9 +1099,7 @@ class TestRecordDetailWidgets:
             monkeypatch.setattr(
                 catalog_module.pyarrow.ipc, "open_file", count_open_file
             )
-            monkeypatch.setattr(
-                catalog_module.pd, "read_feather", count_read_feather
-            )
+            monkeypatch.setattr(catalog_module.pd, "read_feather", count_read_feather)
 
             window._on_refresh_clicked()
 
@@ -1096,9 +1120,7 @@ class TestRecordDetailWidgets:
         try:
             record = window._selected_record
             assert record is not None
-            pd.DataFrame({"x": range(9), "y": range(9)}).to_feather(
-                record.data_path
-            )
+            pd.DataFrame({"x": range(9), "y": range(9)}).to_feather(record.data_path)
 
             window.detail_view.refresh_current_record()
 

@@ -68,7 +68,6 @@ for _path, _, _file_names in folder_in.walk():
 # %%
 # Process each directory
 for path_in, path_out, n_files in path_pairs:
-
     path_out.mkdir(parents=True, exist_ok=True)
 
     # Read LabRAD session tags (star/trash)
@@ -76,7 +75,9 @@ for path_in, path_out, n_files in path_pairs:
     tag_info: dict[str, set[Literal["star", "trash"]]] = {}
     if ini.read(path_in / "session.ini"):
         tag_info = ast.literal_eval(ini["Tags"]["datasets"])
-        tag_info = {int(k[:5]): v for k, v in tag_info.items()}  # Truncate keys to id only
+        tag_info = {
+            int(k[:5]): v for k, v in tag_info.items()
+        }  # Truncate keys to id only
 
     # Find last converted file to support resuming
     start_from: int = max(
@@ -92,31 +93,33 @@ for path_in, path_out, n_files in path_pairs:
     for lfi_path in tqdm(path_in.glob("*.csv"), total=n_files, desc=path_in.as_posix()):
         idx = int(lfi_path.name[:5])
         lfo_path = path_out / f"{idx}"
-        
+
         # Skip already converted files (except the last one, in case it was incomplete)
         if lfo_path.exists() and idx != start_from:
             continue
-            
+
         lfo_path.mkdir(parents=True, exist_ok=True)
 
         # Read LabRAD format
         lfi = labrad.read_logfile_labrad(lfi_path)
-        
+
         # Write data.feather
-        lfi.df.to_feather(lfo_path / "data.feather", compression="zstd", compression_level=3)
-        
+        lfi.df.to_feather(
+            lfo_path / "data.feather", compression="zstd", compression_level=3
+        )
+
         # Write const.yaml
         with open(lfo_path / "const.yaml", "w", encoding="utf-8") as f:
             yaml.dump(lfi.conf, f)
-        
+
         # Write metadata.json
         _tags = tag_info.get(idx, set())
         metadata = {
-            "title": lfi.conf['general']['title'],
+            "title": lfi.conf["general"]["title"],
             "star": "star" in _tags,
             "trash": "trash" in _tags,
             "plot_axes": lfi.indeps,
-            "create_time": ''.join(lfi.conf['general']['created'].split(',')),
+            "create_time": "".join(lfi.conf["general"]["created"].split(",")),
             "create_machine": create_machine,
         }
         with open(lfo_path / "metadata.json", "w", encoding="utf-8") as f:

@@ -255,7 +255,9 @@ class CursorController:
         self._syncing = True
         try:
             if self._target is not None:
-                self._target.setPos(self._target.pos().x(), self._horizontal_line.value())
+                self._target.setPos(
+                    self._target.pos().x(), self._horizontal_line.value()
+                )
         finally:
             self._syncing = False
 

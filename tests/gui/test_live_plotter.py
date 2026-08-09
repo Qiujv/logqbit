@@ -28,7 +28,9 @@ def _wait_for_server(timeout: float = 10.0) -> None:
         finally:
             client.close()
 
-    raise TimeoutError("Timed out waiting for LivePlotter server to be ready") from last_error
+    raise TimeoutError(
+        "Timed out waiting for LivePlotter server to be ready"
+    ) from last_error
 
 
 @pytest.fixture
@@ -52,12 +54,16 @@ def live_plotter_process() -> Iterator[subprocess.Popen[str]]:
 
 
 def test_client_connect_failure_fast() -> None:
-    client = LivePlotterClient(socket_name=f"{LIVE_PLOTTER_PIPE_NAME}-missing", timeout_ms=100)
+    client = LivePlotterClient(
+        socket_name=f"{LIVE_PLOTTER_PIPE_NAME}-missing", timeout_ms=100
+    )
     with pytest.raises(ConnectionError):
         client.connect()
 
 
-def test_live_plotter_accepts_commands(live_plotter_process: subprocess.Popen[str]) -> None:
+def test_live_plotter_accepts_commands(
+    live_plotter_process: subprocess.Popen[str],
+) -> None:
     with LivePlotterClient(timeout_ms=1000) as client:
         client.set_indeps(["time", "cycle"])
 

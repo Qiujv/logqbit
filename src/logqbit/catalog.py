@@ -43,9 +43,7 @@ def resolve_plot_columns(
 
     columns = _ordered_unique(columns)
     available = set(columns)
-    axes = [
-        column for column in _ordered_unique(preferred_axes) if column in available
-    ]
+    axes = [column for column in _ordered_unique(preferred_axes) if column in available]
     axes_set = set(axes)
     fields = [
         column

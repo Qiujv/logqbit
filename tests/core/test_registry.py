@@ -19,6 +19,7 @@ Device:
       - [-2433.79567, -3025.139]
 """
 
+
 @pytest.fixture
 def temp_yaml(tmp_path: Path) -> Path:
     dst = tmp_path / "test.yaml"

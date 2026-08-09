@@ -12,9 +12,17 @@ import pyqtgraph as pg
 from PySide6.QtCore import QCoreApplication, QObject, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
-                               QMainWindow, QPushButton, QStatusBar,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
+)
 
 HEAD_LENGTH = 4  # Allows 4,294,967,295 bytes per message.
 LIVE_PLOTTER_PIPE_NAME = "logqbit-live-plotter"
@@ -44,7 +52,9 @@ class LivePlotterWindow(QMainWindow):
         super().__init__()
         pg.setConfigOptions(antialias=True)
         self.setWindowTitle("LogQbit Live Plotter")
-        self.setWindowIcon(QIcon(QPixmap(str(files("logqbit") / "assets" / "live_plotter.svg"))))
+        self.setWindowIcon(
+            QIcon(QPixmap(str(files("logqbit") / "assets" / "live_plotter.svg")))
+        )
 
         self.line_count = max(1, line_count)
         self._active_index = 0
@@ -107,7 +117,10 @@ class LivePlotterWindow(QMainWindow):
     def add(
         self,
         record: Mapping[str, Any] | pd.Series | None = None,
-        seg: pd.DataFrame | Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+        seg: pd.DataFrame
+        | Mapping[str, Any]
+        | Sequence[Mapping[str, Any]]
+        | None = None,
     ) -> None:
         rows: list[Mapping[str, Any]] = []
 
@@ -126,7 +139,9 @@ class LivePlotterWindow(QMainWindow):
                 try:
                     seg_df = pd.DataFrame(seg)
                 except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-                    raise ValueError("'seg' must be convertible to a pandas DataFrame") from exc
+                    raise ValueError(
+                        "'seg' must be convertible to a pandas DataFrame"
+                    ) from exc
             rows.extend(seg_df.to_dict(orient="records"))
 
         if not rows:
@@ -269,8 +284,12 @@ class LivePlotterWindow(QMainWindow):
             active = index == self._active_index
             item.setSymbol("o")
             item.setSymbolSize(self._marker_size)
-            item.setSymbolBrush(self._active_symbol_brush if active else self._inactive_symbol_brush)
-            item.setSymbolPen(self._active_symbol_pen if active else self._inactive_symbol_pen)
+            item.setSymbolBrush(
+                self._active_symbol_brush if active else self._inactive_symbol_brush
+            )
+            item.setSymbolPen(
+                self._active_symbol_pen if active else self._inactive_symbol_pen
+            )
         else:
             item.setSymbol(None)
 
@@ -327,9 +346,7 @@ class LivePlotterWindow(QMainWindow):
 
         stepper = tuple(row.get(key) for key in self._stepper_keys)
         dependent_values = {
-            key: value
-            for key, value in row.items()
-            if key not in self._indeps
+            key: value for key, value in row.items() if key not in self._indeps
         }
         if not dependent_values:
             return
@@ -341,10 +358,12 @@ class LivePlotterWindow(QMainWindow):
             self._last_stepper_values = stepper
 
         line_idx = self._active_index
-        self._line_storage[line_idx].append({
-            "x": x_value,
-            "values": dict(dependent_values),
-        })
+        self._line_storage[line_idx].append(
+            {
+                "x": x_value,
+                "values": dict(dependent_values),
+            }
+        )
 
         self._dependent_keys.update(dependent_values.keys())
         selection_changed, _ = self._sync_y_selector()
@@ -418,13 +437,19 @@ class PlotterConnection(QObject):
                 if len(self._buffer) < HEAD_LENGTH:
                     return
                 header = bytes(self._buffer[:HEAD_LENGTH])
-                self._expected_size = int.from_bytes(header, byteorder="big", signed=False)
+                self._expected_size = int.from_bytes(
+                    header, byteorder="big", signed=False
+                )
                 del self._buffer[:HEAD_LENGTH]
 
             if len(self._buffer) < (self._expected_size or 0):
                 return
 
-            payload = bytes(self._buffer[: self._expected_size]) if self._expected_size else b""
+            payload = (
+                bytes(self._buffer[: self._expected_size])
+                if self._expected_size
+                else b""
+            )
             del self._buffer[: self._expected_size or 0]
             self._expected_size = None
             if payload:
@@ -452,7 +477,9 @@ class PlotterConnection(QObject):
     def _handle_set_indeps(self, payload: dict[str, Any]) -> None:
         indeps = payload.get("indeps")
         if not isinstance(indeps, Sequence):
-            self._send_error("invalid_arguments", "'indeps' must be a sequence of strings")
+            self._send_error(
+                "invalid_arguments", "'indeps' must be a sequence of strings"
+            )
             return
         try:
             self._window.set_indeps(list(indeps))
@@ -464,7 +491,9 @@ class PlotterConnection(QObject):
     def _handle_add(self, payload: dict[str, Any]) -> None:
         record = payload.get("record")
         if record is not None and not isinstance(record, (Mapping, pd.Series)):
-            self._send_error("invalid_arguments", "'record' must be a mapping or pandas Series")
+            self._send_error(
+                "invalid_arguments", "'record' must be a mapping or pandas Series"
+            )
             return
 
         seg_payload = payload.get("seg")
@@ -476,7 +505,9 @@ class PlotterConnection(QObject):
                 try:
                     seg_df = pd.DataFrame(seg_payload)
                 except (TypeError, ValueError) as exc:
-                    self._send_error("invalid_arguments", f"'seg' conversion failed: {exc}")
+                    self._send_error(
+                        "invalid_arguments", f"'seg' conversion failed: {exc}"
+                    )
                     return
 
         try:
@@ -509,7 +540,9 @@ class PlotterConnection(QObject):
         self._socket.deleteLater()
         self.deleteLater()
 
-    def _on_error(self, _error: QLocalSocket.LocalSocketError) -> None:  # pragma: no cover - best effort
+    def _on_error(
+        self, _error: QLocalSocket.LocalSocketError
+    ) -> None:  # pragma: no cover - best effort
         self.finished.emit(self)
         self._socket.deleteLater()
         self.deleteLater()
@@ -530,7 +563,10 @@ class LivePlotterClient:
 
     def connect(self) -> None:
         self._ensure_app()
-        if self._socket is not None and self._socket.state() == QLocalSocket.ConnectedState:
+        if (
+            self._socket is not None
+            and self._socket.state() == QLocalSocket.ConnectedState
+        ):
             return
 
         socket = QLocalSocket()
@@ -538,7 +574,9 @@ class LivePlotterClient:
         if not socket.waitForConnected(self._timeout_ms):
             error = socket.errorString()
             socket.deleteLater()
-            raise ConnectionError(f"Could not connect to LivePlotter server '{self._socket_name}': {error}")
+            raise ConnectionError(
+                f"Could not connect to LivePlotter server '{self._socket_name}': {error}"
+            )
 
         self._socket = socket
 
@@ -567,14 +605,19 @@ class LivePlotterClient:
         self,
         *,
         record: Mapping[str, Any] | pd.Series | None = None,
-        seg: pd.DataFrame | Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+        seg: pd.DataFrame
+        | Mapping[str, Any]
+        | Sequence[Mapping[str, Any]]
+        | None = None,
     ) -> None:
         seg_payload: Any = None
         if seg is not None and not isinstance(seg, pd.DataFrame):
             try:
                 seg_payload = pd.DataFrame(seg)
             except (TypeError, ValueError) as exc:
-                raise ValueError("'seg' must be convertible to a pandas DataFrame") from exc
+                raise ValueError(
+                    "'seg' must be convertible to a pandas DataFrame"
+                ) from exc
         else:
             seg_payload = seg
 
@@ -636,7 +679,10 @@ class LivePlotterClient:
                 continue
             if not self._socket.waitForReadyRead(self._timeout_ms):
                 raise TimeoutError("Timed out waiting for LivePlotter response")
-            if self._socket.state() != QLocalSocket.ConnectedState and not self._socket.bytesAvailable():
+            if (
+                self._socket.state() != QLocalSocket.ConnectedState
+                and not self._socket.bytesAvailable()
+            ):
                 raise ConnectionError("LivePlotter server disconnected")
         return bytes(data)
 

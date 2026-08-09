@@ -253,8 +253,10 @@ class PlotManager:
         self.quadratic_fit_button.setCheckable(True)
         self._make_button_compact(self.quadratic_fit_button)
         status_row.addWidget(self.quadratic_fit_button)
-        self.copy_plot_button = QPushButton("Copy plot")
-        self.copy_plot_button.setToolTip("Copy the current plot view to the clipboard")
+        self.copy_plot_button = QPushButton("copy plot")
+        self.copy_plot_button.setToolTip(
+            "copy the current plot view to the clipboard (Ctrl+C)"
+        )
         self.copy_plot_button.clicked.connect(self.copy_plot_to_clipboard)
         self._make_button_compact(self.copy_plot_button)
         status_row.addWidget(self.copy_plot_button)

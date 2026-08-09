@@ -40,9 +40,7 @@ class PlotMeshData:
             size = int(self.column_sizes[column])
             render_column = 2 * column
             column_y = self.y_corners[:size, render_column]
-            if y < min(column_y[0], column_y[-1]) or y > max(
-                column_y[0], column_y[-1]
-            ):
+            if y < min(column_y[0], column_y[-1]) or y > max(column_y[0], column_y[-1]):
                 continue
             row = _nearest_monotonic_index(column_y, y)
             z_values[column] = self.z_grid[row, render_column]

@@ -176,9 +176,7 @@ class LogListTableModel(QAbstractTableModel):
                 return record.title or "(untitled)"
             if column == COL_PLOT_AXES:
                 plot_axes = record.resolved_plot_columns.axes
-                return (
-                    ", ".join(plot_axes) if plot_axes else "(no plot axes)"
-                )
+                return ", ".join(plot_axes) if plot_axes else "(no plot axes)"
         if role == Qt.UserRole and column == COL_ID:
             return record
         if role == SORT_ROLE:
@@ -468,6 +466,7 @@ class LogBrowserWindow(QMainWindow):
         self._directory_menu = QMenu(self.directory_button)
         self.directory_button.setMenu(self._directory_menu)
         refresh_button = QPushButton("🔄️Refresh")
+        refresh_button.setToolTip("Refresh logs and current detail (F5)")
         refresh_button.clicked.connect(self._on_refresh_clicked)
         self.theme_button = QPushButton()
         self.theme_button.setFixedWidth(36)
@@ -549,6 +548,7 @@ class LogBrowserWindow(QMainWindow):
         add_shortcut(Qt.Key_T, self._shortcut_toggle_trash)
         add_shortcut(Qt.Key_S, self._shortcut_toggle_star)
         add_shortcut(Qt.Key_F2, self._shortcut_rename_title)
+        add_shortcut(Qt.Key_F5, self._on_refresh_clicked)
         add_shortcut(Qt.Key_0, lambda: self._shortcut_set_star(0))
         add_shortcut(Qt.Key_1, lambda: self._shortcut_set_star(1))
         add_shortcut(Qt.Key_2, lambda: self._shortcut_set_star(2))
@@ -564,9 +564,7 @@ class LogBrowserWindow(QMainWindow):
             [QKeySequence("Ctrl+Return"), QKeySequence("Ctrl+Enter")]
         )
         self.open_explorer_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self.open_explorer_shortcut.activated.connect(
-            self._shortcut_open_in_explorer
-        )
+        self.open_explorer_shortcut.activated.connect(self._shortcut_open_in_explorer)
 
     def _rebuild_directory_menu(self) -> None:
         if self._directory_menu is None:
@@ -776,6 +774,13 @@ class LogBrowserWindow(QMainWindow):
     def _open_table_context_menu(self, point) -> None:
         records = self._get_selected_records()
         menu = QMenu(self)
+        show_trash_action = menu.addAction("Show Trashed Items")
+        show_trash_action.setCheckable(True)
+        show_trash_action.setChecked(self._show_trash)
+        show_starred_action = menu.addAction("Show Starred Items Only")
+        show_starred_action.setCheckable(True)
+        show_starred_action.setChecked(self._show_starred_only)
+        menu.addSeparator()
         rename_action = menu.addAction("Rename Title... (F2)")
         toggle_star_action = menu.addAction("Toggle ⭐Star (S)")
         toggle_star_action.setCheckable(True)
@@ -783,14 +788,7 @@ class LogBrowserWindow(QMainWindow):
         toggle_trash_action.setCheckable(True)
         send_to_recycle_action = menu.addAction("Send to Recycle Bin (Del)")
         open_explorer = menu.addAction("Open in Explorer (Ctrl+Enter)")
-        menu.addSeparator()
-        show_trash_action = menu.addAction("Show Trashed Items")
-        show_trash_action.setCheckable(True)
-        show_trash_action.setChecked(self._show_trash)
-        show_starred_action = menu.addAction("Show Starred Items Only")
-        show_starred_action.setCheckable(True)
-        show_starred_action.setChecked(self._show_starred_only)
-        export_action = menu.addAction("Export items...")
+        export_action = menu.addAction("Export Items...")
         if not records:
             rename_action.setEnabled(False)
             toggle_star_action.setEnabled(False)

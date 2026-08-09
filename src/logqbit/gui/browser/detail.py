@@ -633,8 +633,8 @@ class RecordDetailView(QWidget):
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
-        copy_button = QPushButton("Copy file")
-        copy_button.setToolTip("Copy the image file to the clipboard")
+        copy_button = QPushButton("Copy File")
+        copy_button.setToolTip("Copy the image file to the clipboard (Ctrl+C)")
         copy_button.clicked.connect(copy_file)
         button_row.addWidget(copy_button)
         layout.addLayout(button_row)
