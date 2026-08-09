@@ -203,6 +203,7 @@ class LogBrowserWindow(QMainWindow):
 
         table = QTableView(parent)
         table.setModel(proxy)
+        table.setStyleSheet("QTableView { selection-color: white; }")
         table.setSelectionBehavior(QTableView.SelectRows)
         table.setSelectionMode(QTableView.ExtendedSelection)
         table.verticalHeader().setVisible(False)

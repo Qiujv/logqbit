@@ -23,6 +23,13 @@ def scan_catalog(directory: Path) -> list[LogRecord]:
 
 
 class TestBrowserWindow:
+    def test_log_list_uses_white_selection_text(self, sample_logfolder: Path) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        try:
+            assert "selection-color: white" in window.log_table.styleSheet()
+        finally:
+            window.close()
+
     def test_browser_window_detail_shortcuts(self, sample_logfolder: Path) -> None:
         app = ensure_application()
         window = LogBrowserWindow(sample_logfolder)

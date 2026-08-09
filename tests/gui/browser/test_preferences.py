@@ -4,8 +4,11 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QSettings
+from PySide6.QtGui import QColor, QPalette
 
+from logqbit.gui.browser.startup.bootstrap import ensure_application
 from logqbit.gui.browser.window.preferences import SettingsManager
+from logqbit.gui.browser.window.preferences import ThemeManager
 
 
 class TestSettingsManager:
@@ -34,3 +37,11 @@ class TestSettingsManager:
         manager.clear_recent_directories(keep=first)
 
         assert manager.load_recent_directories() == [first]
+
+
+def test_dark_palette_uses_white_highlighted_text() -> None:
+    manager = ThemeManager(ensure_application())
+
+    palette = manager._create_dark_palette()
+
+    assert palette.color(QPalette.HighlightedText) == QColor("white")

@@ -159,7 +159,7 @@ class ThemeManager:
             QPalette.BrightText: (255, 0, 0),
             QPalette.Link: (100, 160, 220),
             QPalette.Highlight: (42, 130, 218),
-            QPalette.HighlightedText: (0, 0, 0),
+            QPalette.HighlightedText: (255, 255, 255),
         }
         for role, color in colors.items():
             palette.setColor(role, QColor(*color))
