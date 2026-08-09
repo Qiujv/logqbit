@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QItemDelegate,
     QLabel,
     QMainWindow,
     QMenu,
@@ -36,6 +37,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStyle,
+    QStyleOptionViewItem,
     QTableView,
     QToolButton,
     QVBoxLayout,
@@ -89,6 +92,27 @@ def _start_plotter_jit_warmup() -> None:
         daemon=True,
     )
     thread.start()
+
+
+class LogListItemDelegate(QItemDelegate):
+    """Draw selected log-list text consistently across native platform styles."""
+
+    @staticmethod
+    def _display_option(option: QStyleOptionViewItem) -> QStyleOptionViewItem:
+        display_option = QStyleOptionViewItem(option)
+        if display_option.state & QStyle.State_Selected:
+            palette = display_option.palette
+            palette.setColor(QPalette.HighlightedText, QColor("white"))
+            display_option.palette = palette
+        return display_option
+
+    def drawDisplay(self, painter, option, rect, text) -> None:  # noqa: N802
+        super().drawDisplay(
+            painter,
+            self._display_option(option),
+            rect,
+            text,
+        )
 
 
 class LogBrowserWindow(QMainWindow):
@@ -205,9 +229,7 @@ class LogBrowserWindow(QMainWindow):
 
         table = QTableView(parent)
         table.setModel(proxy)
-        palette = table.palette()
-        palette.setColor(QPalette.HighlightedText, QColor("white"))
-        table.setPalette(palette)
+        table.setItemDelegate(LogListItemDelegate(table))
         table.setSelectionBehavior(QTableView.SelectRows)
         table.setSelectionMode(QTableView.ExtendedSelection)
         table.verticalHeader().setVisible(False)

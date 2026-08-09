@@ -7,6 +7,7 @@ import pytest
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QColor, QKeySequence, QPalette
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
 from logqbit import catalog as catalog_module
 from logqbit.catalog import LogCatalog, LogRecord
@@ -14,7 +15,7 @@ from logqbit.gui.browser.window.model import (
     COL_CREATE_TIME,
     COL_ROWS,
 )
-from logqbit.gui.browser.window.view import LogBrowserWindow
+from logqbit.gui.browser.window.view import LogBrowserWindow, LogListItemDelegate
 from logqbit.gui.browser.startup.bootstrap import ensure_application
 
 
@@ -27,9 +28,18 @@ class TestBrowserWindow:
         window = LogBrowserWindow(sample_logfolder)
         try:
             assert not window.log_table.styleSheet()
-            assert window.log_table.palette().color(QPalette.HighlightedText) == QColor(
-                "white"
-            )
+            assert isinstance(window.log_table.itemDelegate(), LogListItemDelegate)
+
+            option = QStyleOptionViewItem()
+            option.state |= QStyle.State_Selected
+            palette = option.palette
+            palette.setColor(QPalette.HighlightedText, QColor("black"))
+            option.palette = palette
+
+            display_option = LogListItemDelegate._display_option(option)
+            assert display_option.palette.color(
+                QPalette.HighlightedText
+            ) == QColor("white")
         finally:
             window.close()
 
