@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QColor, QKeySequence, QPalette
 from PySide6.QtTest import QTest
 
 from logqbit import catalog as catalog_module
@@ -26,7 +26,10 @@ class TestBrowserWindow:
     def test_log_list_uses_white_selection_text(self, sample_logfolder: Path) -> None:
         window = LogBrowserWindow(sample_logfolder)
         try:
-            assert "selection-color: white" in window.log_table.styleSheet()
+            assert not window.log_table.styleSheet()
+            assert window.log_table.palette().color(QPalette.HighlightedText) == QColor(
+                "white"
+            )
         finally:
             window.close()
 

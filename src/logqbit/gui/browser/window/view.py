@@ -17,7 +17,9 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QAction,
+    QColor,
     QKeySequence,
+    QPalette,
     QShortcut,
 )
 from PySide6.QtWidgets import (
@@ -203,7 +205,9 @@ class LogBrowserWindow(QMainWindow):
 
         table = QTableView(parent)
         table.setModel(proxy)
-        table.setStyleSheet("QTableView { selection-color: white; }")
+        palette = table.palette()
+        palette.setColor(QPalette.HighlightedText, QColor("white"))
+        table.setPalette(palette)
         table.setSelectionBehavior(QTableView.SelectRows)
         table.setSelectionMode(QTableView.ExtendedSelection)
         table.verticalHeader().setVisible(False)

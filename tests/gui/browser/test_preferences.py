@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
-from PySide6.QtCore import QSettings
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QSettings, Qt
 
-from logqbit.gui.browser.startup.bootstrap import ensure_application
-from logqbit.gui.browser.window.preferences import SettingsManager
-from logqbit.gui.browser.window.preferences import ThemeManager
+from logqbit.gui.browser.window.preferences import SettingsManager, ThemeManager
 
 
 class TestSettingsManager:
@@ -39,9 +37,31 @@ class TestSettingsManager:
         assert manager.load_recent_directories() == [first]
 
 
-def test_dark_palette_uses_white_highlighted_text() -> None:
-    manager = ThemeManager(ensure_application())
+@pytest.mark.parametrize(
+    ("mode", "scheme"),
+    [
+        ("light", Qt.ColorScheme.Light),
+        ("dark", Qt.ColorScheme.Dark),
+    ],
+)
+def test_theme_manager_sets_explicit_color_scheme(mode: str, scheme) -> None:
+    app = MagicMock()
+    hints = app.styleHints.return_value
 
-    palette = manager._create_dark_palette()
+    ThemeManager(app).apply_theme(mode)
 
-    assert palette.color(QPalette.HighlightedText) == QColor("white")
+    hints.setColorScheme.assert_called_once_with(scheme)
+    hints.unsetColorScheme.assert_not_called()
+    app.setPalette.assert_not_called()
+    app.setStyleSheet.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["system", "invalid"])
+def test_theme_manager_uses_system_color_scheme_by_default(mode: str) -> None:
+    app = MagicMock()
+    hints = app.styleHints.return_value
+
+    ThemeManager(app).apply_theme(mode)
+
+    hints.unsetColorScheme.assert_called_once_with()
+    hints.setColorScheme.assert_not_called()

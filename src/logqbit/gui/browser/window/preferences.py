@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 
@@ -88,82 +87,19 @@ class SettingsManager:
 class ThemeManager:
     """Apply the browser's light, dark, or system color theme."""
 
-    THEME_MODES = ["light", "dark", "system"]
+    THEME_MODES = ("light", "dark", "system")
 
     def __init__(self, app: QApplication):
         self.app = app
-        self._system_palette = app.palette()
-        self._current_mode = "system"
 
     def apply_theme(self, mode: str) -> None:
-        self._current_mode = mode
-        style_hints = getattr(self.app, "styleHints", None)
-        can_use_color_scheme = False
-        hints = None
-        if style_hints and hasattr(Qt, "ColorScheme"):
-            hints = style_hints()
-            can_use_color_scheme = hasattr(hints, "setColorScheme")
-
-        if can_use_color_scheme:
-            unknown_scheme = getattr(Qt.ColorScheme, "Unknown", Qt.ColorScheme.Light)
-            scheme_map = {
-                "dark": Qt.ColorScheme.Dark,
-                "light": Qt.ColorScheme.Light,
-                "system": unknown_scheme,
-            }
-            hints.setColorScheme(scheme_map.get(mode, unknown_scheme))
-            palette = self._system_palette
+        hints = self.app.styleHints()
+        if mode == "dark":
+            hints.setColorScheme(Qt.ColorScheme.Dark)
+        elif mode == "light":
+            hints.setColorScheme(Qt.ColorScheme.Light)
         else:
-            palette = {
-                "dark": self._create_dark_palette(),
-                "light": self._create_light_palette(),
-                "system": self._system_palette,
-            }.get(mode, self._system_palette)
-
-        self.app.setPalette(palette)
-        self.app.setStyleSheet("")
-
-    def _create_light_palette(self) -> QPalette:
-        palette = QPalette()
-        colors = {
-            QPalette.Window: (250, 250, 250),
-            QPalette.WindowText: (30, 30, 30),
-            QPalette.Base: (255, 255, 255),
-            QPalette.AlternateBase: (245, 245, 245),
-            QPalette.ToolTipBase: (255, 255, 255),
-            QPalette.ToolTipText: (30, 30, 30),
-            QPalette.Text: (30, 30, 30),
-            QPalette.Button: (245, 245, 245),
-            QPalette.ButtonText: (30, 30, 30),
-            QPalette.BrightText: (255, 0, 0),
-            QPalette.Link: (0, 122, 204),
-            QPalette.Highlight: (51, 153, 255),
-            QPalette.HighlightedText: (255, 255, 255),
-        }
-        for role, color in colors.items():
-            palette.setColor(role, QColor(*color))
-        return palette
-
-    def _create_dark_palette(self) -> QPalette:
-        palette = QPalette()
-        colors = {
-            QPalette.Window: (37, 37, 38),
-            QPalette.WindowText: (220, 220, 220),
-            QPalette.Base: (30, 30, 30),
-            QPalette.AlternateBase: (45, 45, 45),
-            QPalette.ToolTipBase: (255, 255, 255),
-            QPalette.ToolTipText: (255, 255, 255),
-            QPalette.Text: (220, 220, 220),
-            QPalette.Button: (45, 45, 45),
-            QPalette.ButtonText: (220, 220, 220),
-            QPalette.BrightText: (255, 0, 0),
-            QPalette.Link: (100, 160, 220),
-            QPalette.Highlight: (42, 130, 218),
-            QPalette.HighlightedText: (255, 255, 255),
-        }
-        for role, color in colors.items():
-            palette.setColor(role, QColor(*color))
-        return palette
+            hints.unsetColorScheme()
 
     def get_theme_button_emoji(self, mode: str) -> str:
         return {"light": "🌝", "dark": "🌚", "system": "🌗"}.get(mode, "🌗")
