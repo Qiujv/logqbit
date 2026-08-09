@@ -255,6 +255,9 @@ class SettingsManager:
         self.save_recent_directories(entries)
         return self._recent_directories
 
+    def clear_recent_directories(self, keep: Path | None = None) -> None:
+        self.save_recent_directories([Path(keep)] if keep is not None else [])
+
     def load_theme_mode(self) -> str:
         saved_mode = self._settings.value(SETTINGS_THEME_KEY, "system")
         return saved_mode if saved_mode in ThemeManager.THEME_MODES else "system"
@@ -582,10 +585,17 @@ class LogBrowserWindow(QMainWindow):
             self._directory_menu.addSeparator()
         open_action = self._directory_menu.addAction("Open Other Folder...")
         open_action.triggered.connect(self._open_directory_dialog)
+        clear_action = self._directory_menu.addAction("Clear Recent Folders")
+        clear_action.setEnabled(bool(menu_items))
+        clear_action.triggered.connect(self._clear_recent_directories)
         new_window_action = self._directory_menu.addAction("New Window")
         new_window_action.triggered.connect(
             lambda: self._open_new_window(self._base_dir)
         )
+
+    def _clear_recent_directories(self) -> None:
+        self.settings_manager.clear_recent_directories(keep=self._base_dir)
+        self._rebuild_directory_menu()
 
     def _update_theme_button(self) -> None:
         if not self.theme_manager:

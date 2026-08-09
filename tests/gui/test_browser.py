@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import (
     QColor,
     QKeySequence,
@@ -414,6 +414,21 @@ class TestSettingsManager:
         manager.update_recent_directories(tmp_path)
 
         assert manager.load_recent_directories() == original
+
+    def test_clear_recent_directories_preserves_requested_path(
+        self, tmp_path: Path
+    ) -> None:
+        manager = SettingsManager()
+        manager._settings = QSettings(
+            str(tmp_path / "browser-settings.ini"),
+            QSettings.IniFormat,
+        )
+        first = tmp_path / "first"
+        manager.save_recent_directories([first, tmp_path / "second"])
+
+        manager.clear_recent_directories(keep=first)
+
+        assert manager.load_recent_directories() == [first]
 
 
 class TestPandasTableModel:
@@ -949,6 +964,39 @@ class TestRecordDetailWidgets:
         refresh_action.trigger()
 
         assert calls == [("logs", None), ("detail", True)]
+        window.close()
+
+    def test_directory_menu_can_clear_recent_folders(
+        self,
+        sample_logfolder: Path,
+        tmp_path: Path,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        window.settings_manager._settings = QSettings(
+            str(tmp_path / "browser-settings.ini"),
+            QSettings.IniFormat,
+        )
+        window.settings_manager.save_recent_directories(
+            [sample_logfolder, tmp_path / "other"]
+        )
+        window._rebuild_directory_menu()
+
+        clear_action = next(
+            action
+            for action in window._directory_menu.actions()
+            if action.text() == "Clear Recent Folders"
+        )
+        assert clear_action.isEnabled()
+
+        clear_action.trigger()
+
+        assert window.settings_manager.load_recent_directories() == [sample_logfolder]
+        rebuilt_clear_action = next(
+            action
+            for action in window._directory_menu.actions()
+            if action.text() == "Clear Recent Folders"
+        )
+        assert not rebuilt_clear_action.isEnabled()
         window.close()
 
     def test_browser_can_show_starred_records_only(
