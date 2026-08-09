@@ -1,21 +1,15 @@
-"""Interactive browser for log folders."""
+"""Interactive browser window for log folders."""
 
 from __future__ import annotations
 
 import logging
 import os
-import subprocess
-import sys
 import threading
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
-    QAbstractTableModel,
     QFileSystemWatcher,
-    QModelIndex,
-    QSettings,
     QSignalBlocker,
     QSortFilterProxyModel,
     Qt,
@@ -23,10 +17,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QAction,
-    QColor,
-    QFont,
     QKeySequence,
-    QPalette,
     QShortcut,
 )
 from PySide6.QtWidgets import (
@@ -35,11 +26,11 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QInputDialog,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -50,310 +41,30 @@ from PySide6.QtWidgets import (
 )
 from send2trash import send2trash
 
-from logqbit.catalog import LogCatalog, export_records
+from logqbit.catalog import LogCatalog, LogRecord, export_records
 
+from logqbit.gui.browser.detail.files import open_in_file_manager
+from logqbit.gui.browser.detail.view import RecordDetailView, RecordDetailWindow
 from logqbit.gui.browser.plot.mesh import warmup_plotter_jit
-from logqbit.gui.browser.views.detail import RecordDetailView, RecordDetailWindow
-
-if TYPE_CHECKING:
-    from logqbit.catalog import LogRecord
+from logqbit.gui.browser.window.model import (
+    COL_CREATE_MACHINE,
+    COL_CREATE_TIME,
+    COL_ID,
+    COL_PLOT_AXES,
+    COL_ROWS,
+    COL_TITLE,
+    SORT_ROLE,
+    LogListTableModel,
+)
+from logqbit.gui.browser.window.preferences import SettingsManager, ThemeManager
 
 logger = logging.getLogger(__name__)
 
 # Constants
 REFRESH_DEBOUNCE_MS = 250
-DISABLE_RECENT_DIRS_ENV = "LOGQBIT_BROWSER_DISABLE_RECENT_DIRS"
 DISABLE_JIT_WARMUP_ENV = "LOGQBIT_BROWSER_DISABLE_JIT_WARMUP"
 
-COL_ID = 0
-COL_TITLE = 1
-COL_ROWS = 2
-COL_PLOT_AXES = 3
-COL_CREATE_TIME = 4
-COL_CREATE_MACHINE = 5
-SORT_ROLE = Qt.UserRole + 1
-
-SETTINGS_ORG = "LogQbit"
-SETTINGS_APP = "LogBrowser"
-SETTINGS_RECENT_DIRS_KEY = "recent/directories"
-SETTINGS_THEME_KEY = "ui/theme"
-
 _plotter_jit_warmup_started = False
-
-
-class LogListTableModel(QAbstractTableModel):
-    """Table model for the browser's record list."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._records: list[LogRecord] = []
-        self._bold_font = QFont()
-        self._bold_font.setBold(True)
-        self._strikeout_font = QFont()
-        self._strikeout_font.setStrikeOut(True)
-        self._bold_strikeout_font = QFont()
-        self._bold_strikeout_font.setBold(True)
-        self._bold_strikeout_font.setStrikeOut(True)
-
-    def set_records(self, records: list[LogRecord]) -> None:
-        self.beginResetModel()
-        self._records = list(records)
-        self.endResetModel()
-
-    def get_record(self, row: int) -> LogRecord | None:
-        if 0 <= row < len(self._records):
-            return self._records[row]
-        return None
-
-    def notify_record_changed(self, record: LogRecord) -> None:
-        row = next(
-            (
-                index
-                for index, current in enumerate(self._records)
-                if current.path == record.path
-            ),
-            None,
-        )
-        if row is None:
-            return
-        self._records[row] = record
-        self.dataChanged.emit(
-            self.index(row, 0), self.index(row, self.columnCount() - 1)
-        )
-
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
-        return 0 if parent.isValid() else len(self._records)
-
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
-        return 0 if parent.isValid() else 6
-
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):  # noqa: D401
-        if not index.isValid():
-            return None
-
-        record = self._records[index.row()]
-        column = index.column()
-        if role == Qt.DisplayRole:
-            if column == COL_ID:
-                return record.log_id
-            if column == COL_TITLE:
-                parts: list[str] = []
-                if record.trash:
-                    parts.append("🗑️")
-                star_prefix = "⭐" * max(record.star, 0)
-                if star_prefix:
-                    parts.append(star_prefix)
-                parts.append(record.title or "(untitled)")
-                return " ".join(parts)
-            if column == COL_ROWS:
-                return f"{record.row_count:,}"
-            if column == COL_CREATE_TIME:
-                return record.create_time
-            if column == COL_CREATE_MACHINE:
-                return record.create_machine
-            if column == COL_PLOT_AXES:
-                plot_axes = record.resolved_plot_columns.axes
-                if plot_axes:
-                    return ",".join(
-                        [str(len(plot_axes))] + [axis[:3] for axis in plot_axes]
-                    )
-                return ""
-
-        if role == Qt.FontRole and column == COL_TITLE:
-            is_bold = max(record.star, 0) > 0
-            if is_bold and record.trash:
-                return self._bold_strikeout_font
-            if is_bold:
-                return self._bold_font
-            if record.trash:
-                return self._strikeout_font
-            return None
-
-        if role == Qt.ToolTipRole:
-            if column == COL_TITLE:
-                return record.title or "(untitled)"
-            if column == COL_PLOT_AXES:
-                plot_axes = record.resolved_plot_columns.axes
-                return ", ".join(plot_axes) if plot_axes else "(no plot axes)"
-        if role == Qt.UserRole and column == COL_ID:
-            return record
-        if role == SORT_ROLE:
-            if column == COL_ROWS:
-                return record.row_count
-            return self.data(index, Qt.DisplayRole)
-        return None
-
-    def headerData(  # noqa: N802
-        self,
-        section: int,
-        orientation: Qt.Orientation,
-        role: int = Qt.DisplayRole,
-    ):
-        if role != Qt.DisplayRole or orientation != Qt.Horizontal:
-            return None
-        headers = ["ID", "Title", "Rows", "Axes", "Create Time", "Create Machine"]
-        if 0 <= section < len(headers):
-            return headers[section]
-        return None
-
-
-class SettingsManager:
-    """Persist browser preferences and recent directories."""
-
-    def __init__(self) -> None:
-        self._settings = QSettings(
-            QSettings.IniFormat,
-            QSettings.UserScope,
-            SETTINGS_ORG,
-            SETTINGS_APP,
-        )
-        self._recent_directories: list[Path] = []
-
-    def load_recent_directories(self) -> list[Path]:
-        stored = self._settings.value(SETTINGS_RECENT_DIRS_KEY, [])
-        if isinstance(stored, str):
-            candidates = [stored]
-        elif isinstance(stored, (list, tuple)):
-            candidates = list(stored)
-        else:
-            candidates = []
-        recent_paths: list[Path] = []
-        for item in candidates:
-            text = str(item)
-            if not text:
-                continue
-            try:
-                path = Path(text)
-            except Exception:
-                continue
-            if path not in recent_paths:
-                recent_paths.append(path)
-        self._recent_directories = recent_paths[:10]
-        return self._recent_directories
-
-    def save_recent_directories(self, directories: list[Path]) -> None:
-        self._recent_directories = directories[:10]
-        self._settings.setValue(
-            SETTINGS_RECENT_DIRS_KEY,
-            [str(path) for path in self._recent_directories],
-        )
-        self._settings.sync()
-
-    def update_recent_directories(self, path: Path) -> list[Path]:
-        if os.environ.get(DISABLE_RECENT_DIRS_ENV):
-            return self.load_recent_directories()
-        self.load_recent_directories()
-        resolved = Path(path)
-        entries = [resolved]
-        for existing in self._recent_directories:
-            if existing != resolved:
-                entries.append(existing)
-            if len(entries) >= 10:
-                break
-        self.save_recent_directories(entries)
-        return self._recent_directories
-
-    def clear_recent_directories(self, keep: Path | None = None) -> None:
-        self.save_recent_directories([Path(keep)] if keep is not None else [])
-
-    def load_theme_mode(self) -> str:
-        saved_mode = self._settings.value(SETTINGS_THEME_KEY, "system")
-        return saved_mode if saved_mode in ThemeManager.THEME_MODES else "system"
-
-    def save_theme_mode(self, mode: str) -> None:
-        self._settings.setValue(SETTINGS_THEME_KEY, mode)
-        self._settings.sync()
-
-
-class ThemeManager:
-    """Apply the browser's light, dark, or system color theme."""
-
-    THEME_MODES = ["light", "dark", "system"]
-
-    def __init__(self, app: QApplication):
-        self.app = app
-        self._system_palette = app.palette()
-        self._current_mode = "system"
-
-    def apply_theme(self, mode: str) -> None:
-        self._current_mode = mode
-        style_hints = getattr(self.app, "styleHints", None)
-        can_use_color_scheme = False
-        hints = None
-        if style_hints and hasattr(Qt, "ColorScheme"):
-            hints = style_hints()
-            can_use_color_scheme = hasattr(hints, "setColorScheme")
-
-        if can_use_color_scheme:
-            unknown_scheme = getattr(Qt.ColorScheme, "Unknown", Qt.ColorScheme.Light)
-            scheme_map = {
-                "dark": Qt.ColorScheme.Dark,
-                "light": Qt.ColorScheme.Light,
-                "system": unknown_scheme,
-            }
-            hints.setColorScheme(scheme_map.get(mode, unknown_scheme))
-            palette = self._system_palette
-        else:
-            palette = {
-                "dark": self._create_dark_palette(),
-                "light": self._create_light_palette(),
-                "system": self._system_palette,
-            }.get(mode, self._system_palette)
-
-        self.app.setPalette(palette)
-        self.app.setStyleSheet("")
-
-    def _create_light_palette(self) -> QPalette:
-        palette = QPalette()
-        colors = {
-            QPalette.Window: (250, 250, 250),
-            QPalette.WindowText: (30, 30, 30),
-            QPalette.Base: (255, 255, 255),
-            QPalette.AlternateBase: (245, 245, 245),
-            QPalette.ToolTipBase: (255, 255, 255),
-            QPalette.ToolTipText: (30, 30, 30),
-            QPalette.Text: (30, 30, 30),
-            QPalette.Button: (245, 245, 245),
-            QPalette.ButtonText: (30, 30, 30),
-            QPalette.BrightText: (255, 0, 0),
-            QPalette.Link: (0, 122, 204),
-            QPalette.Highlight: (51, 153, 255),
-            QPalette.HighlightedText: (255, 255, 255),
-        }
-        for role, color in colors.items():
-            palette.setColor(role, QColor(*color))
-        return palette
-
-    def _create_dark_palette(self) -> QPalette:
-        palette = QPalette()
-        colors = {
-            QPalette.Window: (37, 37, 38),
-            QPalette.WindowText: (220, 220, 220),
-            QPalette.Base: (30, 30, 30),
-            QPalette.AlternateBase: (45, 45, 45),
-            QPalette.ToolTipBase: (255, 255, 255),
-            QPalette.ToolTipText: (255, 255, 255),
-            QPalette.Text: (220, 220, 220),
-            QPalette.Button: (45, 45, 45),
-            QPalette.ButtonText: (220, 220, 220),
-            QPalette.BrightText: (255, 0, 0),
-            QPalette.Link: (100, 160, 220),
-            QPalette.Highlight: (42, 130, 218),
-            QPalette.HighlightedText: (0, 0, 0),
-        }
-        for role, color in colors.items():
-            palette.setColor(role, QColor(*color))
-        return palette
-
-    def get_theme_button_emoji(self, mode: str) -> str:
-        return {"light": "🌝", "dark": "🌚", "system": "🌗"}.get(mode, "🌗")
-
-    def get_theme_tooltip(self, mode: str) -> str:
-        return {
-            "light": "Light mode",
-            "dark": "Dark mode",
-            "system": "Follow system theme",
-        }.get(mode, "Follow system theme")
 
 
 def _start_plotter_jit_warmup() -> None:
@@ -396,6 +107,7 @@ class LogBrowserWindow(QMainWindow):
         self._list_refresh_pending = False
         self._detail_windows: list[RecordDetailWindow] = []
         self._catalog = LogCatalog()
+        self._actions = _BrowserActions(self)
 
         # Theme management
         app = QApplication.instance()
@@ -510,7 +222,9 @@ class LogBrowserWindow(QMainWindow):
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(False)  # For compact view.
         header.setContextMenuPolicy(Qt.CustomContextMenu)
-        header.customContextMenuRequested.connect(self._open_header_context_menu)
+        header.customContextMenuRequested.connect(
+            self._actions.open_header_context_menu
+        )
 
         table.setColumnHidden(COL_CREATE_TIME, True)
         table.setColumnHidden(COL_CREATE_MACHINE, True)
@@ -518,7 +232,7 @@ class LogBrowserWindow(QMainWindow):
         table.selectionModel().selectionChanged.connect(self._on_log_selection_changed)
         table.doubleClicked.connect(self._on_log_double_clicked)
         table.setContextMenuPolicy(Qt.CustomContextMenu)
-        table.customContextMenuRequested.connect(self._open_table_context_menu)
+        table.customContextMenuRequested.connect(self._actions.open_table_context_menu)
 
         table.sortByColumn(COL_ID, Qt.AscendingOrder)
 
@@ -545,15 +259,15 @@ class LogBrowserWindow(QMainWindow):
             self.addAction(action)
             self._shortcuts.append(action)
 
-        add_shortcut(Qt.Key_Delete, self._shortcut_send_to_recycle_bin)
-        add_shortcut(Qt.Key_T, self._shortcut_toggle_trash)
-        add_shortcut(Qt.Key_S, self._shortcut_toggle_star)
-        add_shortcut(Qt.Key_F2, self._shortcut_rename_title)
+        add_shortcut(Qt.Key_Delete, self._actions.shortcut_send_to_recycle_bin)
+        add_shortcut(Qt.Key_T, self._actions.shortcut_toggle_trash)
+        add_shortcut(Qt.Key_S, self._actions.shortcut_toggle_star)
+        add_shortcut(Qt.Key_F2, self._actions.shortcut_rename_title)
         add_shortcut(Qt.Key_F5, self._on_refresh_clicked)
-        add_shortcut(Qt.Key_0, lambda: self._shortcut_set_star(0))
-        add_shortcut(Qt.Key_1, lambda: self._shortcut_set_star(1))
-        add_shortcut(Qt.Key_2, lambda: self._shortcut_set_star(2))
-        add_shortcut(Qt.Key_3, lambda: self._shortcut_set_star(3))
+        add_shortcut(Qt.Key_0, lambda: self._actions.shortcut_set_star(0))
+        add_shortcut(Qt.Key_1, lambda: self._actions.shortcut_set_star(1))
+        add_shortcut(Qt.Key_2, lambda: self._actions.shortcut_set_star(2))
+        add_shortcut(Qt.Key_3, lambda: self._actions.shortcut_set_star(3))
         add_shortcut(Qt.Key_Left, lambda: self.detail_view.switch_tab(-1))
         add_shortcut(Qt.Key_Right, lambda: self.detail_view.switch_tab(1))
 
@@ -565,7 +279,9 @@ class LogBrowserWindow(QMainWindow):
             [QKeySequence("Ctrl+Return"), QKeySequence("Ctrl+Enter")]
         )
         self.open_explorer_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self.open_explorer_shortcut.activated.connect(self._shortcut_open_in_explorer)
+        self.open_explorer_shortcut.activated.connect(
+            self._actions.shortcut_open_in_explorer
+        )
 
     def _rebuild_directory_menu(self) -> None:
         if self._directory_menu is None:
@@ -746,18 +462,6 @@ class LogBrowserWindow(QMainWindow):
         self.settings_manager.save_theme_mode(self._theme_mode)
         self._update_theme_button()
 
-    def _get_selected_records(self) -> list[LogRecord]:
-        selection_model = self.log_table.selectionModel()
-        if selection_model is None:
-            return []
-        records: list[LogRecord] = []
-        for proxy_index in selection_model.selectedRows():
-            source_index = self.table_proxy.mapToSource(proxy_index)
-            record = self.table_model.get_record(source_index.row())
-            if record is not None:
-                records.append(record)
-        return records
-
     def _open_directory_dialog(self) -> None:
         current = str(self._base_dir)
         chosen = QFileDialog.getExistingDirectory(self, "Select log directory", current)
@@ -777,15 +481,41 @@ class LogBrowserWindow(QMainWindow):
                 f"Failed to launch new window:\n{exc}",
             )
 
-    def _open_table_context_menu(self, point) -> None:
-        records = self._get_selected_records()
-        menu = QMenu(self)
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override naming
+        self.settings_manager.save_recent_directories(
+            self.settings_manager._recent_directories
+        )
+        self.settings_manager.save_theme_mode(self._theme_mode)
+        super().closeEvent(event)
+
+
+class _BrowserActions:
+    """Group menus and record mutations initiated from the main window."""
+
+    def __init__(self, window: LogBrowserWindow) -> None:
+        self.window = window
+
+    def get_selected_records(self) -> list[LogRecord]:
+        selection_model = self.window.log_table.selectionModel()
+        if selection_model is None:
+            return []
+        records: list[LogRecord] = []
+        for proxy_index in selection_model.selectedRows():
+            source_index = self.window.table_proxy.mapToSource(proxy_index)
+            record = self.window.table_model.get_record(source_index.row())
+            if record is not None:
+                records.append(record)
+        return records
+
+    def open_table_context_menu(self, point) -> None:
+        records = self.get_selected_records()
+        menu = QMenu(self.window)
         show_trash_action = menu.addAction("Show Trashed Items")
         show_trash_action.setCheckable(True)
-        show_trash_action.setChecked(self._show_trash)
+        show_trash_action.setChecked(self.window._show_trash)
         show_starred_action = menu.addAction("Show Starred Items Only")
         show_starred_action.setCheckable(True)
-        show_starred_action.setChecked(self._show_starred_only)
+        show_starred_action.setChecked(self.window._show_starred_only)
         menu.addSeparator()
         rename_action = menu.addAction("Rename Title... (F2)")
         toggle_star_action = menu.addAction("Toggle ⭐Star (S)")
@@ -804,46 +534,37 @@ class LogBrowserWindow(QMainWindow):
             export_action.setEnabled(False)
         else:
             rename_action.setEnabled(len(records) == 1)
-            all_starred = all(record.star > 0 for record in records)
-            all_trashed = all(record.trash for record in records)
-            toggle_star_action.setEnabled(True)
-            toggle_star_action.setChecked(all_starred)
-            toggle_trash_action.setEnabled(True)
-            toggle_trash_action.setChecked(all_trashed)
-            send_to_recycle_action.setEnabled(True)
-            export_action.setEnabled(True)
-        chosen = menu.exec(self.log_table.viewport().mapToGlobal(point))
+            toggle_star_action.setChecked(all(record.star > 0 for record in records))
+            toggle_trash_action.setChecked(all(record.trash for record in records))
+        chosen = menu.exec(self.window.log_table.viewport().mapToGlobal(point))
         if chosen is None:
             return
-        if chosen == rename_action and records and len(records) == 1:
-            self._rename_record_title(records[0])
+        if chosen == rename_action and len(records) == 1:
+            self.rename_record_title(records[0])
         elif chosen == toggle_star_action and records:
-            self._set_records_star_count(
+            self.set_records_star_count(
                 records, 1 if toggle_star_action.isChecked() else 0
             )
         elif chosen == toggle_trash_action and records:
-            self._set_records_trash(records, toggle_trash_action.isChecked())
+            self.set_records_trash(records, toggle_trash_action.isChecked())
         elif chosen == send_to_recycle_action and records:
-            self._send_records_to_recycle_bin(records)
+            self.send_records_to_recycle_bin(records)
         elif chosen == show_trash_action:
-            self._toggle_show_trash()
+            self.toggle_show_trash()
         elif chosen == show_starred_action:
-            self._toggle_show_starred_only()
+            self.toggle_show_starred_only()
         elif chosen == open_explorer and records:
-            self._open_path_in_explorer(
-                records[0].path,
-                len(records) != 1,
-            )
+            self.open_path_in_explorer(records[0].path, len(records) != 1)
         elif chosen == export_action and records:
-            self._export_records(records)
+            self.export_records(records)
 
-    def _open_header_context_menu(self, point) -> None:
-        menu = self._create_header_context_menu()
-        header = self.log_table.horizontalHeader()
+    def open_header_context_menu(self, point) -> None:
+        menu = self.create_header_context_menu()
+        header = self.window.log_table.horizontalHeader()
         menu.exec(header.mapToGlobal(point))
 
-    def _create_header_context_menu(self) -> QMenu:
-        menu = QMenu(self)
+    def create_header_context_menu(self) -> QMenu:
+        menu = QMenu(self.window)
         for label, column in (
             ("Show Plot Axes Column", COL_PLOT_AXES),
             ("Show Create Time Column", COL_CREATE_TIME),
@@ -851,28 +572,26 @@ class LogBrowserWindow(QMainWindow):
         ):
             action = menu.addAction(label)
             action.setCheckable(True)
-            action.setChecked(not self.log_table.isColumnHidden(column))
+            action.setChecked(not self.window.log_table.isColumnHidden(column))
             action.triggered.connect(
-                lambda checked=False, target=column: self._toggle_column(
-                    target, checked
-                )
+                lambda checked=False, target=column: self.toggle_column(target, checked)
             )
         return menu
 
-    def _toggle_column(self, column: int, visible: bool) -> None:
-        self.log_table.setColumnHidden(column, not visible)
+    def toggle_column(self, column: int, visible: bool) -> None:
+        self.window.log_table.setColumnHidden(column, not visible)
 
-    def _toggle_show_trash(self) -> None:
-        self._show_trash = not self._show_trash
-        self.refresh_logs()
+    def toggle_show_trash(self) -> None:
+        self.window._show_trash = not self.window._show_trash
+        self.window.refresh_logs()
 
-    def _toggle_show_starred_only(self) -> None:
-        self._show_starred_only = not self._show_starred_only
-        self.refresh_logs()
+    def toggle_show_starred_only(self) -> None:
+        self.window._show_starred_only = not self.window._show_starred_only
+        self.window.refresh_logs()
 
-    def _rename_record_title(self, record: LogRecord) -> None:
+    def rename_record_title(self, record: LogRecord) -> None:
         current_title = record.title
-        dialog = QInputDialog(self)
+        dialog = QInputDialog(self.window)
         dialog.setWindowTitle("Rename Log")
         dialog.setLabelText("Enter new title:")
         dialog.setTextValue(current_title)
@@ -884,9 +603,9 @@ class LogBrowserWindow(QMainWindow):
         if new_title == current_title:
             return
         record.meta.update(title=new_title)
-        self.refresh_logs()
+        self.window.refresh_logs()
 
-    def _set_record_star_count(
+    def set_record_star_count(
         self, record: LogRecord, count: int, refresh: bool = True
     ) -> bool:
         count = max(int(count), 0)
@@ -894,10 +613,10 @@ class LogBrowserWindow(QMainWindow):
             return False
         record.meta.update(star=count)
         if refresh:
-            self.refresh_logs()
+            self.window.refresh_logs()
         return True
 
-    def _set_record_trash(
+    def set_record_trash(
         self, record: LogRecord, value: bool, refresh: bool = True
     ) -> bool:
         value = bool(value)
@@ -905,55 +624,38 @@ class LogBrowserWindow(QMainWindow):
             return False
         record.meta.update(trash=value)
         if refresh:
-            self.refresh_logs()
+            self.window.refresh_logs()
         return True
 
-    def _set_records_star_count(self, records: Iterable[LogRecord], count: int) -> None:
+    def set_records_star_count(self, records: Iterable[LogRecord], count: int) -> None:
         changed = False
         for record in records:
-            changed |= self._set_record_star_count(record, count, refresh=False)
+            changed |= self.set_record_star_count(record, count, refresh=False)
         if changed:
-            self.refresh_logs()
+            self.window.refresh_logs()
 
-    def _set_records_trash(self, records: Iterable[LogRecord], value: bool) -> None:
+    def set_records_trash(self, records: Iterable[LogRecord], value: bool) -> None:
         changed = False
         for record in records:
-            changed |= self._set_record_trash(record, value, refresh=False)
+            changed |= self.set_record_trash(record, value, refresh=False)
         if changed:
-            self.refresh_logs()
+            self.window.refresh_logs()
 
-    def _open_path_in_explorer(self, path: Path, select: bool = False) -> None:
-        try:
-            if sys.platform.startswith("win"):
-                if select:
-                    subprocess.run(["explorer", "/select,", str(path)], check=False)
-                else:
-                    subprocess.run(["explorer", str(path)], check=False)
-            elif sys.platform == "darwin":
-                if select:
-                    subprocess.run(["open", "-R", str(path)], check=False)
-                else:
-                    subprocess.run(["open", str(path)], check=False)
-            else:
-                subprocess.run(["xdg-open", str(path)], check=False)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error("Failed to open explorer for %s: %s", path, exc)
-            QMessageBox.warning(
-                self, "Open in Explorer", f"Failed to open file browser: {exc}"
-            )
+    def open_path_in_explorer(self, path: Path, select: bool = False) -> None:
+        open_in_file_manager(path, select=select, parent=self.window)
 
-    def _export_records(self, records: Iterable[LogRecord]) -> None:
+    def export_records(self, records: Iterable[LogRecord]) -> None:
         records_list = list(records)
         if not records_list:
             return
 
         chosen = QFileDialog.getExistingDirectory(
-            self,
+            self.window,
             "Select new parent folder for export",
             str(
-                self._base_dir.parent
-                if self._base_dir.parent.exists()
-                else self._base_dir
+                self.window._base_dir.parent
+                if self.window._base_dir.parent.exists()
+                else self.window._base_dir
             ),
         )
         if not chosen:
@@ -964,7 +666,7 @@ class LogBrowserWindow(QMainWindow):
             exported_paths = export_records(records_list, destination_parent)
         except Exception as exc:
             QMessageBox.warning(
-                self,
+                self.window,
                 "Export Failed",
                 f"Failed to export selected log folders:\n{exc}",
             )
@@ -977,14 +679,13 @@ class LogBrowserWindow(QMainWindow):
                 f"Exported {len(exported_paths)} log folders to parent folder:\n"
                 f"{destination_parent}"
             )
-        QMessageBox.information(self, "Export Complete", message)
+        QMessageBox.information(self.window, "Export Complete", message)
 
-    def _send_records_to_recycle_bin(self, records: Iterable[LogRecord]) -> None:
+    def send_records_to_recycle_bin(self, records: Iterable[LogRecord]) -> None:
         records_list = list(records)
         if not records_list:
             return
 
-        # Prepare confirmation message
         if len(records_list) == 1:
             message = f"Send log folder #{records_list[0].log_id} to Recycle Bin?\n\n"
             message += f"Path: {records_list[0].path}\n\n"
@@ -996,19 +697,16 @@ class LogBrowserWindow(QMainWindow):
                 message += f", ... (+{len(records_list) - 10} more)"
             message += "\n\nThis operation can be undone from the Recycle Bin."
 
-        # Show confirmation dialog
         reply = QMessageBox.question(
-            self,
+            self.window,
             "Confirm Send to Recycle Bin",
             message,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
-
         if reply != QMessageBox.Yes:
             return
 
-        # Send to recycle bin
         failed_paths = []
         for record in records_list:
             try:
@@ -1016,58 +714,45 @@ class LogBrowserWindow(QMainWindow):
             except Exception as exc:
                 failed_paths.append(f"{record.path} ({exc})")
 
-        # Show results
         if failed_paths:
             error_msg = "Failed to send some folders to Recycle Bin:\n\n"
             error_msg += "\n".join(failed_paths[:5])
             if len(failed_paths) > 5:
                 error_msg += f"\n... and {len(failed_paths) - 5} more"
-            QMessageBox.warning(self, "Error", error_msg)
+            QMessageBox.warning(self.window, "Error", error_msg)
 
-        # Refresh list
-        self.refresh_logs()
+        self.window.refresh_logs()
 
-    def _shortcut_set_star(self, count: int) -> None:
-        records = self._get_selected_records()
-        if not records:
-            return
-        self._set_records_star_count(records, count)
+    def shortcut_set_star(self, count: int) -> None:
+        records = self.get_selected_records()
+        if records:
+            self.set_records_star_count(records, count)
 
-    def _shortcut_toggle_star(self) -> None:
-        records = self._get_selected_records()
+    def shortcut_toggle_star(self) -> None:
+        records = self.get_selected_records()
         if not records:
             return
         all_starred = all(record.star > 0 for record in records)
-        self._set_records_star_count(records, 0 if all_starred else 1)
+        self.set_records_star_count(records, 0 if all_starred else 1)
 
-    def _shortcut_send_to_recycle_bin(self) -> None:
-        records = self._get_selected_records()
-        if not records:
-            return
-        self._send_records_to_recycle_bin(records)
+    def shortcut_send_to_recycle_bin(self) -> None:
+        records = self.get_selected_records()
+        if records:
+            self.send_records_to_recycle_bin(records)
 
-    def _shortcut_toggle_trash(self) -> None:
-        records = self._get_selected_records()
+    def shortcut_toggle_trash(self) -> None:
+        records = self.get_selected_records()
         if not records:
             return
         all_trashed = all(record.trash for record in records)
-        self._set_records_trash(records, not all_trashed)
+        self.set_records_trash(records, not all_trashed)
 
-    def _shortcut_open_in_explorer(self) -> None:
-        records = self._get_selected_records()
-        if not records:
-            return
-        self._open_path_in_explorer(records[0].path, len(records) != 1)
+    def shortcut_open_in_explorer(self) -> None:
+        records = self.get_selected_records()
+        if records:
+            self.open_path_in_explorer(records[0].path, len(records) != 1)
 
-    def _shortcut_rename_title(self) -> None:
-        records = self._get_selected_records()
-        if len(records) != 1:
-            return
-        self._rename_record_title(records[0])
-
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override naming
-        self.settings_manager.save_recent_directories(
-            self.settings_manager._recent_directories
-        )
-        self.settings_manager.save_theme_mode(self._theme_mode)
-        super().closeEvent(event)
+    def shortcut_rename_title(self) -> None:
+        records = self.get_selected_records()
+        if len(records) == 1:
+            self.rename_record_title(records[0])

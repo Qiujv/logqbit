@@ -1,0 +1,1 @@
+"""Browser main-window components."""

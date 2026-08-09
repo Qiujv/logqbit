@@ -1,4 +1,4 @@
-"""Read-only YAML view with lightweight Pygments rendering."""
+"""Read-only YAML detail tab."""
 
 from __future__ import annotations
 

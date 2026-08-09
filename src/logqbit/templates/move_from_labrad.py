@@ -21,7 +21,9 @@ from typing import Literal
 from labcodes.fileio import labrad
 from tqdm.auto import tqdm
 
-from logqbit.logfolder import yaml
+from logqbit.registry import get_parser
+
+yaml = get_parser()
 
 # %%
 # ============================================================================

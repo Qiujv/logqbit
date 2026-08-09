@@ -13,9 +13,7 @@ from typing_extensions import deprecated
 
 from .dataframe import DataFrameBuffer
 from .metadata import LogMetadata
-from .registry import Registry, get_parser
-
-yaml = get_parser()
+from .registry import Registry
 
 
 class LogFolder:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from logqbit.gui.browser.startup import bootstrap
-from logqbit.gui.browser.startup.application import ensure_application
+from logqbit.gui.browser.startup.bootstrap import ensure_application
 
 
 def test_browser_startup_notice_is_shown_immediately() -> None:

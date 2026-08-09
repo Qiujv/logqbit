@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
+from importlib.resources import files
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
-from logqbit.gui.browser.startup.application import ensure_application
+
+def ensure_application(argv: Sequence[str] | None = None) -> QApplication:
+    """Return the Browser application, creating and configuring it if needed."""
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(list(argv) if argv is not None else sys.argv)
+
+    app.setApplicationName("LogQbit Log Browser")
+    icon = QIcon(str(files("logqbit") / "assets" / "browser.svg"))
+    if not icon.isNull():
+        app.setWindowIcon(icon)
+    return app
 
 
 def _show_startup_notice(app: QApplication) -> QSplashScreen:
@@ -33,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     splash = _show_startup_notice(app)
 
     try:
-        from logqbit.gui.browser.window import LogBrowserWindow
+        from logqbit.gui.browser.window.view import LogBrowserWindow
 
         directory = Path(args[0]).expanduser().resolve() if args else None
         window = LogBrowserWindow(directory)

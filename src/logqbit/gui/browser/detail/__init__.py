@@ -1,0 +1,1 @@
+"""Browser record-detail components."""
