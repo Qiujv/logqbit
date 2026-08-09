@@ -8,7 +8,6 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterable
-from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,7 +25,6 @@ from PySide6.QtGui import (
     QAction,
     QColor,
     QFont,
-    QIcon,
     QKeySequence,
     QPalette,
     QShortcut,
@@ -769,11 +767,9 @@ class LogBrowserWindow(QMainWindow):
     def _open_new_window(self, directory: Path) -> None:
         """Launch a new browser window in a separate process."""
         try:
-            subprocess.Popen(
-                [sys.executable, "-m", "logqbit.gui.browser", str(directory)],
-                cwd=Path.cwd(),
-                start_new_session=True,  # Detach from parent process
-            )
+            from logqbit.gui.browser.launcher import start_browser
+
+            start_browser(directory)
         except Exception as exc:
             QMessageBox.warning(
                 self,
@@ -1075,32 +1071,3 @@ class LogBrowserWindow(QMainWindow):
         )
         self.settings_manager.save_theme_mode(self._theme_mode)
         super().closeEvent(event)
-
-
-# ============================================================================
-# Entry Point
-# ============================================================================
-
-
-def ensure_application() -> QApplication:
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv)
-        app.setApplicationName("Logqbit Log Browser")
-        icon = QIcon(str(files("logqbit") / "assets" / "browser.svg"))
-        if not icon.isNull():
-            app.setWindowIcon(icon)
-    return app
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = argv if argv is not None else sys.argv[1:]
-    directory = Path(args[0]).expanduser().resolve() if args else None
-    app = ensure_application()
-    window = LogBrowserWindow(directory)
-    window.show()
-    return app.exec()
-
-
-if __name__ == "__main__":  # pragma: no cover - manual run
-    sys.exit(main())

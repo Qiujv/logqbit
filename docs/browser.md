@@ -16,6 +16,9 @@ logqbit browser ./runs
 `logqbit-browser ./runs` 是同一个界面的独立入口。未指定目录时，Browser 会打开最近使用
 的目录；首次运行则使用当前目录。
 
+需要让命令立即返回、不占用当前终端时，可以使用 `logqbit browser ./runs --detach` 或
+`logqbit-browser-detached ./runs`。Windows 桌面快捷方式默认使用这一启动模式。
+
 ## 记录列表
 
 Browser 把含有 `metadata.json` 的直接子目录识别为记录。左侧列表显示 ID、标题、行数和

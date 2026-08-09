@@ -20,6 +20,16 @@ logqbit-browser ./runs
 logqbit browser ./runs
 ```
 
+如果希望命令立即返回、Browser 不再占用当前终端，可以使用 detached 模式：
+
+```bash
+logqbit browser ./runs --detach
+logqbit-browser-detached ./runs
+```
+
+Windows 上 detached 模式会通过 Explorer 启动独立 GUI 进程，避免继承当前终端或
+Notebook 的 Job Object。
+
 也可以通过 Python 模块启动：
 
 ```bash
@@ -58,3 +68,5 @@ logqbit copy-template move_from_labrad -o ./tools/
 logqbit shortcuts
 logqbit shortcuts -o "C:\MyShortcuts"
 ```
+
+创建的快捷方式使用 detached 启动模式，不会让 Browser 占用控制台窗口。

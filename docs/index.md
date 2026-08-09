@@ -58,6 +58,12 @@ logqbit-browser ./runs
 logqbit browser ./runs
 ```
 
+需要释放当前终端时，使用 detached 模式：
+
+```bash
+logqbit browser ./runs --detach
+```
+
 实验记录目录里也可以放用户自己的辅助文件，例如截图、照片、分析摘要或仪器配置导出：
 
 ```text

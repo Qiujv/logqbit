@@ -51,6 +51,12 @@ print(lf.df)
 logqbit browser
 ```
 
+如果希望启动后立即释放当前终端，可以使用 detached 模式：
+
+```bash
+logqbit browser --detach
+```
+
 或者也可以通过 `logqbit shortcuts` 创建桌面快捷方式（仅 Windows 可用）。
 
 ### 用例 3：生成示例数据并打开浏览器

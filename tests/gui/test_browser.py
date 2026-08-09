@@ -20,6 +20,7 @@ from logqbit.catalog import (
     LogRecord,
     export_records,
 )
+from logqbit.gui.browser.application import ensure_application
 from logqbit.gui.browser.detail import (
     TAB_PLOT,
     DataViewManager,
@@ -38,7 +39,6 @@ from logqbit.gui.browser.window import (
     LogListTableModel,
     SORT_ROLE,
     SettingsManager,
-    ensure_application,
 )
 from logqbit.logfolder import LogFolder
 
@@ -562,14 +562,16 @@ class TestRecordDetailWidgets:
         copy_shortcut.activated.emit()
         mime_data = app.clipboard().mimeData()
         assert mime_data.hasUrls()
-        assert [url.toLocalFile() for url in mime_data.urls()] == [str(image_path)]
+        assert [Path(url.toLocalFile()) for url in mime_data.urls()] == [
+            image_path.resolve()
+        ]
         assert not mime_data.hasImage()
 
         app.clipboard().clear()
         copy_button.click()
-        assert [url.toLocalFile() for url in app.clipboard().mimeData().urls()] == [
-            str(image_path)
-        ]
+        assert [
+            Path(url.toLocalFile()) for url in app.clipboard().mimeData().urls()
+        ] == [image_path.resolve()]
 
     def test_plot_tab_copies_current_view(self, sample_logfolder: Path) -> None:
         app = ensure_application()

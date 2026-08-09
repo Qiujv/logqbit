@@ -77,6 +77,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory to open (default: current directory)",
     )
+    browser_parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="Launch in a detached process and return immediately",
+    )
 
     subparsers.add_parser(
         "browser-demo",
@@ -104,7 +109,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "copy-template":
         return copy_template(args.template, args.output)
     if args.command == "browser":
-        from logqbit.gui.browser import main as browser_main
+        if args.detach:
+            from logqbit.gui.browser.launcher import start_browser
+
+            start_browser(args.directory)
+            return 0
+        from logqbit.gui.browser.bootstrap import main as browser_main
 
         browser_args = [str(args.directory)] if args.directory else []
         return browser_main(browser_args)
