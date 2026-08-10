@@ -7,7 +7,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from logqbit import catalog as catalog_module
 from logqbit.catalog import LogCatalog, LogRecord
@@ -17,8 +17,13 @@ from logqbit.gui.browser.detail.view import (
     RecordDetailView,
     RecordDetailWindow,
 )
-from logqbit.gui.browser.startup.bootstrap import ensure_application
 from logqbit.logfolder import LogFolder
+
+
+def _create_application() -> QApplication:
+    app = QApplication.instance()
+    assert app is not None
+    return app
 
 
 def scan_catalog(directory: Path) -> list[LogRecord]:
@@ -27,7 +32,7 @@ def scan_catalog(directory: Path) -> list[LogRecord]:
 
 class TestRecordDetailWidgets:
     def test_image_tab_copies_image_file(self, sample_logfolder: Path) -> None:
-        app = ensure_application()
+        app = _create_application()
         record = scan_catalog(sample_logfolder)[0]
         image_path = record.path / "copy-test.png"
         image_path.write_bytes(b"not a renderable image")
@@ -61,7 +66,7 @@ class TestRecordDetailWidgets:
         ] == [image_path.resolve()]
 
     def test_plot_tab_copies_current_view(self, sample_logfolder: Path) -> None:
-        app = ensure_application()
+        app = _create_application()
         record = scan_catalog(sample_logfolder)[0]
         view = RecordDetailView()
         view.resize(600, 400)
@@ -309,7 +314,7 @@ class TestRecordDetailWidgets:
     def test_detail_window_watch_toggle_controls_watcher(
         self, sample_logfolder: Path
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         record = scan_catalog(sample_logfolder)[0]
         window = RecordDetailWindow(record)
         window.show()
@@ -379,7 +384,7 @@ class TestRecordDetailWidgets:
     def test_detail_window_has_file_watcher_and_tab_shortcuts(
         self, sample_logfolder: Path
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         record = scan_catalog(sample_logfolder)[0]
         extra_file = record.path / "notes.txt"
         extra_file.write_text("hello", encoding="utf-8")

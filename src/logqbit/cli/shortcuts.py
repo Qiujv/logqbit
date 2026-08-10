@@ -9,8 +9,6 @@ import traceback
 from importlib.resources import files
 from pathlib import Path
 
-from logqbit.gui.browser.startup.launcher import windows_gui_executable
-
 
 def _powershell_single_quoted(value: object) -> str:
     return "'" + str(value).replace("'", "''") + "'"
@@ -74,11 +72,11 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
 
         output_dir.mkdir(parents=True, exist_ok=True)
         shortcut_path = output_dir / "LogQbit Browser.lnk"
+        browser_entrypoint = Path(sys.executable).with_name("logqbit-browser.exe")
         powershell_script = f"""
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut({_powershell_single_quoted(shortcut_path)})
-$Shortcut.TargetPath = {_powershell_single_quoted(windows_gui_executable(sys.executable))}
-$Shortcut.Arguments = '-m logqbit.gui.browser.startup.launcher'
+$Shortcut.TargetPath = {_powershell_single_quoted(browser_entrypoint)}
 $Shortcut.IconLocation = {_powershell_single_quoted(browser_ico)}
 $Shortcut.Save()
 """

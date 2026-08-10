@@ -78,11 +78,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory to open (default: current directory)",
     )
     browser_parser.add_argument(
-        "--detach",
+        "--foreground",
         action="store_true",
-        help="Launch in a detached process and return immediately",
+        help="Run in the current process and keep the terminal attached",
     )
-
     subparsers.add_parser(
         "browser-demo",
         help="Create example data and launch browser",
@@ -109,15 +108,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "copy-template":
         return copy_template(args.template, args.output)
     if args.command == "browser":
-        if args.detach:
-            from logqbit.gui.browser.startup.launcher import start_browser
+        from logqbit.gui.browser.startup import (
+            launch_browser,
+            run_browser_application,
+        )
 
-            start_browser(args.directory)
-            return 0
-        from logqbit.gui.browser.startup.bootstrap import main as browser_main
-
-        browser_args = [str(args.directory)] if args.directory else []
-        return browser_main(browser_args)
+        if args.foreground:
+            browser_args = [str(args.directory)] if args.directory else []
+            return run_browser_application(browser_args)
+        launch_browser(args.directory)
+        return 0
     if args.command == "browser-demo":
         from logqbit.cli.demo import create_example_data
 

@@ -6,7 +6,6 @@ LogQbit 是一个面向实验室场景的轻量数据记录工具包，适合记
 
 - 用简单的接口记录和管理实验数据。
 - 基于目录的实验数据组织，用通用可读的格式储存数据。
-- 在需要时再启用浏览器和实时绘图等 GUI 能力。
 
 完整文档见：https://qiujv.github.io/logqbit/
 
@@ -51,12 +50,6 @@ print(lf.df)
 logqbit browser
 ```
 
-如果希望启动后立即释放当前终端，可以使用 detached 模式：
-
-```bash
-logqbit browser --detach
-```
-
 或者也可以通过 `logqbit shortcuts` 创建桌面快捷方式（仅 Windows 可用）。
 
 ### 用例 3：生成示例数据并打开浏览器
@@ -65,8 +58,7 @@ logqbit browser --detach
 logqbit browser-demo
 ```
 
-这会在当前目录创建 `logqbit_example/`，生成五组示例数据并启动图形化浏览器。其中两组
-包含一百万个数据点，首次生成可能需要一点时间。
+这会在当前目录创建 `logqbit_example/`，生成示例数据并启动图形化浏览器。
 
 更多内容：
 

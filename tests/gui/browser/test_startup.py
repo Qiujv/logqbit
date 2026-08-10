@@ -2,23 +2,32 @@ from __future__ import annotations
 
 import builtins
 
-from logqbit.gui.browser.startup import bootstrap
-from logqbit.gui.browser.startup.bootstrap import ensure_application
+from PySide6.QtWidgets import QApplication
+
+from logqbit.gui.browser import startup
+
+
+def _create_application() -> QApplication:
+    app = QApplication.instance()
+    assert app is not None
+    return app
 
 
 def test_browser_startup_notice_is_shown_immediately() -> None:
-    app = ensure_application()
+    app = _create_application()
 
-    splash = bootstrap._show_startup_notice(app)
+    splash = startup._show_startup_splash(app)
     try:
         assert splash.isVisible()
         assert "正在启动" in splash.message()
+        assert splash.font().pointSize() == 14
+        assert splash.font().bold()
     finally:
         splash.close()
 
 
 def test_browser_startup_failure_shows_error_dialog(monkeypatch) -> None:
-    ensure_application()
+    _create_application()
     expected = RuntimeError("window import failed")
     shown: list[Exception] = []
     original_import = builtins.__import__
@@ -29,14 +38,14 @@ def test_browser_startup_failure_shows_error_dialog(monkeypatch) -> None:
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", failing_import)
-    monkeypatch.setattr(bootstrap, "_show_startup_error", shown.append)
+    monkeypatch.setattr(startup, "_show_startup_error", shown.append)
 
-    assert bootstrap.main([]) == 1
+    assert startup.run_browser_application([]) == 1
     assert shown == [expected]
 
 
 def test_startup_error_dialog_contains_exception_details(monkeypatch) -> None:
-    ensure_application()
+    _create_application()
     captured: dict[str, object] = {}
 
     class FakeMessageBox:
@@ -64,9 +73,9 @@ def test_startup_error_dialog_contains_exception_details(monkeypatch) -> None:
         def exec(self) -> None:
             captured["shown"] = True
 
-    monkeypatch.setattr(bootstrap, "QMessageBox", FakeMessageBox)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox", FakeMessageBox)
 
-    bootstrap._show_startup_error(ValueError("bad config"))
+    startup._show_startup_error(ValueError("bad config"))
 
     assert captured["title"] == "LogQbit Browser 启动失败"
     assert captured["info"] == "ValueError: bad config"

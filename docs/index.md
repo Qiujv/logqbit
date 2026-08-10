@@ -37,6 +37,15 @@ import pandas as pd
 df = pd.read_feather("./runs/0/data.feather")
 ```
 
+也可以通过 `LogFolder` 对象读取：
+
+```python
+from logqbit import LogFolder
+
+log = LogFolder("./runs/0")
+df = log.df
+```
+
 ## 浏览和辅助文件
 
 LogQbit 的主要图形界面是 LogBrowser，用来浏览一组实验记录、查看数据表、检查常量和元数据，
@@ -49,19 +58,7 @@ pip install "logqbit[gui]"
 安装后可以运行：
 
 ```bash
-logqbit-browser ./runs
-```
-
-也可以使用主命令的便捷入口：
-
-```bash
-logqbit browser ./runs
-```
-
-需要释放当前终端时，使用 detached 模式：
-
-```bash
-logqbit browser ./runs --detach
+logqbit browser
 ```
 
 实验记录目录里也可以放用户自己的辅助文件，例如截图、照片、分析摘要或仪器配置导出：

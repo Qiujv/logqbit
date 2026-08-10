@@ -124,9 +124,10 @@ def create_example_data() -> int:
 
         print(f"\n✓ Created 5 example log folders in: {example_dir}")
         print("\nLaunching browser...")
-        from logqbit.gui.browser.startup.bootstrap import main as browser_main
+        from logqbit.gui.browser.startup import launch_browser
 
-        return browser_main([str(example_dir)])
+        launch_browser(example_dir)
+        return 0
     except ImportError as exc:
         print(f"Error: Missing required dependency: {exc}", file=sys.stderr)
         print("Please ensure logqbit is properly installed.", file=sys.stderr)

@@ -45,7 +45,6 @@ pip install --no-deps logqbit
 以下功能依赖 GUI 相关组件：
 
 - `logqbit-browser`
-- `logqbit-browser-detached`
 - `logqbit-live-plotter`
 - `logqbit browser`
 - `logqbit browser-demo`

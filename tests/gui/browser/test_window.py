@@ -7,7 +7,7 @@ import pytest
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QColor, QKeySequence, QPalette
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
 
 from logqbit import catalog as catalog_module
 from logqbit.catalog import LogCatalog, LogRecord
@@ -16,7 +16,12 @@ from logqbit.gui.browser.window.model import (
     COL_ROWS,
 )
 from logqbit.gui.browser.window.view import LogBrowserWindow, LogListItemDelegate
-from logqbit.gui.browser.startup.bootstrap import ensure_application
+
+
+def _create_application() -> QApplication:
+    app = QApplication.instance()
+    assert app is not None
+    return app
 
 
 def scan_catalog(directory: Path) -> list[LogRecord]:
@@ -44,7 +49,7 @@ class TestBrowserWindow:
             window.close()
 
     def test_browser_window_detail_shortcuts(self, sample_logfolder: Path) -> None:
-        app = ensure_application()
+        app = _create_application()
         window = LogBrowserWindow(sample_logfolder)
         window.show()
         app.processEvents()
@@ -128,7 +133,7 @@ class TestBrowserWindow:
         self,
         sample_records: list[LogRecord],
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         window = LogBrowserWindow(sample_records[0].path.parent)
         app.processEvents()
         try:
@@ -172,7 +177,7 @@ class TestBrowserWindow:
         sample_logfolder: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         window = LogBrowserWindow(sample_logfolder)
         window.show()
         app.processEvents()
@@ -209,7 +214,7 @@ class TestBrowserWindow:
     def test_list_refresh_preserves_current_detail_cache(
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         window = LogBrowserWindow(sample_logfolder)
         app.processEvents()
         try:
@@ -239,7 +244,7 @@ class TestBrowserWindow:
     def test_manual_refresh_reads_current_feather_once(
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         window = LogBrowserWindow(sample_logfolder)
         app.processEvents()
         try:
@@ -262,7 +267,7 @@ class TestBrowserWindow:
     def test_manual_refresh_updates_catalog_summary_and_detail(
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         window = LogBrowserWindow(sample_logfolder)
         app.processEvents()
         try:
@@ -304,7 +309,7 @@ class TestBrowserWindow:
     def test_detail_data_refresh_updates_log_list_rows(
         self, sample_logfolder: Path
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         window = LogBrowserWindow(sample_logfolder)
         app.processEvents()
         try:
@@ -343,7 +348,7 @@ class TestBrowserWindow:
     def test_browser_window_watch_toggle_controls_watcher(
         self, sample_logfolder: Path
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         window = LogBrowserWindow(sample_logfolder)
         window.show()
         app.processEvents()
@@ -370,7 +375,7 @@ class TestBrowserWindow:
     def test_browser_window_log_table_focus_can_switch_detail_tabs(
         self, sample_logfolder: Path
     ) -> None:
-        app = ensure_application()
+        app = _create_application()
         window = LogBrowserWindow(sample_logfolder)
         window.show()
         app.processEvents()

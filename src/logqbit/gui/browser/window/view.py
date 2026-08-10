@@ -498,9 +498,9 @@ class LogBrowserWindow(QMainWindow):
     def _open_new_window(self, directory: Path) -> None:
         """Launch a new browser window in a separate process."""
         try:
-            from logqbit.gui.browser.startup.launcher import start_browser
+            from logqbit.gui.browser.startup import launch_browser
 
-            start_browser(directory)
+            launch_browser(directory)
         except Exception as exc:
             QMessageBox.warning(
                 self,

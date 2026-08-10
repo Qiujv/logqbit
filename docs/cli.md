@@ -2,33 +2,18 @@
 
 ## LogBrowser
 
-以下命令需要先安装 GUI extra：
+
+启动 LogBrowser，浏览 `LogFolder` 记录：
 
 ```bash
-pip install "logqbit[gui]"
+logqbit browser
 ```
 
-启动 LogBrowser，浏览一组 `LogFolder` 记录。
+Browser 在独立进程中运行，需要让 Browser 在当前进程中运行并保持终端连接时，可以使用 foreground 模式：
 
 ```bash
-logqbit-browser ./runs
+logqbit browser --foreground
 ```
-
-也可以通过主命令的便捷入口启动同一个浏览器。
-
-```bash
-logqbit browser ./runs
-```
-
-如果希望命令立即返回、Browser 不再占用当前终端，可以使用 detached 模式：
-
-```bash
-logqbit browser ./runs --detach
-logqbit-browser-detached ./runs
-```
-
-Windows 上 detached 模式会通过 Explorer 启动独立 GUI 进程，避免继承当前终端或
-Notebook 的 Job Object。
 
 也可以通过 Python 模块启动：
 
@@ -48,8 +33,7 @@ logqbit-live-plotter
 
 ## 实用命令
 
-在当前目录创建 `logqbit_example/`，写入五组示例数据，并尝试启动浏览器。其中两组
-包含一百万个数据点，生成过程可能需要一点时间。
+在当前目录创建 `logqbit_example/`，生成示例数据并启动图形化浏览器。
 
 ```bash
 logqbit browser-demo
@@ -62,11 +46,9 @@ logqbit copy-template move_from_labrad
 logqbit copy-template move_from_labrad -o ./tools/
 ```
 
-在 Windows 上创建带图标的桌面快捷方式。
+在 Windows 上创建桌面快捷方式。
 
 ```bash
 logqbit shortcuts
 logqbit shortcuts -o "C:\MyShortcuts"
 ```
-
-创建的快捷方式使用 detached 启动模式，不会让 Browser 占用控制台窗口。
