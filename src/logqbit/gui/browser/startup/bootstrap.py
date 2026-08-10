@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import sys
+import traceback
 from collections.abc import Sequence
 from importlib.resources import files
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QIcon, QPixmap
-from PySide6.QtWidgets import QApplication, QSplashScreen
+from PySide6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 
 def ensure_application(argv: Sequence[str] | None = None) -> QApplication:
@@ -39,6 +40,18 @@ def _show_startup_notice(app: QApplication) -> QSplashScreen:
     return splash
 
 
+def _show_startup_error(error: Exception) -> None:
+    """Show startup failures that would otherwise be hidden by ``pythonw.exe``."""
+    message = QMessageBox()
+    message.setIcon(QMessageBox.Critical)
+    message.setWindowTitle("LogQbit Browser 启动失败")
+    message.setText("LogQbit Browser 无法启动。")
+    message.setInformativeText(f"{type(error).__name__}: {error}")
+    message.setDetailedText("".join(traceback.format_exception(error)))
+    message.setStandardButtons(QMessageBox.Ok)
+    message.exec()
+
+
 def main(argv: list[str] | None = None) -> int:
     """Show a lightweight splash before importing the full browser window."""
     args = argv if argv is not None else sys.argv[1:]
@@ -53,5 +66,9 @@ def main(argv: list[str] | None = None) -> int:
         window.show()
         splash.finish(window)
         return app.exec()
+    except Exception as error:
+        splash.close()
+        _show_startup_error(error)
+        return 1
     finally:
         splash.close()
