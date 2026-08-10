@@ -25,6 +25,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMenu,
@@ -36,12 +37,13 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QWidget,
 )
+from send2trash import send2trash
 
 from logqbit.file_version import FileVersion
 
 from logqbit.gui.browser.detail.data import DataViewManager
 from logqbit.gui.browser.detail.files import (
-    ScaledImageLabel,
+    ZoomableImageView,
     _copy_file_to_clipboard,
     open_in_file_manager,
 )
@@ -57,6 +59,17 @@ REFRESH_DEBOUNCE_MS = 250
 TAB_CONST = 0
 TAB_DATA = 1
 TAB_PLOT = 2
+
+
+def _format_file_size(size: int) -> str:
+    """Return a compact, binary file-size label."""
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{int(value)} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    raise AssertionError("unreachable")
 
 
 @dataclass
@@ -350,30 +363,128 @@ class RecordDetailView(QWidget):
 
     def _create_image_tab(self, image_path: Path) -> QWidget:
         image_tab = QWidget()
+        image_tab.setContextMenuPolicy(Qt.CustomContextMenu)
+        image_tab.customContextMenuRequested.connect(
+            lambda position, path=image_path, tab=image_tab: self._open_image_context_menu(
+                path, tab, position
+            )
+        )
         layout = QVBoxLayout(image_tab)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        image_label = ScaledImageLabel()
-        image_label.setToolTip(str(image_path))
-        image_label.load_image(image_path)
-        layout.addWidget(image_label, stretch=1)
+        image_view = ZoomableImageView()
+        image_view.setToolTip(str(image_path))
+        image_view.set_image_context_menu_callback(
+            lambda position, path=image_path, view=image_view: self._open_image_context_menu(
+                path, view, position
+            )
+        )
+        image_view.load_image(image_path)
+        layout.addWidget(image_view, stretch=1)
 
         def copy_file(_checked: bool = False) -> None:
             _copy_file_to_clipboard(image_path)
 
-        button_row = QHBoxLayout()
-        button_row.addStretch(1)
-        copy_button = QPushButton("Copy File")
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_label = QLabel(
+            f"File size: {_format_file_size(image_path.stat().st_size)}",
+            image_tab,
+        )
+        status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        status_row.addWidget(status_label, stretch=1)
+        copy_button = QPushButton("copy")
         copy_button.setToolTip("Copy the image file to the clipboard (Ctrl+C)")
         copy_button.clicked.connect(copy_file)
-        button_row.addWidget(copy_button)
-        layout.addLayout(button_row)
+        status_row.addWidget(copy_button)
+        layout.addLayout(status_row)
 
         copy_shortcut = QShortcut(QKeySequence.Copy, image_tab)
         copy_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         copy_shortcut.activated.connect(copy_file)
         return image_tab
+
+    def _open_image_context_menu(
+        self, image_path: Path, widget: QWidget, position
+    ) -> None:
+        menu = QMenu(widget)
+        rename_action = menu.addAction("Rename File...")
+        move_to_trash_action = menu.addAction("Move to Recycle Bin...")
+        open_action = menu.addAction("Open File")
+        chosen = menu.exec(widget.mapToGlobal(position))
+        if chosen == rename_action:
+            self._rename_image_file(image_path)
+        elif chosen == move_to_trash_action:
+            self._move_image_file_to_trash(image_path)
+        elif chosen == open_action:
+            self._open_file(image_path)
+
+    def _rename_image_file(self, image_path: Path) -> None:
+        new_name, accepted = QInputDialog.getText(
+            self,
+            "Rename Image File",
+            "New file name:",
+            text=image_path.stem,
+        )
+        new_name = new_name.strip()
+        if not accepted or new_name == image_path.stem:
+            return
+        if (
+            not new_name
+            or new_name in {".", ".."}
+            or Path(new_name).name != new_name
+            or "/" in new_name
+            or "\\" in new_name
+        ):
+            QMessageBox.warning(
+                self,
+                "Rename Image File",
+                "Enter a valid file name without a path.",
+            )
+            return
+
+        new_path = image_path.with_name(f"{new_name}{image_path.suffix}")
+        if new_path.exists():
+            QMessageBox.warning(
+                self,
+                "Rename Image File",
+                f"A file named {new_name!r} already exists.",
+            )
+            return
+        try:
+            image_path.rename(new_path)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Rename Image File",
+                f"Failed to rename file:\n{exc}",
+            )
+            return
+        self.refresh_current_record()
+
+    def _move_image_file_to_trash(self, image_path: Path) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Move Image File to Recycle Bin",
+            f"Move this file to the Recycle Bin?\n\n{image_path}\n\n"
+            "This operation can be undone from the Recycle Bin.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            send2trash(str(image_path))
+        except Exception as exc:  # pragma: no cover - platform integration
+            QMessageBox.warning(
+                self,
+                "Move Image File to Recycle Bin",
+                f"Failed to move file to Recycle Bin:\n{exc}",
+            )
+            return
+        self.refresh_current_record()
 
     def _update_image_tabs(self, image_files: list[Path]) -> None:
         first_image_index = TAB_PLOT + 1

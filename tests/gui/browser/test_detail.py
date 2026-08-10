@@ -7,15 +7,23 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+)
 
 from logqbit import catalog as catalog_module
 from logqbit.catalog import LogCatalog, LogRecord
 from logqbit.gui.browser.detail.data import DataViewManager, PandasTableModel
+from logqbit.gui.browser.detail.files import ZoomableImageView
 from logqbit.gui.browser.detail.view import (
     TAB_PLOT,
     RecordDetailView,
     RecordDetailWindow,
+    _format_file_size,
 )
 from logqbit.logfolder import LogFolder
 
@@ -45,6 +53,13 @@ class TestRecordDetailWidgets:
         copy_button = image_tab.findChild(QPushButton)
         assert copy_button is not None
         assert copy_button.isEnabled()
+        assert copy_button.text() == "copy"
+        status_label = next(
+            label
+            for label in image_tab.findChildren(QLabel)
+            if label.text().startswith("File size:")
+        )
+        assert status_label.text() == f"File size: {image_path.stat().st_size} B"
         copy_shortcut = image_tab.findChild(QShortcut)
         assert copy_shortcut is not None
         assert copy_shortcut.key() == QKeySequence.Copy
@@ -65,6 +80,98 @@ class TestRecordDetailWidgets:
             Path(url.toLocalFile()) for url in app.clipboard().mimeData().urls()
         ] == [image_path.resolve()]
 
+    def test_image_file_size_formatting(self) -> None:
+        assert _format_file_size(0) == "0 B"
+        assert _format_file_size(1023) == "1023 B"
+        assert _format_file_size(1024) == "1.0 KiB"
+        assert _format_file_size(1024**2) == "1.0 MiB"
+
+    def test_image_tab_supports_zooming_and_panning(
+        self, sample_logfolder: Path
+    ) -> None:
+        app = _create_application()
+        record = scan_catalog(sample_logfolder)[0]
+        image_path = record.path / "zoom-test.png"
+        image = QPixmap(8, 8)
+        image.fill(QColor("blue"))
+        assert image.save(str(image_path))
+        view = RecordDetailView()
+        view.resize(600, 400)
+        view.load_record(record)
+        view.set_current_tab(TAB_PLOT + 1)
+        view.show()
+        app.processEvents()
+        image_tab = view.tab_widget.widget(TAB_PLOT + 1)
+        assert image_tab is not None
+        image_view = image_tab.findChild(ZoomableImageView)
+        assert image_view is not None
+        assert isinstance(image_view, QScrollArea)
+        width_before = image_view._image_label.width()
+
+        assert image_view._apply_zoom(1.2)
+
+        assert image_view._image_label.width() > width_before
+        QTest.mouseDClick(image_view.viewport(), Qt.LeftButton)
+        assert image_view._zoom == 1.0
+        assert image_view._image_label.width() == width_before
+        view.close()
+
+    def test_rename_image_file_refreshes_tabs(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        record = scan_catalog(sample_logfolder)[0]
+        image_path = record.path / "before.png"
+        image_path.write_bytes(b"image")
+        view = RecordDetailView()
+        view.load_record(record)
+        dialog_arguments = {}
+
+        def get_new_name(*args, **kwargs):
+            dialog_arguments.update(kwargs)
+            return "after", True
+
+        monkeypatch.setattr(
+            "logqbit.gui.browser.detail.view.QInputDialog.getText",
+            get_new_name,
+        )
+
+        view._rename_image_file(image_path)
+
+        assert not image_path.exists()
+        assert (record.path / "after.png").exists()
+        assert dialog_arguments["text"] == "before"
+        tab_names = [view.tab_widget.tabText(i) for i in range(view.tab_widget.count())]
+        assert "after.png" in tab_names
+        assert "before.png" not in tab_names
+
+    def test_move_image_file_to_trash_refreshes_tabs(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        record = scan_catalog(sample_logfolder)[0]
+        image_path = record.path / "trash.png"
+        image_path.write_bytes(b"image")
+        view = RecordDetailView()
+        view.load_record(record)
+        moved_paths: list[str] = []
+        monkeypatch.setattr(
+            "logqbit.gui.browser.detail.view.QMessageBox.question",
+            lambda *args, **kwargs: QMessageBox.Yes,
+        )
+        def move_to_trash(path: str) -> None:
+            moved_paths.append(path)
+            Path(path).unlink()
+
+        monkeypatch.setattr(
+            "logqbit.gui.browser.detail.view.send2trash", move_to_trash
+        )
+
+        view._move_image_file_to_trash(image_path)
+
+        assert moved_paths == [str(image_path)]
+        assert not image_path.exists()
+        tab_names = [view.tab_widget.tabText(i) for i in range(view.tab_widget.count())]
+        assert "trash.png" not in tab_names
+
     def test_plot_tab_copies_current_view(self, sample_logfolder: Path) -> None:
         app = _create_application()
         record = scan_catalog(sample_logfolder)[0]
@@ -72,6 +179,7 @@ class TestRecordDetailWidgets:
         view.resize(600, 400)
         view.load_record(record)
         view.set_current_tab(TAB_PLOT)
+        assert view.plot_manager.copy_plot_button.text() == "copy"
         view.show()
         app.processEvents()
         try:
