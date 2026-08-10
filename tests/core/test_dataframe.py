@@ -14,7 +14,7 @@ from logqbit.dataframe import DataFrameBuffer, _autosave_interval_for_rows
 
 def test_flush_writes_pending_rows(tmp_path: Path) -> None:
     path = tmp_path / "data.feather"
-    frame = DataFrameBuffer.open(path)
+    frame = DataFrameBuffer(path)
     frame.add_one_row({"x": 1, "y": 2.0})
 
     saved = frame.flush()
@@ -29,8 +29,8 @@ def test_flush_writes_pending_rows(tmp_path: Path) -> None:
 
 def test_autosave_writes_pending_rows(tmp_path: Path) -> None:
     path = tmp_path / "data.feather"
-    frame = DataFrameBuffer.open(path)
-    frame._state.autosave_interval = 0.01
+    frame = DataFrameBuffer(path)
+    frame._worker.autosave_interval = 0.01
     frame.add_multi_rows(pd.DataFrame({"x": [1, 2], "y": [3.0, 4.0]}))
 
     deadline = time.monotonic() + 1
@@ -58,10 +58,10 @@ def test_autosave_recovers_and_cleans_up_after_write_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     path = tmp_path / "data.feather"
-    frame = DataFrameBuffer.open(path)
-    frame._state.autosave_interval = 0.01
-    state = frame._state
-    original_replace = state._replace_tmp
+    frame = DataFrameBuffer(path)
+    frame._worker.autosave_interval = 0.01
+    worker = frame._worker
+    original_replace = worker.cache._replace_tmp
     replace_count = 0
 
     def replace_once_failed(*args, **kwargs) -> None:
@@ -72,33 +72,53 @@ def test_autosave_recovers_and_cleans_up_after_write_error(
         original_replace(*args, **kwargs)
 
     monkeypatch.setattr(dataframe_module, "_AUTOSAVE_RETRY_INTERVAL", 0.01)
-    monkeypatch.setattr(state, "_replace_tmp", replace_once_failed)
+    monkeypatch.setattr(worker.cache, "_replace_tmp", replace_once_failed)
     frame.add_one_row({"x": 1})
     deadline = time.monotonic() + 1
     while not path.exists() and time.monotonic() < deadline:
         time.sleep(0.01)
 
     assert path.exists()
-    assert state.thread.is_alive()
+    assert worker.thread.is_alive()
     assert replace_count >= 2
     assert not list(tmp_path.glob("data.*.tmp"))
     assert "temporary write failure" in caplog.text
 
 
-def test_same_path_reuses_buffer(tmp_path: Path) -> None:
+def test_same_path_creates_independent_buffers(tmp_path: Path) -> None:
     path = tmp_path / "data.feather"
 
-    first = DataFrameBuffer.open(path)
-    second = DataFrameBuffer.open(path)
+    first = DataFrameBuffer(path)
+    second = DataFrameBuffer(path)
 
-    assert second is first
-    assert second._state is first._state
+    assert second is not first
+    assert second._worker is not first._worker
+    assert second._worker.thread is not first._worker.thread
+
+
+def test_independent_buffer_overwrites_changes_after_its_initial_read(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "data.feather"
+    first = DataFrameBuffer(path)
+    second = DataFrameBuffer(path)
+    first._worker.autosave_interval = 10
+    second._worker.autosave_interval = 10
+
+    first.add_one_row({"x": 1})
+    first.flush()
+    assert second.get_df().empty
+
+    second.add_one_row({"x": 2})
+    second.flush()
+
+    pd.testing.assert_frame_equal(pd.read_feather(path), pd.DataFrame({"x": [2]}))
 
 
 def test_last_reference_flushes_and_stops_worker(tmp_path: Path) -> None:
     path = tmp_path / "data.feather"
-    frame = DataFrameBuffer.open(path)
-    state = frame._state
+    frame = DataFrameBuffer(path)
+    worker = frame._worker
     frame.add_one_row({"x": 1})
     frame_ref = weakref.ref(frame)
 
@@ -106,11 +126,11 @@ def test_last_reference_flushes_and_stops_worker(tmp_path: Path) -> None:
     gc.collect()
 
     assert frame_ref() is None
-    assert not state.thread.is_alive()
+    assert not worker.thread.is_alive()
     pd.testing.assert_frame_equal(pd.read_feather(path), pd.DataFrame({"x": [1]}))
 
-    reopened = DataFrameBuffer.open(path)
-    assert reopened._state is not state
+    reopened = DataFrameBuffer(path)
+    assert reopened._worker is not worker
 
 
 def test_failed_initialization_does_not_cache_buffer(
@@ -126,31 +146,116 @@ def test_failed_initialization_does_not_cache_buffer(
     with monkeypatch.context() as scoped:
         scoped.setattr(dataframe_module.pd, "read_feather", fail_read)
         with pytest.raises(OSError, match="invalid feather"):
-            DataFrameBuffer.open(path)
+            DataFrameBuffer(path)
 
     path.unlink()
-    assert DataFrameBuffer.open(path).path == path
+    assert DataFrameBuffer(path).path == path
 
 
-def test_failed_finalizer_state_can_be_reacquired(
+def test_inspect_and_close_selected_workers(tmp_path: Path) -> None:
+    first = DataFrameBuffer(tmp_path / "first.feather")
+    second = DataFrameBuffer(tmp_path / "second.feather")
+    first._worker.autosave_interval = 10
+    first.add_one_row({"x": 1})
+
+    infos = {info.worker_id: info for info in DataFrameBuffer.inspect_workers()}
+    first_info = infos[first._worker.worker_id]
+    assert first_info.path == first.path
+    assert first_info.thread_name == first._worker.thread.name
+    assert first_info.thread_ident == first._worker.thread.ident
+    assert first_info.thread_alive
+    assert first_info.dirty
+    assert first_info.owner_alive
+    assert not first_info.orphaned
+    assert first_info.last_error is None
+
+    failures = DataFrameBuffer.close_workers(first_info.worker_id)
+
+    assert failures == ()
+    assert not first._worker.thread.is_alive()
+    assert second._worker.thread.is_alive()
+    assert first_info.worker_id not in {
+        info.worker_id for info in DataFrameBuffer.inspect_workers()
+    }
+    with pytest.raises(RuntimeError, match="closed dataframe buffer"):
+        first.add_one_row({"x": 2})
+
+
+def test_failed_finalizer_remains_inspectable_and_can_be_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     path = tmp_path / "data.feather"
-    frame = DataFrameBuffer.open(path)
-    state = frame._state
-    original_shutdown = state.shutdown
+    frame = DataFrameBuffer(path)
+    worker = frame._worker
+    worker_id = worker.worker_id
+    original_close = worker.close
 
-    def fail_shutdown() -> None:
+    def fail_close() -> None:
         raise OSError("temporary shutdown failure")
 
-    monkeypatch.setattr(state, "shutdown", fail_shutdown)
+    monkeypatch.setattr(worker, "close", fail_close)
     del frame
     gc.collect()
 
     assert "temporary shutdown failure" in caplog.text
-    reopened = DataFrameBuffer.open(path)
-    assert reopened._state is state
+    info = next(
+        info
+        for info in DataFrameBuffer.inspect_workers()
+        if info.worker_id == worker_id
+    )
+    assert info.orphaned
+    assert info.thread_alive
+    assert info.last_error == "OSError: temporary shutdown failure"
 
-    monkeypatch.setattr(state, "shutdown", original_shutdown)
+    monkeypatch.setattr(worker, "close", original_close)
+    assert DataFrameBuffer.close_workers(worker_id) == ()
+    assert not worker.thread.is_alive()
+
+
+def test_close_workers_continues_after_one_worker_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = DataFrameBuffer(tmp_path / "first.feather")
+    second = DataFrameBuffer(tmp_path / "second.feather")
+    first_worker = first._worker
+    second_worker = second._worker
+    original_close = first_worker.close
+
+    def fail_close() -> None:
+        raise OSError("cannot close first worker")
+
+    monkeypatch.setattr(first_worker, "close", fail_close)
+    failures = DataFrameBuffer.close_workers(
+        [first_worker.worker_id, second_worker.worker_id]
+    )
+
+    assert [info.worker_id for info in failures] == [first_worker.worker_id]
+    assert failures[0].last_error == "OSError: cannot close first worker"
+    assert first_worker.thread.is_alive()
+    assert not second_worker.thread.is_alive()
+
+    monkeypatch.setattr(first_worker, "close", original_close)
+    assert DataFrameBuffer.close_workers(first_worker.worker_id) == ()
+
+
+def test_close_flushes_and_invalidates_buffer(tmp_path: Path) -> None:
+    path = tmp_path / "data.feather"
+    frame = DataFrameBuffer(path)
+    worker_id = frame._worker.worker_id
+    frame.add_one_row({"x": 1})
+
+    frame.close()
+
+    assert not frame._worker.thread.is_alive()
+    assert not frame._finalizer.alive
+    assert worker_id not in {
+        info.worker_id for info in DataFrameBuffer.inspect_workers()
+    }
+    pd.testing.assert_frame_equal(pd.read_feather(path), pd.DataFrame({"x": [1]}))
+    with pytest.raises(RuntimeError, match="closed dataframe buffer"):
+        frame.get_df()
+
+    frame.close()

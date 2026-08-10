@@ -100,17 +100,20 @@ log.flush()
 没有追加过数据的记录不会创建空的 `data.feather`，但已经同步写入的
 `metadata.json` 和 `const.yaml` 仍会保留。
 
-同一进程内，指向同一目录的 `LogFolder` 实例会共享一个 dataframe buffer，因此可以从
-任一实例追加、读取或 flush 数据：
+每个 `LogFolder` 实例都有独立的 dataframe buffer、内存快照和 autosave 线程。buffer
+创建时只读取一次已有的 `data.feather`；创建后只写入而不会重新读取。因此，不要同时用
+多个实例或进程写入同一路径：任何其他 writer 造成的修改，都可能在该 buffer 下次写入
+完整内存快照时被覆盖。
 
 ```python
 first = LogFolder("./runs/0", create=False)
 second = LogFolder("./runs/0", create=False)
 first.add_row(time=2.0, temperature=291.4)
-second.flush()
+second.add_row(time=3.0, temperature=291.8)
 ```
 
-这只协调当前 Python 进程内的访问；仍不支持多个进程同时写入同一目录。
+上例中的两个实例互相看不到对方创建后的追加；两者都写盘时，最后一次写入会覆盖前一次
+写入的完整 dataframe。
 
 如果只需要读取已经写好的数据文件，最简单的方式是直接用 pandas：
 
@@ -122,10 +125,27 @@ df = pd.read_feather("./runs/0/data.feather")
 
 这适合做只读分析、导出脚本或不需要创建 `LogFolder` 对象的场景。
 
-最后一个共享 buffer 的 Python 引用消失时，LogQbit 会自动 flush 并停止对应的 autosave
-线程；普通脚本自然退出时也会执行这项清理。`with LogFolder(...)` 会在退出代码块时 flush，
+最后一个 buffer 的 Python 强引用消失时，LogQbit 会自动 flush 并停止对应的 autosave
+线程；普通脚本自然退出时也会执行这项清理。IPython/Jupyter 的输出历史、异常 traceback
+或回调可能继续持有对象，使自动清理延后。`with LogFolder(...)` 会在退出代码块时 flush，
 但不会让该对象失效，之后仍可继续使用。如果需要立即确认数据已经写入，应主动调用
 `flush()`。进程崩溃或被强制终止时不能依赖自动清理，因此重要阶段仍应主动 flush。
+
+长期运行的交互式环境可以检查和关闭 autosave worker：
+
+```python
+workers = LogFolder.inspect_workers()
+for worker in workers:
+    print(worker.worker_id, worker.path, worker.owner_alive, worker.last_error)
+
+# 按 worker ID 关闭，或不传参数关闭当前进程内的全部 worker。
+failed = LogFolder.close_workers([workers[0].worker_id])
+```
+
+诊断快照还包含线程名称、线程 ID、存活状态和 dirty 状态。`owner_alive=False` 表示
+`DataFrameBuffer` 包装对象已经被回收，但 finalizer 未能成功停止该 worker。人工关闭仍有
+owner 的 worker 会使对应实例失效，之后继续使用会抛出 `RuntimeError`。关闭方法会尝试
+所有选中的 worker，并返回未能成功关闭的最新状态。
 
 ### 常量
 
@@ -259,16 +279,20 @@ import pandas as pd
 
 from logqbit.dataframe import DataFrameBuffer
 
-buffer = DataFrameBuffer.open("data.feather")
+buffer = DataFrameBuffer("data.feather")
 buffer.add_one_row({"x": 1.0, "y": 2.0})
 buffer.add_multi_rows(pd.DataFrame({"x": [2.0, 3.0], "y": [4.0, 6.0]}))
 buffer.flush()
 ```
 
+通常不需要主动关闭：最后一个强引用消失后，buffer 会自动 flush 并停止线程。如果需要
+确定性地释放这个低层对象，也可以调用 `buffer.close()`；关闭后的 buffer 不能继续使用。
+
 后台线程的状态机很小：等待数据变 dirty，等待当前 autosave interval 合并连续追加，
 如果仍然 dirty 就写盘。临时写入失败时会保留 dirty 状态并重试；`flush()` 会跳过等待，
-在调用线程同步写入并直接报告错误。同一进程中，对相同路径调用 `open()` 会复用现有
-buffer；最后一个引用消失时，它会自动 flush 并停止后台线程。
+在调用线程同步写入并直接报告错误。每次构造都会创建独立 buffer 和线程；
+最后一个强引用消失时，它会自动 flush 并停止后台线程。指向同一路径的多个 buffer 不会
+重新读取或合并彼此的数据，最后写入者会覆盖文件。
 
 ## API Reference
 

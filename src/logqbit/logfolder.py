@@ -1,7 +1,7 @@
 import inspect
 import itertools
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from functools import cached_property
 from pathlib import Path
 
@@ -11,7 +11,7 @@ from tqdm.auto import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 from typing_extensions import deprecated
 
-from .dataframe import DataFrameBuffer
+from .dataframe import BufferWorkerInfo, DataFrameBuffer
 from .metadata import LogMetadata
 from .registry import Registry
 
@@ -24,8 +24,6 @@ class LogFolder:
     - ``data.feather`` for tabular records
     - ``metadata.json`` for lightweight metadata
     - ``const.yaml`` for constant parameters and configuration
-
-    Instances for the same directory share one process-local dataframe buffer.
     """
 
     def __init__(
@@ -44,7 +42,7 @@ class LogFolder:
 
         self.path = path
         self.meta = LogMetadata(path / "metadata.json", title, create=True)
-        self._handler = DataFrameBuffer.open(path / "data.feather")
+        self._handler = DataFrameBuffer(path / "data.feather")
 
     def __enter__(self) -> "LogFolder":
         return self
@@ -179,3 +177,15 @@ class LogFolder:
     def flush(self) -> None:
         """Flush pending data immediately, blocking until done."""
         self._handler.flush()
+
+    @staticmethod
+    def inspect_workers() -> tuple[BufferWorkerInfo, ...]:
+        """Return diagnostic snapshots of dataframe autosave workers."""
+        return DataFrameBuffer.inspect_workers()
+
+    @staticmethod
+    def close_workers(
+        worker_ids: Iterable[str] | str | None = None,
+    ) -> tuple[BufferWorkerInfo, ...]:
+        """Close selected dataframe workers, or all when IDs are omitted."""
+        return DataFrameBuffer.close_workers(worker_ids)

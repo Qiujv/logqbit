@@ -142,34 +142,41 @@ def test_logfolder_rejects_empty_row_and_ignores_empty_dataframe(
     assert not path.exists()
 
 
-def test_logfolders_for_same_path_share_dataframe_buffer(tmp_path: Path) -> None:
+def test_logfolders_for_same_path_have_independent_buffers(tmp_path: Path) -> None:
     first = LogFolder.new(tmp_path)
     path = first.path
     second = LogFolder(path, create=False)
+    first._handler._worker.autosave_interval = 10
+    second._handler._worker.autosave_interval = 10
 
-    assert second._handler is first._handler
+    assert second._handler is not first._handler
     first.add_row(x=1)
     second.add_row(x=2)
+    pd.testing.assert_frame_equal(first.df, pd.DataFrame({"x": [1]}))
+    pd.testing.assert_frame_equal(second.df, pd.DataFrame({"x": [2]}))
+
+    first.flush()
     second.flush()
 
     pd.testing.assert_frame_equal(
         pd.read_feather(path / "data.feather"),
-        pd.DataFrame({"x": [1, 2]}),
+        pd.DataFrame({"x": [2]}),
     )
-    pd.testing.assert_frame_equal(first.df, second.df)
 
 
-def test_collecting_one_logfolder_keeps_shared_buffer_alive(tmp_path: Path) -> None:
+def test_collecting_one_logfolder_only_stops_its_worker(tmp_path: Path) -> None:
     first = LogFolder.new(tmp_path)
     second = LogFolder(first.path, create=False)
-    state = first._handler._state
+    first_worker = first._handler._worker
+    second_worker = second._handler._worker
     first_ref = weakref.ref(first)
 
     del first
     gc.collect()
 
     assert first_ref() is None
-    assert state.thread.is_alive()
+    assert not first_worker.thread.is_alive()
+    assert second_worker.thread.is_alive()
     second.add_row(x=1)
     second.flush()
     pd.testing.assert_frame_equal(
@@ -199,21 +206,35 @@ def test_finalize_flushes_when_logfolder_is_collected(tmp_path: Path) -> None:
     lf.add_row(x=1)
     ref = weakref.ref(lf)
     buffer_ref = weakref.ref(lf._handler)
-    state = lf._handler._state
+    worker = lf._handler._worker
 
     del lf
     gc.collect()
 
     assert ref() is None
     assert buffer_ref() is None
-    assert not state.thread.is_alive()
+    assert not worker.thread.is_alive()
     saved_df = pd.read_feather(path)
     pd.testing.assert_frame_equal(
         saved_df.reset_index(drop=True), pd.DataFrame([{"x": 1}])
     )
 
     reopened = LogFolder(path.parent, create=False)
-    assert reopened._handler._state is not state
+    assert reopened._handler._worker is not worker
+
+
+def test_logfolder_exposes_worker_diagnostics_and_cleanup(tmp_path: Path) -> None:
+    lf = LogFolder.new(tmp_path)
+    worker_id = lf._handler._worker.worker_id
+
+    info = next(
+        info for info in LogFolder.inspect_workers() if info.worker_id == worker_id
+    )
+    assert info.path == lf.df_path
+    assert info.owner_alive
+
+    assert LogFolder.close_workers(worker_id) == ()
+    assert worker_id not in {info.worker_id for info in LogFolder.inspect_workers()}
 
 
 def test_normal_process_exit_flushes_pending_rows(tmp_path: Path) -> None:
