@@ -234,6 +234,7 @@ class RecordDetailView(QWidget):
         detail_top.addWidget(self.detail_id_label)
         self.detail_label = QLabel("No log selected.")
         self.detail_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.detail_label.setContextMenuPolicy(Qt.NoContextMenu)
         self.detail_label.setWordWrap(True)
         self.detail_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         detail_top.addWidget(self.detail_label)

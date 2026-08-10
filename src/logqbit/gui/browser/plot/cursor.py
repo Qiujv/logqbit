@@ -8,7 +8,7 @@ from typing import Literal
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtWidgets import QLabel, QPushButton
+from PySide6.QtWidgets import QAbstractButton, QLabel
 
 from logqbit.gui.browser.plot.mesh import PlotMeshData
 
@@ -31,7 +31,7 @@ class CursorController:
         horizontal_section_widget: pg.PlotWidget,
         vertical_section_widget: pg.PlotWidget,
         section_readout: QLabel,
-        button: QPushButton,
+        button: QAbstractButton,
         visibility_changed: Callable[[bool], None],
         activated: Callable[[], None],
     ) -> None:

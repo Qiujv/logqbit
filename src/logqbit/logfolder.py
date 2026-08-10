@@ -142,7 +142,7 @@ class LogFolder:
         step_table = list(itertools.product(*run_axs.values()))
 
         with logging_redirect_tqdm():
-            for step in tqdm(step_table, ncols=80, desc=self.path.name):
+            for step in tqdm(step_table, desc=self.path.name):
                 step_kws = dict(zip(run_axs.keys(), step))
                 ret_kws = func(**step_kws, **const_axs)
                 self.add_row(**step_kws, **ret_kws)

@@ -10,7 +10,7 @@ import pyqtgraph as pg
 from scipy.optimize import curve_fit
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QGraphicsRectItem, QLabel, QPushButton
+from PySide6.QtWidgets import QAbstractButton, QGraphicsRectItem, QLabel
 
 FitKind = Literal["exponential", "quadratic"]
 
@@ -171,8 +171,8 @@ class FitController:
         plot_widget: pg.PlotWidget,
         view_box: FitViewBox,
         status_label: QLabel,
-        exponential_button: QPushButton,
-        quadratic_button: QPushButton,
+        exponential_button: QAbstractButton,
+        quadratic_button: QAbstractButton,
     ) -> None:
         self._plot_widget = plot_widget
         self._view_box = view_box

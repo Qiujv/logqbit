@@ -7,7 +7,7 @@ import pytest
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QColor, QKeySequence, QPalette
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
+from PySide6.QtWidgets import QApplication, QMessageBox, QStyle, QStyleOptionViewItem
 
 from logqbit import catalog as catalog_module
 from logqbit.catalog import LogCatalog, LogRecord
@@ -96,7 +96,7 @@ class TestBrowserWindow:
         assert calls == [("logs", None), ("detail", True)]
         window.close()
 
-    def test_directory_menu_can_clear_recent_folders(
+    def test_directory_menu_can_clear_missing_recent_folders(
         self,
         sample_logfolder: Path,
         tmp_path: Path,
@@ -107,27 +107,62 @@ class TestBrowserWindow:
             QSettings.IniFormat,
         )
         window.settings_manager.save_recent_directories(
-            [sample_logfolder, tmp_path / "other"]
+            [sample_logfolder, tmp_path / "other", tmp_path / "missing"]
         )
+        (tmp_path / "other").mkdir()
         window._rebuild_directory_menu()
 
         clear_action = next(
             action
             for action in window._directory_menu.actions()
-            if action.text() == "Clear Recent Folders"
+            if action.text() == "Cleanup"
         )
         assert clear_action.isEnabled()
 
         clear_action.trigger()
 
-        assert window.settings_manager.load_recent_directories() == [sample_logfolder]
-        rebuilt_clear_action = next(
-            action
-            for action in window._directory_menu.actions()
-            if action.text() == "Clear Recent Folders"
-        )
-        assert not rebuilt_clear_action.isEnabled()
+        assert window.settings_manager.load_recent_directories() == [
+            sample_logfolder,
+            tmp_path / "other",
+        ]
         window.close()
+
+    def test_open_other_folder_starts_from_current_parent(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        try:
+            requested_paths: list[str] = []
+            monkeypatch.setattr(
+                "logqbit.gui.browser.window.view.QFileDialog.getExistingDirectory",
+                lambda _parent, _title, path: requested_paths.append(path) or "",
+            )
+
+            window._open_directory_dialog()
+
+            assert requested_paths == [str(sample_logfolder.parent)]
+        finally:
+            window.close()
+
+    def test_top_bar_only_offers_custom_about_menu(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        shown: list[tuple[object, str, str]] = []
+        monkeypatch.setattr(
+            QMessageBox,
+            "about",
+            lambda parent, title, text: shown.append((parent, title, text)),
+        )
+        try:
+            assert window.directory_label.contextMenuPolicy() == Qt.CustomContextMenu
+
+            window._actions.show_about_dialog()
+
+            assert shown and shown[0][0] is window
+            assert shown[0][1] == "About LogQbit"
+        finally:
+            window.close()
 
     def test_browser_can_show_starred_records_only(
         self,

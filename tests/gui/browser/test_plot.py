@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QKeySequence
-from PySide6.QtWidgets import QSizePolicy
+from PySide6.QtWidgets import QSizePolicy, QToolButton
 
 from logqbit.catalog import PlotColumns, resolve_plot_columns
 from logqbit.gui.browser.plot.fitting import fit_exponential, fit_quadratic
@@ -140,16 +140,6 @@ class TestPlotManagerFitAndColorBar:
         )
 
         manager._refresh_plot_1d("x", ["a"])
-        assert manager.exponential_fit_button.text() == "fit exp"
-        assert manager.quadratic_fit_button.text() == "fit x²"
-        for button in (
-            manager.exponential_fit_button,
-            manager.quadratic_fit_button,
-            manager.cursor_button,
-            manager.copy_plot_button,
-        ):
-            expected_width = button.fontMetrics().horizontalAdvance(button.text()) + 12
-            assert button.width() == expected_width
         assert not manager.exponential_fit_button.isHidden()
         assert manager.exponential_fit_button.isEnabled()
         assert manager.quadratic_fit_button.isEnabled()
@@ -162,6 +152,19 @@ class TestPlotManagerFitAndColorBar:
         assert manager.exponential_fit_button.isEnabled()
         assert manager.quadratic_fit_button.isEnabled()
         assert manager.fit_controller._field == "a"
+        manager.widget.deleteLater()
+
+    def test_plot_actions_use_compact_tool_buttons(self) -> None:
+        manager = PlotManager()
+
+        for button in (
+            manager.exponential_fit_button,
+            manager.quadratic_fit_button,
+            manager.cursor_button,
+            manager.copy_plot_button,
+        ):
+            assert isinstance(button, QToolButton)
+
         manager.widget.deleteLater()
 
     def test_points_context_menu_is_hidden(self) -> None:
@@ -208,6 +211,19 @@ class TestPlotManagerFitAndColorBar:
         assert manager.copy_plot_shortcut.key() == QKeySequence.Copy
         assert manager.copy_plot_shortcut.context() == Qt.WidgetWithChildrenShortcut
         assert manager.copy_plot_shortcut.parent() is manager.plot_widget
+        manager.widget.deleteLater()
+
+    def test_f_shortcut_zooms_to_fit_all_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        manager = PlotManager()
+        plot_item = manager.plot_widget.getPlotItem()
+        calls: list[None] = []
+        monkeypatch.setattr(plot_item, "autoRange", lambda: calls.append(None))
+
+        manager.zoom_fit_shortcut.activated.emit()
+
+        assert manager.zoom_fit_shortcut.key() == QKeySequence(Qt.Key_F)
+        assert manager.zoom_fit_shortcut.context() == Qt.WidgetWithChildrenShortcut
+        assert calls == [None]
         manager.widget.deleteLater()
 
     def test_1d_cursor_and_fit_modes_are_mutually_exclusive(self) -> None:

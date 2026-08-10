@@ -23,8 +23,8 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
-    QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -234,6 +234,7 @@ class PlotManager:
 
         # Status row
         status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
         self.plot_status_label = QLabel("No data to plot.")
         self.plot_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.plot_status_label.setSizePolicy(
@@ -241,28 +242,31 @@ class PlotManager:
             QSizePolicy.Preferred,
         )
         status_row.addWidget(self.plot_status_label, stretch=1)
-        self.cursor_button = QPushButton("cursor")
+        self.cursor_button = QToolButton()
+        self.cursor_button.setText("cursor")
         self.cursor_button.setCheckable(True)
-        self._make_button_compact(self.cursor_button)
         status_row.addWidget(self.cursor_button)
-        self.exponential_fit_button = QPushButton("fit exp")
+        self.exponential_fit_button = QToolButton()
+        self.exponential_fit_button.setText("fit exp")
         self.exponential_fit_button.setCheckable(True)
-        self._make_button_compact(self.exponential_fit_button)
         status_row.addWidget(self.exponential_fit_button)
-        self.quadratic_fit_button = QPushButton("fit x²")
+        self.quadratic_fit_button = QToolButton()
+        self.quadratic_fit_button.setText("fit x²")
         self.quadratic_fit_button.setCheckable(True)
-        self._make_button_compact(self.quadratic_fit_button)
         status_row.addWidget(self.quadratic_fit_button)
-        self.copy_plot_button = QPushButton("copy plot")
+        self.copy_plot_button = QToolButton()
+        self.copy_plot_button.setText("copy plot")
         self.copy_plot_button.setToolTip(
             "copy the current plot view to the clipboard (Ctrl+C)"
         )
         self.copy_plot_button.clicked.connect(self.copy_plot_to_clipboard)
-        self._make_button_compact(self.copy_plot_button)
         status_row.addWidget(self.copy_plot_button)
         self.copy_plot_shortcut = QShortcut(QKeySequence.Copy, self.plot_widget)
         self.copy_plot_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.copy_plot_shortcut.activated.connect(self.copy_plot_to_clipboard)
+        self.zoom_fit_shortcut = QShortcut(QKeySequence(Qt.Key_F), self.plot_widget)
+        self.zoom_fit_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.zoom_fit_shortcut.activated.connect(self.zoom_fit_all)
         layout.addLayout(status_row)
 
         self.fit_controller = FitController(
@@ -301,6 +305,12 @@ class PlotManager:
         self.log_y_action.toggled.connect(plot_item.ctrl.logYCheck.setChecked)
         plot_item.ctrl.logYCheck.toggled.connect(self.log_y_action.setChecked)
 
+    def zoom_fit_all(self) -> None:
+        """Resize the plot view to include all plotted data."""
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is not None:
+            plot_item.autoRange()
+
     def _cursor_activated(self) -> None:
         self.fit_controller.cancel_selection()
 
@@ -322,11 +332,6 @@ class PlotManager:
         self.plot_layout.setColumnStretch(1, 1 if active else 0)
         self.plot_layout.setRowStretch(0, 5 if active else 1)
         self.plot_layout.setRowStretch(1, 1 if active else 0)
-
-    @staticmethod
-    def _make_button_compact(button: QPushButton) -> None:
-        text_width = button.fontMetrics().horizontalAdvance(button.text())
-        button.setFixedWidth(text_width + 12)
 
     @contextmanager
     def _plot_with_record_title(self) -> Iterator[pg.PlotItem | None]:

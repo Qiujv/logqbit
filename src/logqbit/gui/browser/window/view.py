@@ -28,12 +28,12 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QItemDelegate,
     QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
-    QInputDialog,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -47,7 +47,6 @@ from PySide6.QtWidgets import (
 from send2trash import send2trash
 
 from logqbit.catalog import LogCatalog, LogRecord, export_records
-
 from logqbit.gui.browser.detail.files import open_in_file_manager
 from logqbit.gui.browser.detail.view import RecordDetailView, RecordDetailWindow
 from logqbit.gui.browser.plot.mesh import warmup_plotter_jit
@@ -198,6 +197,10 @@ class LogBrowserWindow(QMainWindow):
         top_bar = QHBoxLayout()
         self.directory_label = QLabel(str(self._base_dir))
         self.directory_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.directory_label.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.directory_label.customContextMenuRequested.connect(
+            self._actions.show_top_bar_context_menu
+        )
         self.directory_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.directory_button = QToolButton()
         self.directory_button.setText("Change dir...")
@@ -322,11 +325,12 @@ class LogBrowserWindow(QMainWindow):
             action.triggered.connect(
                 lambda _checked=False, target=path: self.set_directory(target)
             )
+        clear_action = self._directory_menu.addAction("Cleanup")
         if menu_items:
             self._directory_menu.addSeparator()
-        open_action = self._directory_menu.addAction("Open Other Folder...")
+
+        open_action = self._directory_menu.addAction("Open Other...")
         open_action.triggered.connect(self._open_directory_dialog)
-        clear_action = self._directory_menu.addAction("Clear Recent Folders")
         clear_action.setEnabled(bool(menu_items))
         clear_action.triggered.connect(self._clear_recent_directories)
         new_window_action = self._directory_menu.addAction("New Window")
@@ -335,7 +339,10 @@ class LogBrowserWindow(QMainWindow):
         )
 
     def _clear_recent_directories(self) -> None:
-        self.settings_manager.clear_recent_directories(keep=self._base_dir)
+        existing_directories = [
+            path for path in self.settings_manager._recent_directories if path.exists()
+        ]
+        self.settings_manager.save_recent_directories(existing_directories)
         self._rebuild_directory_menu()
 
     def _update_theme_button(self) -> None:
@@ -490,7 +497,7 @@ class LogBrowserWindow(QMainWindow):
         self._update_theme_button()
 
     def _open_directory_dialog(self) -> None:
-        current = str(self._base_dir)
+        current = str(self._base_dir.parent)
         chosen = QFileDialog.getExistingDirectory(self, "Select log directory", current)
         if chosen:
             self.set_directory(Path(chosen))
@@ -521,6 +528,20 @@ class _BrowserActions:
 
     def __init__(self, window: LogBrowserWindow) -> None:
         self.window = window
+
+    def show_top_bar_context_menu(self, position) -> None:
+        menu = QMenu(self.window.directory_label)
+        menu.addAction("About", self.show_about_dialog)
+        menu.exec(self.window.directory_label.mapToGlobal(position))
+
+    def show_about_dialog(self) -> None:
+        from logqbit.gui.browser.about import about_message
+
+        QMessageBox.about(
+            self.window,
+            "About LogQbit",
+            about_message(),
+        )
 
     def get_selected_records(self) -> list[LogRecord]:
         selection_model = self.window.log_table.selectionModel()
