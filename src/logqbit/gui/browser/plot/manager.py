@@ -37,6 +37,10 @@ from logqbit.gui.browser.plot.cursor import CursorController, CursorSeries
 from logqbit.gui.browser.plot.fitting import FitController, FitViewBox
 from logqbit.gui.browser.plot.mesh import build_plot_mesh
 
+PLOT_EXPORT_SCALE = 2
+PLOT_AUTO_RANGE_PADDING = 0.02
+COLOR_BAR_HEIGHT_FACTOR = 0.9
+
 
 class TagBar(QWidget):
     """Assign columns to axes, fields, and ignored sections by dragging."""
@@ -168,6 +172,7 @@ class PlotManager:
         self._color_bar: pg.ColorBarItem | None = None
         self._mesh_item: pg.PColorMeshItem | None = None
         self._mesh_levels: tuple[float, float] | None = None
+        self._mesh_z_column: str | None = None
         self.widget = self._create_widget(parent)
 
     def _create_widget(self, parent: QWidget | None = None) -> QWidget:
@@ -309,7 +314,7 @@ class PlotManager:
         """Resize the plot view to include all plotted data."""
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
-            plot_item.autoRange()
+            plot_item.autoRange(padding=PLOT_AUTO_RANGE_PADDING)
 
     def _cursor_activated(self) -> None:
         self.fit_controller.cancel_selection()
@@ -320,12 +325,18 @@ class PlotManager:
 
     def _cursor_visibility_changed(self, active: bool) -> None:
         self._set_section_layout_active(active and self._mesh_item is not None)
-        if self._mesh_item is None or self._mesh_levels is None:
+        if (
+            self._mesh_item is None
+            or self._mesh_levels is None
+            or self._mesh_z_column is None
+        ):
             return
         if active:
             self._hide_color_bar()
         else:
-            self._show_color_bar(self._mesh_item, self._mesh_levels)
+            self._show_color_bar(
+                self._mesh_item, self._mesh_levels, self._mesh_z_column
+            )
 
     def _set_section_layout_active(self, active: bool) -> None:
         self.plot_layout.setColumnStretch(0, 5 if active else 1)
@@ -365,12 +376,20 @@ class PlotManager:
         with self._plot_with_record_title() as plot_item:
             if plot_item is None:
                 return None
-            return ImageExporter(plot_item).export(toBytes=True)
+            return self._create_image_exporter(plot_item).export(toBytes=True)
 
     def copy_plot_to_clipboard(self) -> None:
         with self._plot_with_record_title() as plot_item:
             if plot_item is not None:
-                ImageExporter(plot_item).export(copy=True)
+                self._create_image_exporter(plot_item).export(copy=True)
+
+    def _create_image_exporter(self, plot_item) -> ImageExporter:
+        exporter = ImageExporter(plot_item)
+        parameters = exporter.parameters()
+        parameters["width"] *= PLOT_EXPORT_SCALE
+        if self._mesh_item is not None:
+            parameters["antialias"] = False
+        return exporter
 
     def save_plot(self) -> None:
         record = self._plot_record
@@ -479,6 +498,7 @@ class PlotManager:
     ) -> None:
         self._mesh_item = None
         self._mesh_levels = None
+        self._mesh_z_column = None
         self.cursor_controller.clear()
         self.fit_controller.disable("Fit is available for a single 1D field.")
         if hide_fit_buttons:
@@ -492,16 +512,18 @@ class PlotManager:
         if self._color_bar is None:
             return
         plot_item = self.plot_widget.getPlotItem()
-        if plot_item is not None:
+        if plot_item is not None and self._color_bar is not None:
             plot_item.layout.removeItem(self._color_bar)
-        self._color_bar.setParentItem(None)
-        self._color_bar.deleteLater()
-        self._color_bar = None
+        if self._color_bar is not None:
+            self._color_bar.setParentItem(None)
+            self._color_bar.deleteLater()
+            self._color_bar = None
 
     def _show_color_bar(
         self,
         mesh: pg.PColorMeshItem,
         levels: tuple[float, float],
+        z_column: str,
     ) -> None:
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is None:
@@ -515,6 +537,7 @@ class PlotManager:
                 interactive=False,
                 colorMapMenu=False,
                 pen="k",
+                label=z_column,
             )
             self._color_bar.axis.setPen("k")
             self._color_bar.axis.setTextPen("k")
@@ -525,6 +548,16 @@ class PlotManager:
         else:
             self._color_bar.setLevels(levels)
             self._color_bar.setImageItem(mesh)
+            self._color_bar.getAxis("left").setLabel(z_column)
+        self._resize_color_bar(plot_item)
+
+    def _resize_color_bar(self, plot_item: pg.PlotItem) -> None:
+        if self._color_bar is None or plot_item.vb.height() <= 0:
+            return
+        self._color_bar.setMaximumHeight(
+            round(plot_item.vb.height() * COLOR_BAR_HEIGHT_FACTOR)
+        )
+        plot_item.layout.setAlignment(self._color_bar, Qt.AlignVCenter)
 
     def _refresh_plot_1d(self, x_col: str, y_cols: list[str]) -> None:
         record = self._plot_record
@@ -606,7 +639,7 @@ class PlotManager:
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.enableAutoRange(enable=True)
-            plot_item.autoRange()
+            plot_item.autoRange(padding=PLOT_AUTO_RANGE_PADDING)
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", ", ".join(y_cols))
         self.plot_status_label.setText(f"1D plot: {x_col} vs {', '.join(y_cols[:3])}")
@@ -650,6 +683,7 @@ class PlotManager:
 
         self._mesh_item = None
         self._mesh_levels = None
+        self._mesh_z_column = None
         self.cursor_controller.clear()
         self.fit_controller.disable("Fit is only available for 1D plots.")
         self.plot_widget.clear()
@@ -663,14 +697,15 @@ class PlotManager:
         self.plot_widget.addItem(pcm)
         self._mesh_item = pcm
         self._mesh_levels = mesh_data.levels
-        self._show_color_bar(pcm, mesh_data.levels)
+        self._mesh_z_column = z_col
+        self._show_color_bar(pcm, mesh_data.levels, z_col)
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", y_col)
 
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.enableAutoRange(enable=True)
-            plot_item.autoRange()
+            plot_item.autoRange(padding=PLOT_AUTO_RANGE_PADDING)
 
         self.plot_status_label.setText(
             f"2D plot: {mesh_data.point_count} points → "

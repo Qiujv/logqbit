@@ -21,6 +21,8 @@ from logqbit.gui.browser.plot.mesh import (
     warmup_plotter_jit,
 )
 from logqbit.gui.browser.plot.manager import (
+    COLOR_BAR_HEIGHT_FACTOR,
+    PLOT_AUTO_RANGE_PADDING,
     PlotManager,
     TagBar,
 )
@@ -216,14 +218,16 @@ class TestPlotManagerFitAndColorBar:
     def test_f_shortcut_zooms_to_fit_all_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
         manager = PlotManager()
         plot_item = manager.plot_widget.getPlotItem()
-        calls: list[None] = []
-        monkeypatch.setattr(plot_item, "autoRange", lambda: calls.append(None))
+        calls: list[float] = []
+        monkeypatch.setattr(
+            plot_item, "autoRange", lambda *, padding: calls.append(padding)
+        )
 
         manager.zoom_fit_shortcut.activated.emit()
 
         assert manager.zoom_fit_shortcut.key() == QKeySequence(Qt.Key_F)
         assert manager.zoom_fit_shortcut.context() == Qt.WidgetWithChildrenShortcut
-        assert calls == [None]
+        assert calls == [PLOT_AUTO_RANGE_PADDING]
         manager.widget.deleteLater()
 
     def test_1d_cursor_and_fit_modes_are_mutually_exclusive(self) -> None:
@@ -257,11 +261,16 @@ class TestPlotManagerFitAndColorBar:
         class FakeExporter:
             def __init__(self, plot_item) -> None:
                 self.plot_item = plot_item
+                self._parameters = {"width": 400}
+
+            def parameters(self):
+                return self._parameters
 
             def export(self, *, copy: bool) -> None:
                 observed["copy"] = copy
                 observed["title"] = self.plot_item.titleLabel.text
                 observed["visible"] = self.plot_item.titleLabel.isVisible()
+                observed["width"] = self._parameters["width"]
 
         monkeypatch.setattr(
             "logqbit.gui.browser.plot.manager.ImageExporter", FakeExporter
@@ -273,6 +282,7 @@ class TestPlotManagerFitAndColorBar:
             "copy": True,
             "title": str(record_path),
             "visible": True,
+            "width": 800,
         }
         assert not manager.plot_widget.getPlotItem().titleLabel.isVisible()
         manager.widget.deleteLater()
@@ -289,10 +299,15 @@ class TestPlotManagerFitAndColorBar:
         class FakeExporter:
             def __init__(self, plot_item) -> None:
                 self.plot_item = plot_item
+                self._parameters = {"width": 400}
+
+            def parameters(self):
+                return self._parameters
 
             def export(self, *, toBytes: bool):
                 observed["to_bytes"] = toBytes
                 observed["title"] = self.plot_item.titleLabel.text
+                observed["width"] = self._parameters["width"]
 
                 class FakeImage:
                     def save(self, path: str, image_format: str) -> bool:
@@ -311,6 +326,7 @@ class TestPlotManagerFitAndColorBar:
         assert observed == {
             "to_bytes": True,
             "title": str(tmp_path),
+            "width": 800,
             "path": str(tmp_path / "plot.png"),
             "format": "PNG",
         }
@@ -318,6 +334,30 @@ class TestPlotManagerFitAndColorBar:
             manager.plot_status_label.text() == f"Saved plot to {tmp_path / 'plot.png'}"
         )
         assert not manager.plot_widget.getPlotItem().titleLabel.isVisible()
+        manager.widget.deleteLater()
+
+    def test_2d_export_disables_antialiasing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manager = PlotManager()
+        manager._mesh_item = object()
+        observed: dict[str, object] = {}
+
+        class FakeExporter:
+            def __init__(self, plot_item) -> None:
+                self._parameters = {"width": 400, "antialias": True}
+
+            def parameters(self):
+                return self._parameters
+
+        monkeypatch.setattr(
+            "logqbit.gui.browser.plot.manager.ImageExporter", FakeExporter
+        )
+
+        exporter = manager._create_image_exporter(manager.plot_widget.getPlotItem())
+        observed.update(exporter.parameters())
+
+        assert observed == {"width": 800, "antialias": False}
         manager.widget.deleteLater()
 
     def test_save_plot_does_not_overwrite_existing_image(
@@ -357,7 +397,11 @@ class TestPlotManagerFitAndColorBar:
         manager._refresh_plot_2d("x", "y", "z")
         color_bar = manager._color_bar
         assert color_bar is not None
-        assert color_bar.getAxis("left").labelText == ""
+        assert color_bar.getAxis("left").labelText == "z"
+        assert color_bar.axis.labelText == ""
+        assert color_bar.maximumHeight() == round(
+            manager.plot_widget.getPlotItem().vb.height() * COLOR_BAR_HEIGHT_FACTOR
+        )
         assert manager.exponential_fit_button.isHidden()
         assert manager.quadratic_fit_button.isHidden()
 
