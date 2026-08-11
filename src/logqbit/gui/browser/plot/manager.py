@@ -195,6 +195,7 @@ class PlotManager:
         self.plot_widget.useOpenGL(True)
         self.plot_widget.setMinimumHeight(220)
         self._setup_plot_context_menu(plot_item)
+        self.fit_view_box.zoom_fit_requested.connect(self.zoom_fit_all)
 
         # plot_item.setDownsampling(auto=True, mode="subsample")
         plot_item.setContextMenuActionVisible("Points", False)
@@ -269,9 +270,6 @@ class PlotManager:
         self.copy_plot_shortcut = QShortcut(QKeySequence.Copy, self.plot_widget)
         self.copy_plot_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.copy_plot_shortcut.activated.connect(self.copy_plot_to_clipboard)
-        self.zoom_fit_shortcut = QShortcut(QKeySequence(Qt.Key_F), self.plot_widget)
-        self.zoom_fit_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self.zoom_fit_shortcut.activated.connect(self.zoom_fit_all)
         layout.addLayout(status_row)
 
         self.fit_controller = FitController(

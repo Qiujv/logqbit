@@ -123,6 +123,7 @@ class FitViewBox(pg.ViewBox):
 
     selection_finished = Signal(str, object)
     selection_canceled = Signal()
+    zoom_fit_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -156,6 +157,10 @@ class FitViewBox(pg.ViewBox):
             self.updateScaleBox(event.buttonDownPos(), event.pos())
 
     def mouseClickEvent(self, event) -> None:
+        if event.double() and event.button() == Qt.LeftButton:
+            event.accept()
+            self.zoom_fit_requested.emit()
+            return
         if self._fit_kind is not None and event.button() == Qt.RightButton:
             event.accept()
             self.cancel_fit_selection(notify=True)

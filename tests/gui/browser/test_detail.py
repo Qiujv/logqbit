@@ -12,18 +12,20 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
 )
 
 from logqbit import catalog as catalog_module
 from logqbit.catalog import LogCatalog, LogRecord
 from logqbit.gui.browser.detail.data import DataViewManager, PandasTableModel
-from logqbit.gui.browser.detail.files import ZoomableImageView
+from logqbit.gui.browser.detail.files import (
+    ImageTab,
+    ZoomableImageView,
+    _format_file_size,
+)
 from logqbit.gui.browser.detail.view import (
     TAB_PLOT,
     RecordDetailView,
     RecordDetailWindow,
-    _format_file_size,
 )
 from logqbit.logfolder import LogFolder
 
@@ -59,7 +61,10 @@ class TestRecordDetailWidgets:
             for label in image_tab.findChildren(QLabel)
             if label.text().startswith("File size:")
         )
-        assert status_label.text() == f"File size: {image_path.stat().st_size} B"
+        assert status_label.text() == (
+            f"File size: {image_path.stat().st_size} B. "
+            "Double-click to zoom to fit."
+        )
         copy_shortcut = image_tab.findChild(QShortcut)
         assert copy_shortcut is not None
         assert copy_shortcut.key() == QKeySequence.Copy
@@ -105,15 +110,17 @@ class TestRecordDetailWidgets:
         assert image_tab is not None
         image_view = image_tab.findChild(ZoomableImageView)
         assert image_view is not None
-        assert isinstance(image_view, QScrollArea)
-        width_before = image_view._image_label.width()
+        assert not image_view.getPlotItem().getAxis("left").isVisible()
+        assert not image_view.getPlotItem().getAxis("bottom").isVisible()
+        assert image_view._view_box.state["yInverted"]
+        image_view.zoom_fit()
+        initial_range = image_view._view_box.viewRange()
 
-        assert image_view._apply_zoom(1.2)
+        image_view._view_box.scaleBy((0.5, 0.5))
+        image_view._view_box.zoom_fit_requested.emit()
 
-        assert image_view._image_label.width() > width_before
-        QTest.mouseDClick(image_view.viewport(), Qt.LeftButton)
-        assert image_view._zoom == 1.0
-        assert image_view._image_label.width() == width_before
+        assert image_view._view_box.viewRange()[0] == pytest.approx(initial_range[0])
+        assert image_view._view_box.viewRange()[1] == pytest.approx(initial_range[1])
         view.close()
 
     def test_rename_image_file_refreshes_tabs(
@@ -131,11 +138,17 @@ class TestRecordDetailWidgets:
             return "after", True
 
         monkeypatch.setattr(
-            "logqbit.gui.browser.detail.view.QInputDialog.getText",
+            "logqbit.gui.browser.detail.files.QInputDialog.getText",
             get_new_name,
         )
 
-        view._rename_image_file(image_path)
+        image_tab = view.tab_widget.widget(
+            [view.tab_widget.tabText(i) for i in range(view.tab_widget.count())].index(
+                image_path.name
+            )
+        )
+        assert isinstance(image_tab, ImageTab)
+        image_tab._rename_file()
 
         assert not image_path.exists()
         assert (record.path / "after.png").exists()
@@ -154,7 +167,7 @@ class TestRecordDetailWidgets:
         view.load_record(record)
         moved_paths: list[str] = []
         monkeypatch.setattr(
-            "logqbit.gui.browser.detail.view.QMessageBox.question",
+            "logqbit.gui.browser.detail.files.QMessageBox.question",
             lambda *args, **kwargs: QMessageBox.Yes,
         )
         def move_to_trash(path: str) -> None:
@@ -162,10 +175,16 @@ class TestRecordDetailWidgets:
             Path(path).unlink()
 
         monkeypatch.setattr(
-            "logqbit.gui.browser.detail.view.send2trash", move_to_trash
+            "logqbit.gui.browser.detail.files.send2trash", move_to_trash
         )
 
-        view._move_image_file_to_trash(image_path)
+        image_tab = view.tab_widget.widget(
+            [view.tab_widget.tabText(i) for i in range(view.tab_widget.count())].index(
+                image_path.name
+            )
+        )
+        assert isinstance(image_tab, ImageTab)
+        image_tab._move_to_trash()
 
         assert moved_paths == [str(image_path)]
         assert not image_path.exists()

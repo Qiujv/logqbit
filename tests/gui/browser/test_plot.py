@@ -215,7 +215,9 @@ class TestPlotManagerFitAndColorBar:
         assert manager.copy_plot_shortcut.parent() is manager.plot_widget
         manager.widget.deleteLater()
 
-    def test_f_shortcut_zooms_to_fit_all_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_double_click_zooms_to_fit_all_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         manager = PlotManager()
         plot_item = manager.plot_widget.getPlotItem()
         calls: list[float] = []
@@ -223,10 +225,8 @@ class TestPlotManagerFitAndColorBar:
             plot_item, "autoRange", lambda *, padding: calls.append(padding)
         )
 
-        manager.zoom_fit_shortcut.activated.emit()
+        manager.fit_view_box.zoom_fit_requested.emit()
 
-        assert manager.zoom_fit_shortcut.key() == QKeySequence(Qt.Key_F)
-        assert manager.zoom_fit_shortcut.context() == Qt.WidgetWithChildrenShortcut
         assert calls == [PLOT_AUTO_RANGE_PADDING]
         manager.widget.deleteLater()
 
