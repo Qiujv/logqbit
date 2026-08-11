@@ -11,7 +11,6 @@ from pathlib import Path
 from PySide6.QtCore import (
     QFileSystemWatcher,
     QSignalBlocker,
-    QSortFilterProxyModel,
     Qt,
     QTimer,
 )
@@ -25,12 +24,15 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
     QItemDelegate,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -47,6 +49,7 @@ from PySide6.QtWidgets import (
 from send2trash import send2trash
 
 from logqbit.catalog import LogCatalog, LogRecord, PreparedMerge, export_records
+from logqbit.metadata import LogMetadata
 from logqbit.gui.browser.detail.files import open_in_file_manager
 from logqbit.gui.browser.detail.view import RecordDetailView, RecordDetailWindow
 from logqbit.gui.browser.plot.mesh import warmup_plotter_jit
@@ -59,6 +62,7 @@ from logqbit.gui.browser.window.model import (
     COL_TITLE,
     SORT_ROLE,
     LogListTableModel,
+    LogListSortFilterProxyModel,
 )
 from logqbit.gui.browser.window.merge import MergeDialog
 from logqbit.gui.browser.window.preferences import SettingsManager, ThemeManager
@@ -70,6 +74,51 @@ REFRESH_DEBOUNCE_MS = 250
 DISABLE_JIT_WARMUP_ENV = "LOGQBIT_BROWSER_DISABLE_JIT_WARMUP"
 
 _plotter_jit_warmup_started = False
+
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+
+
+def _validated_log_id(value: str) -> str:
+    log_id = value.strip()
+    if not log_id:
+        raise ValueError("ID cannot be empty.")
+    if log_id in {".", ".."}:
+        raise ValueError("ID must be a directory name, not '.' or '..'.")
+    if any(character in log_id for character in '/\\<>:"|?*'):
+        raise ValueError("ID contains a character that is invalid in a directory name.")
+    if any(ord(character) < 32 for character in log_id):
+        raise ValueError("ID cannot contain control characters.")
+    if log_id.endswith((" ", ".")):
+        raise ValueError("ID cannot end with a space or period.")
+    if log_id.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
+        raise ValueError("ID is a reserved directory name on Windows.")
+    return log_id
+
+
+class _MakeNoteDialog(QDialog):
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Make Note")
+        layout = QFormLayout(self)
+        self.id_edit = QLineEdit(self)
+        self.title_edit = QLineEdit(self)
+        layout.addRow('ID (e.g. 5.1, "foobar"):', self.id_edit)
+        layout.addRow("Title:", self.title_edit)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+        self.resize(max(self.sizeHint().width(), 500), self.sizeHint().height())
 
 
 def _start_plotter_jit_warmup() -> None:
@@ -224,10 +273,10 @@ class LogBrowserWindow(QMainWindow):
 
     def _create_log_table(
         self, parent: QWidget
-    ) -> tuple[QTableView, LogListTableModel, QSortFilterProxyModel]:
+    ) -> tuple[QTableView, LogListTableModel, LogListSortFilterProxyModel]:
         model = LogListTableModel(parent)
 
-        proxy = QSortFilterProxyModel(parent)
+        proxy = LogListSortFilterProxyModel(parent)
         proxy.setSourceModel(model)
         proxy.setSortRole(SORT_ROLE)
 
@@ -390,9 +439,15 @@ class LogBrowserWindow(QMainWindow):
         self.settings_manager.update_recent_directories(path)
         self._rebuild_directory_menu()
 
-    def refresh_logs(self) -> None:
+    def refresh_logs(self, *, preferred_path: Path | None = None) -> None:
         previous_record = self._selected_record
-        previous_path = previous_record.path if previous_record else None
+        previous_path = (
+            Path(preferred_path)
+            if preferred_path is not None
+            else previous_record.path
+            if previous_record
+            else None
+        )
         all_records = self._catalog.refresh(self._base_dir)
 
         # Filter out trash if needed
@@ -566,7 +621,9 @@ class _BrowserActions:
         show_starred_action.setCheckable(True)
         show_starred_action.setChecked(self.window._show_starred_only)
         menu.addSeparator()
+        make_note_action = menu.addAction("Make Note...")
         rename_action = menu.addAction("Rename Title... (F2)")
+        change_id_action = menu.addAction("Change ID...")
         toggle_star_action = menu.addAction("Toggle ⭐Star (S)")
         toggle_star_action.setCheckable(True)
         toggle_trash_action = menu.addAction("Toggle 🗑️Trash (T)")
@@ -583,6 +640,7 @@ class _BrowserActions:
         append_action.setEnabled(append_target is not None)
         if not records:
             rename_action.setEnabled(False)
+            change_id_action.setEnabled(False)
             toggle_star_action.setEnabled(False)
             toggle_trash_action.setEnabled(False)
             send_to_recycle_action.setEnabled(False)
@@ -590,13 +648,18 @@ class _BrowserActions:
             export_action.setEnabled(False)
         else:
             rename_action.setEnabled(len(records) == 1)
+            change_id_action.setEnabled(len(records) == 1)
             toggle_star_action.setChecked(all(record.star > 0 for record in records))
             toggle_trash_action.setChecked(all(record.trash for record in records))
         chosen = menu.exec(self.window.log_table.viewport().mapToGlobal(point))
         if chosen is None:
             return
-        if chosen == rename_action and len(records) == 1:
+        if chosen == make_note_action:
+            self.make_note()
+        elif chosen == rename_action and len(records) == 1:
             self.rename_record_title(records[0])
+        elif chosen == change_id_action and len(records) == 1:
+            self.change_record_id(records[0])
         elif chosen == toggle_star_action and records:
             self.set_records_star_count(
                 records, 1 if toggle_star_action.isChecked() else 0
@@ -690,6 +753,103 @@ class _BrowserActions:
             return
         record.meta.update(title=new_title)
         self.window.refresh_logs()
+
+    def make_note(self) -> None:
+        dialog = _MakeNoteDialog(self.window)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.create_note(dialog.id_edit.text(), dialog.title_edit.text().strip())
+
+    def create_note(self, log_id: str, title: str) -> bool:
+        try:
+            log_id = _validated_log_id(log_id)
+        except ValueError as exc:
+            QMessageBox.warning(self.window, "Invalid ID", str(exc))
+            return False
+
+        target_path = self.window._base_dir / log_id
+        created = False
+        try:
+            target_path.mkdir(exist_ok=False)
+            created = True
+            LogMetadata(target_path / "metadata.json", title=title, create=True)
+        except FileExistsError:
+            QMessageBox.warning(
+                self.window,
+                "ID Already Exists",
+                f"A directory with ID {log_id!r} already exists.",
+            )
+            return False
+        except OSError as exc:
+            if created:
+                try:
+                    (target_path / "metadata.json").unlink(missing_ok=True)
+                    target_path.rmdir()
+                except OSError:
+                    pass
+            QMessageBox.warning(
+                self.window,
+                "Could Not Make Note",
+                f"Failed to create log folder:\n{exc}",
+            )
+            return False
+
+        self.window.refresh_logs(preferred_path=target_path)
+        return True
+
+    def change_record_id(self, record: LogRecord) -> None:
+        dialog = QInputDialog(self.window)
+        dialog.setWindowTitle("Change Log ID")
+        dialog.setLabelText('Enter new ID (e.g. 5.1, "foobar"):')
+        dialog.setTextValue(record.path.name)
+        dialog.setInputMode(QInputDialog.TextInput)
+        dialog.resize(max(dialog.sizeHint().width(), 600), dialog.sizeHint().height())
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.rename_record_id(record, dialog.textValue())
+
+    def rename_record_id(self, record: LogRecord, new_id: str) -> bool:
+        try:
+            new_id = _validated_log_id(new_id)
+        except ValueError as exc:
+            QMessageBox.warning(self.window, "Invalid ID", str(exc))
+            return False
+
+        old_path = record.path
+        if new_id == old_path.name:
+            return False
+        target_path = old_path.parent / new_id
+        if target_path.exists():
+            QMessageBox.warning(
+                self.window,
+                "ID Already Exists",
+                f"A directory with ID {new_id!r} already exists.",
+            )
+            return False
+
+        try:
+            old_path.rename(target_path)
+        except OSError as exc:
+            QMessageBox.warning(
+                self.window,
+                "Could Not Change ID",
+                f"Failed to rename log folder:\n{exc}",
+            )
+            self.window.refresh_logs()
+            return False
+
+        matching_detail_windows = [
+            detail_window
+            for detail_window in self.window._detail_windows
+            if detail_window.detail_view.current_record is not None
+            and detail_window.detail_view.current_record.path == old_path
+        ]
+        self.window.refresh_logs(preferred_path=target_path)
+        renamed_record = self.window._selected_record
+        if renamed_record is not None and renamed_record.path == target_path:
+            for detail_window in matching_detail_windows:
+                detail_window.load_record(renamed_record)
+        return True
 
     def set_record_star_count(
         self, record: LogRecord, count: int, refresh: bool = True

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QWidget
+
+from logqbit.catalog import _log_name_sort_key
 
 if TYPE_CHECKING:
     from logqbit.catalog import LogRecord
@@ -19,6 +21,22 @@ COL_PLOT_AXES = 3
 COL_CREATE_TIME = 4
 COL_CREATE_MACHINE = 5
 SORT_ROLE = Qt.UserRole + 1
+
+
+class LogListSortFilterProxyModel(QSortFilterProxyModel):
+    """Sort log IDs by numeric value first and directory name second."""
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:  # noqa: N802
+        if left.column() == COL_ID and right.column() == COL_ID:
+            model = self.sourceModel()
+            if isinstance(model, LogListTableModel):
+                left_record = model.get_record(left.row())
+                right_record = model.get_record(right.row())
+                if left_record is not None and right_record is not None:
+                    return _log_name_sort_key(
+                        left_record.path.name
+                    ) < _log_name_sort_key(right_record.path.name)
+        return super().lessThan(left, right)
 
 
 class LogListTableModel(QAbstractTableModel):

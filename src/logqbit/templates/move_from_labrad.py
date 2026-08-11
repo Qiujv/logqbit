@@ -86,7 +86,7 @@ for path_in, path_out, n_files in path_pairs:
         (
             int(entry.name)
             for entry in os.scandir(path_out)
-            if entry.is_dir() and entry.name.isdecimal()
+            if entry.is_dir() and entry.name.isdecimal() and entry.name.isascii()
         ),
         default=-1,
     )

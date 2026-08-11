@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 
 from logqbit.catalog import LogCatalog, LogRecord
+from logqbit.logfolder import LogFolder
 from logqbit.gui.browser.window.model import (
     COL_ID,
     COL_PLOT_AXES,
@@ -12,6 +13,7 @@ from logqbit.gui.browser.window.model import (
     COL_TITLE,
     SORT_ROLE,
     LogListTableModel,
+    LogListSortFilterProxyModel,
 )
 
 
@@ -92,6 +94,25 @@ class TestLogListTableModel:
 
         assert data == "1,234"
         assert model.data(index, SORT_ROLE) == 1_234
+
+    def test_proxy_sorts_numeric_ids_before_named_ids(self, tmp_path: Path) -> None:
+        for name in ("beta", "10", "1.5", "2", "Alpha"):
+            LogFolder(tmp_path / name)
+        records = scan_catalog(tmp_path)
+        model = LogListTableModel()
+        model.set_records(list(reversed(records)))
+        proxy = LogListSortFilterProxyModel()
+        proxy.setSourceModel(model)
+        proxy.sort(COL_ID, Qt.AscendingOrder)
+
+        ordered_names = []
+        for row in range(proxy.rowCount()):
+            source = proxy.mapToSource(proxy.index(row, COL_ID))
+            record = model.get_record(source.row())
+            assert record is not None
+            ordered_names.append(record.path.name)
+
+        assert ordered_names == ["1.5", "2", "10", "Alpha", "beta"]
 
     def test_data_display_plot_axes(self, sample_logfolder: Path) -> None:
         """Test displaying plot axes with abbreviations."""

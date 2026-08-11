@@ -62,8 +62,7 @@ class TestRecordDetailWidgets:
             if label.text().startswith("File size:")
         )
         assert status_label.text() == (
-            f"File size: {image_path.stat().st_size} B. "
-            "Double-click to zoom to fit."
+            f"File size: {image_path.stat().st_size} B. Double-click to zoom to fit."
         )
         copy_shortcut = image_tab.findChild(QShortcut)
         assert copy_shortcut is not None
@@ -170,6 +169,7 @@ class TestRecordDetailWidgets:
             "logqbit.gui.browser.detail.files.QMessageBox.question",
             lambda *args, **kwargs: QMessageBox.Yes,
         )
+
         def move_to_trash(path: str) -> None:
             moved_paths.append(path)
             Path(path).unlink()

@@ -97,18 +97,60 @@ def test_catalog_uses_metadata_file_as_log_directory_marker(
 
 
 def test_refresh_orders_numeric_then_named_directories(tmp_path: Path) -> None:
-    for name in ("10", "beta", "2", "Alpha", "1"):
+    for name in (
+        "10",
+        "beta",
+        "2",
+        "Alpha",
+        "1",
+        "1.5",
+        "-1.5",
+        "01",
+        "1.0",
+        ".5",
+        "١.٥",
+    ):
         LogFolder(tmp_path / name)
 
     records = LogCatalog(tmp_path).refresh()
 
     assert [record.path.name for record in records] == [
+        "-1.5",
+        "01",
         "1",
+        "1.0",
+        "1.5",
         "2",
         "10",
+        ".5",
         "Alpha",
         "beta",
+        "١.٥",
     ]
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("12", 12),
+        ("01", 1),
+        ("-1", -1.0),
+        ("+1.5", 1.5),
+        ("1.5", 1.5),
+        (".5", ".5"),
+        ("1.", "1."),
+        ("1e3", "1e3"),
+        ("nan", "nan"),
+        ("١.٥", "١.٥"),
+    ],
+)
+def test_record_parses_ascii_integer_and_decimal_ids(
+    tmp_path: Path, name: str, expected: int | float | str
+) -> None:
+    record_path = tmp_path / name
+    LogFolder(record_path)
+
+    assert LogRecord(record_path).log_id == expected
 
 
 def test_refresh_replaces_only_changed_record(sample_logfolder: Path) -> None:
@@ -348,7 +390,9 @@ def test_merge_records_into_new_copies_metadata_const_and_adds_sid(
     assert prepared.staging_path is not None
     assert prepared.staging_path.is_dir()
     assert sorted(
-        path.name for path in tmp_path.iterdir() if path.name.isdecimal()
+        path.name
+        for path in tmp_path.iterdir()
+        if path.name.isdecimal() and path.name.isascii()
     ) == [
         "0",
         "1",

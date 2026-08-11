@@ -30,7 +30,13 @@ from logqbit.gui.browser.window.model import (
 )
 from logqbit.gui.browser.window import merge as merge_module
 from logqbit.gui.browser.window.merge import MergeDialog
-from logqbit.gui.browser.window.view import LogBrowserWindow, LogListItemDelegate
+from logqbit.gui.browser.detail.view import RecordDetailWindow
+from logqbit.gui.browser.window.view import (
+    LogBrowserWindow,
+    LogListItemDelegate,
+    _validated_log_id,
+)
+from logqbit.metadata import LogMetadata
 
 
 def _create_application() -> QApplication:
@@ -44,6 +50,79 @@ def scan_catalog(directory: Path) -> list[LogRecord]:
 
 
 class TestBrowserWindow:
+    def test_make_note_creates_metadata_only_and_selects_it(
+        self,
+        sample_logfolder: Path,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        try:
+            assert window._actions.create_note("0.5", "Remember this")
+
+            note_path = sample_logfolder / "0.5"
+            assert sorted(path.name for path in note_path.iterdir()) == [
+                "metadata.json"
+            ]
+            assert LogMetadata(note_path / "metadata.json", create=False).title == (
+                "Remember this"
+            )
+            assert window._selected_record is not None
+            assert window._selected_record.path == note_path
+        finally:
+            window.close()
+
+    def test_make_note_does_not_replace_existing_directory(
+        self,
+        sample_logfolder: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        existing_path = sample_logfolder / "reserved"
+        existing_path.mkdir()
+        marker = existing_path / "keep.txt"
+        marker.write_text("keep", encoding="utf-8")
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            QMessageBox,
+            "warning",
+            lambda _parent, _title, message: warnings.append(message),
+        )
+        window = LogBrowserWindow(sample_logfolder)
+        try:
+            assert not window._actions.create_note("reserved", "note")
+            assert marker.read_text(encoding="utf-8") == "keep"
+            assert warnings
+        finally:
+            window.close()
+
+    def test_change_id_preserves_selection_and_updates_detail_window(
+        self,
+        sample_logfolder: Path,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        record = window._selected_record
+        assert record is not None
+        detail_window = RecordDetailWindow(record)
+        window._detail_windows.append(detail_window)
+        try:
+            old_path = record.path
+            new_path = old_path.parent / "0.5"
+
+            assert window._actions.rename_record_id(record, "0.5")
+
+            assert not old_path.exists()
+            assert new_path.is_dir()
+            assert window._selected_record is not None
+            assert window._selected_record.path == new_path
+            assert detail_window.detail_view.current_record is not None
+            assert detail_window.detail_view.current_record.path == new_path
+        finally:
+            detail_window.close()
+            window.close()
+
+    @pytest.mark.parametrize("value", ["", ".", "..", "a/b", "a\\b", "CON"])
+    def test_log_id_validation_rejects_unsafe_directory_names(self, value: str) -> None:
+        with pytest.raises(ValueError):
+            _validated_log_id(value)
+
     def test_log_list_uses_white_selection_text(self, sample_logfolder: Path) -> None:
         window = LogBrowserWindow(sample_logfolder)
         try:

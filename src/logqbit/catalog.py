@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import tempfile
 import time
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 _KNOWN_LOG_FILENAMES = {"const.yaml", "data.feather", "metadata.json"}
+_FLOAT_LOG_ID_PATTERN = re.compile(r"[+-]?[0-9]+(?:\.[0-9]+)?")
 
 
 _RETRY_VERSION = FileVersion(mtime_ns=-1, size=-1, inode=-1)
@@ -115,9 +117,9 @@ class LogRecord:
         object.__setattr__(self, "path", path)
 
     @property
-    def log_id(self) -> int | str:
-        """Return numeric directory names as integers, otherwise as text."""
-        return int(self.path.name) if self.path.name.isdecimal() else self.path.name
+    def log_id(self) -> int | float | str:
+        """Return ASCII integer and decimal directory names numerically."""
+        return _parse_log_id(self.path.name)
 
     @property
     def meta_path(self) -> Path:
@@ -760,10 +762,21 @@ def _replace_staged_file(
             retry_delay *= 2
 
 
-def _log_name_sort_key(name: str) -> tuple[int, int | str]:
-    if name.isdecimal():
-        return 0, int(name)
-    return 1, name.casefold()
+def _parse_log_id(name: str) -> int | float | str:
+    if name.isdecimal() and name.isascii():
+        return int(name)
+    if _FLOAT_LOG_ID_PATTERN.fullmatch(name):
+        return float(name)
+    return name
+
+
+def _log_name_sort_key(
+    name: str,
+) -> tuple[int, int | float, str] | tuple[int, str, str]:
+    log_id = _parse_log_id(name)
+    if isinstance(log_id, (int, float)):
+        return 0, log_id, name
+    return 1, name.casefold(), name
 
 
 def _next_export_logfolder_path(parent_path: Path) -> Path:
@@ -771,7 +784,7 @@ def _next_export_logfolder_path(parent_path: Path) -> Path:
         (
             int(entry.name)
             for entry in parent_path.iterdir()
-            if entry.is_dir() and entry.name.isdecimal()
+            if entry.is_dir() and entry.name.isdecimal() and entry.name.isascii()
         ),
         default=-1,
     )

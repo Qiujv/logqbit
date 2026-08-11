@@ -78,7 +78,7 @@ class LogFolder:
             (
                 int(entry.name)
                 for entry in os.scandir(parent_path)
-                if entry.is_dir() and entry.name.isdecimal()
+                if entry.is_dir() and entry.name.isdecimal() and entry.name.isascii()
             ),
             default=-1,
         )
@@ -154,9 +154,7 @@ class LogFolder:
                 ret_kws = func(**step_kws, **const_axs)
                 if strip_underscores:
                     row_items = [*step_kws.items(), *ret_kws.items()]
-                    row_kws = {
-                        key.strip("_"): value for key, value in row_items
-                    }
+                    row_kws = {key.strip("_"): value for key, value in row_items}
                     if len(row_kws) != len(row_items):
                         raise ValueError(
                             "stripping capture column underscores produced "
