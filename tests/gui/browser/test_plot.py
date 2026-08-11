@@ -43,7 +43,7 @@ class TestTagBar:
         assert tag_bar.axes == ["y", "x"]
         assert tag_bar.fields == ["reference", "signal"]
         assert tag_bar.groupby == []
-        assert tag_bar._split()[3] == []
+        assert tag_bar._split()[2] == []
 
     def test_set_columns_uses_first_ignored_column_when_fields_are_empty(
         self,
@@ -60,7 +60,7 @@ class TestTagBar:
         assert tag_bar.axes == ["x"]
         assert tag_bar.fields == ["signal"]
         assert tag_bar.groupby == []
-        assert tag_bar._split()[3] == ["reference"]
+        assert tag_bar._split()[2] == ["reference"]
 
     def test_set_columns_reserves_groupby_before_default_roles(self) -> None:
         tag_bar = TagBar()
@@ -75,6 +75,50 @@ class TestTagBar:
         assert tag_bar.axes == ["x"]
         assert tag_bar.fields == ["signal"]
         assert tag_bar.groupby == ["device"]
+        assert tag_bar._split()[2] == ["device"]
+        assert tag_bar.groupby_button.text() == "group by (1)"
+        assert tag_bar._groupby_checks["device"].isChecked()
+
+    def test_groupby_dropdown_moves_columns_out_of_plot_roles(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(
+            ["x", "signal", "device"],
+            ["x"],
+            ["signal"],
+            [],
+        )
+
+        tag_bar._groupby_checks["device"].setChecked(True)
+
+        assert tag_bar.axes == ["x"]
+        assert tag_bar.fields == ["signal"]
+        assert tag_bar.groupby == ["device"]
+        assert tag_bar._split()[2] == ["device"]
+        assert tag_bar.groupby_button.text() == "group by (1)"
+
+    def test_dragging_groupby_column_into_axes_unchecks_it(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(
+            ["x", "signal", "device"],
+            ["x"],
+            ["signal"],
+            ["device"],
+        )
+        device_index = next(
+            index
+            for index in range(tag_bar._list.count())
+            if tag_bar._list.item(index).text() == "device"
+        )
+        tag_bar._loading = True
+        device_item = tag_bar._list.takeItem(device_index)
+        tag_bar._list.insertItem(0, device_item)
+        tag_bar._loading = False
+
+        tag_bar._on_model_changed()
+
+        assert tag_bar.axes == ["device", "x"]
+        assert tag_bar.groupby == []
+        assert tag_bar.groupby_button.text() == "group by"
 
 
 def test_resolve_plot_columns_fills_axes_before_fields() -> None:

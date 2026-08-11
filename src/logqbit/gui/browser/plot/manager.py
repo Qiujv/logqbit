@@ -17,6 +17,7 @@ from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QGridLayout,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QListView,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 if TYPE_CHECKING:
@@ -67,7 +69,7 @@ class TagBar(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(4)
-        layout.addWidget(QLabel("axes | fields | group:"))
+        layout.addWidget(QLabel("axes | fields:"))
 
         self._list = QListWidget()
         self._list.setFlow(QListView.LeftToRight)
@@ -90,11 +92,38 @@ class TagBar(QWidget):
         model.layoutChanged.connect(lambda: self._on_model_changed())
 
         self._loading = False
+        self._columns: tuple[str, ...] = ()
+        self._groupby_checks: dict[str, QCheckBox] = {}
         layout.addWidget(self._list)
+
+        self.groupby_button = QToolButton()
+        self.groupby_button.setText("group by")
+        self.groupby_button.setPopupMode(QToolButton.InstantPopup)
+        self.groupby_button.setEnabled(False)
+        self.groupby_menu = QMenu(self.groupby_button)
+        self._groupby_panel = QWidget(self.groupby_menu)
+        self._groupby_layout = QVBoxLayout(self._groupby_panel)
+        self._groupby_layout.setContentsMargins(6, 4, 6, 4)
+        self._groupby_layout.setSpacing(2)
+        self._groupby_action = QWidgetAction(self.groupby_menu)
+        self._groupby_action.setDefaultWidget(self._groupby_panel)
+        self.groupby_menu.addAction(self._groupby_action)
+        self.groupby_button.setMenu(self.groupby_menu)
+        layout.addWidget(self.groupby_button)
 
     def _on_model_changed(self) -> None:
         if self._loading:
             return
+        axes, fields, _ = self._split()
+        conflicts = set(axes + fields).intersection(self.groupby)
+        if conflicts:
+            self._loading = True
+            try:
+                for column in conflicts:
+                    self._groupby_checks[column].setChecked(False)
+                self._update_groupby_button()
+            finally:
+                self._loading = False
         self._update_item_colors()
         self.changed.emit()
 
@@ -121,7 +150,7 @@ class TagBar(QWidget):
             item = self._list.item(index)
             if item.text() == self._SEP:
                 separator_count += 1
-            elif separator_count >= 3:
+            elif separator_count >= 2:
                 item.setForeground(self._GRAY)
             else:
                 item.setData(Qt.ForegroundRole, None)
@@ -142,24 +171,67 @@ class TagBar(QWidget):
 
         self._loading = True
         try:
-            self._list.clear()
-            for name in resolved.axes:
-                self._list.addItem(name)
-            self._list.addItem(self._make_sep())
-            for name in resolved.fields:
-                self._list.addItem(name)
-            self._list.addItem(self._make_sep())
-            for name in resolved.groupby:
-                self._list.addItem(name)
-            self._list.addItem(self._make_sep())
-            for name in resolved.ignored:
-                item = QListWidgetItem(name)
-                item.setForeground(self._GRAY)
-                self._list.addItem(item)
+            self._columns = tuple(dict.fromkeys(str(column) for column in columns))
+            self._set_groupby_options(resolved.groupby)
+            self._set_list_columns(resolved)
         finally:
             self._loading = False
 
-    def _split(self) -> tuple[list[str], list[str], list[str], list[str]]:
+    def _set_list_columns(self, resolved) -> None:
+        self._list.clear()
+        for name in resolved.axes:
+            self._list.addItem(name)
+        self._list.addItem(self._make_sep())
+        for name in resolved.fields:
+            self._list.addItem(name)
+        self._list.addItem(self._make_sep())
+        for name in (*resolved.groupby, *resolved.ignored):
+            item = QListWidgetItem(name)
+            item.setForeground(self._GRAY)
+            self._list.addItem(item)
+
+    def _set_groupby_options(self, selected: Sequence[str]) -> None:
+        while self._groupby_layout.count():
+            layout_item = self._groupby_layout.takeAt(0)
+            if widget := layout_item.widget():
+                widget.deleteLater()
+        selected_set = set(selected)
+        self._groupby_checks = {}
+        for column in self._columns:
+            checkbox = QCheckBox(column, self._groupby_panel)
+            checkbox.setChecked(column in selected_set)
+            checkbox.toggled.connect(self._on_groupby_toggled)
+            self._groupby_layout.addWidget(checkbox)
+            self._groupby_checks[column] = checkbox
+        self._update_groupby_button()
+
+    def _on_groupby_toggled(self) -> None:
+        if self._loading:
+            return
+        axes, fields, _ = self._split()
+        resolved = resolve_plot_columns(
+            self._columns,
+            axes,
+            fields,
+            self.groupby,
+        )
+        self._loading = True
+        try:
+            self._set_list_columns(resolved)
+            self._update_groupby_button()
+        finally:
+            self._loading = False
+        self.changed.emit()
+
+    def _update_groupby_button(self) -> None:
+        count = len(self.groupby)
+        self.groupby_button.setText(f"group by ({count})" if count else "group by")
+        self.groupby_button.setEnabled(bool(self._columns))
+        self.groupby_button.setToolTip(
+            ", ".join(self.groupby) if count else "Select columns used to group plots"
+        )
+
+    def _split(self) -> tuple[list[str], list[str], list[str]]:
         sections: list[list[str]] = []
         current: list[str] = []
         for index in range(self._list.count()):
@@ -170,9 +242,9 @@ class TagBar(QWidget):
             else:
                 current.append(text)
         sections.append(current)
-        while len(sections) < 4:
+        while len(sections) < 3:
             sections.append([])
-        return sections[0], sections[1], sections[2], sections[3]
+        return sections[0], sections[1], sections[2]
 
     @property
     def axes(self) -> list[str]:
@@ -184,7 +256,11 @@ class TagBar(QWidget):
 
     @property
     def groupby(self) -> list[str]:
-        return self._split()[2]
+        return [
+            column
+            for column in self._columns
+            if self._groupby_checks[column].isChecked()
+        ]
 
 
 class PlotManager:
