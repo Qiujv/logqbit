@@ -119,8 +119,15 @@ class LogFolder:
         self,
         func: Callable[[float], dict[str, float | list[float]]],
         axes: list[float | list[float]] | dict[str, float | list[float]],
+        *,
+        strip_underscores: bool = True,
     ):
-        """Capture a parameter sweep."""
+        """Capture a parameter sweep.
+
+        When ``strip_underscores`` is true, leading and trailing underscores are
+        removed from the names written to the dataframe. Function calls retain
+        their original parameter names.
+        """
         if not isinstance(axes, dict):  # Assumes isinstance(axes, list)
             fsig = inspect.signature(func)
             axes = dict(zip(fsig.parameters.keys(), axes))
@@ -145,7 +152,19 @@ class LogFolder:
             for step in tqdm(step_table, desc=self.path.name):
                 step_kws = dict(zip(run_axs.keys(), step))
                 ret_kws = func(**step_kws, **const_axs)
-                self.add_row(**step_kws, **ret_kws)
+                if strip_underscores:
+                    row_items = [*step_kws.items(), *ret_kws.items()]
+                    row_kws = {
+                        key.strip("_"): value for key, value in row_items
+                    }
+                    if len(row_kws) != len(row_items):
+                        raise ValueError(
+                            "stripping capture column underscores produced "
+                            "duplicate names"
+                        )
+                    self.add_row(**row_kws)
+                else:
+                    self.add_row(**step_kws, **ret_kws)
 
         self.flush()
 

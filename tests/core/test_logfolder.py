@@ -200,6 +200,38 @@ def test_capture_records_data_axes_and_constants(tmp_path: Path) -> None:
         assert lf.reg["dims"] == {"x": 2}
 
 
+def test_capture_strips_column_name_underscores_by_default(tmp_path: Path) -> None:
+    def fund(_a: float, b: float) -> dict[str, float]:
+        return {"_c_": _a + b}
+
+    with LogFolder.new(tmp_path) as lf:
+        lf.capture(fund, [[1, 2], [3, 4]])
+
+        pd.testing.assert_frame_equal(
+            lf.df,
+            pd.DataFrame(
+                {
+                    "a": [1, 1, 2, 2],
+                    "b": [3, 4, 3, 4],
+                    "c": [4, 5, 5, 6],
+                }
+            ),
+        )
+
+
+def test_capture_can_preserve_column_name_underscores(tmp_path: Path) -> None:
+    def fund(_a: float) -> dict[str, float]:
+        return {"_c_": _a}
+
+    with LogFolder.new(tmp_path) as lf:
+        lf.capture(fund, [[1]], strip_underscores=False)
+
+        pd.testing.assert_frame_equal(
+            lf.df,
+            pd.DataFrame({"_a": [1], "_c_": [1]}),
+        )
+
+
 def test_finalize_flushes_when_logfolder_is_collected(tmp_path: Path) -> None:
     lf = LogFolder.new(tmp_path)
     path = lf.df_path
