@@ -46,6 +46,7 @@ class CursorController:
         self._series: tuple[CursorSeries, ...] = ()
         self._mesh: PlotMeshData | None = None
         self._axis_names = ("x", "y", "z")
+        self._group_label = ""
         self._items: list[object] = []
         self._vertical_line: pg.InfiniteLine | None = None
         self._horizontal_line: pg.InfiniteLine | None = None
@@ -68,6 +69,7 @@ class CursorController:
         self._mode = "1d"
         self._series = tuple(series)
         self._mesh = None
+        self._group_label = ""
         self._button.setEnabled(bool(self._series))
         self._button.setToolTip("Enable a draggable data cursor")
 
@@ -77,12 +79,15 @@ class CursorController:
         x_name: str,
         y_name: str,
         z_name: str,
+        *,
+        group_label: str = "",
     ) -> None:
         self.disable()
         self._mode = "2d"
         self._series = ()
         self._mesh = mesh
         self._axis_names = (x_name, y_name, z_name)
+        self._group_label = group_label
         self._button.setEnabled(True)
         self._button.setToolTip("Enable a draggable crosshair and section plots")
 
@@ -99,6 +104,7 @@ class CursorController:
         self._mode = None
         self._series = ()
         self._mesh = None
+        self._group_label = ""
         self._button.setEnabled(False)
 
     def _toggle(self, checked: bool) -> None:
@@ -327,7 +333,10 @@ class CursorController:
             self._vertical_curve.setData(vertical_z, section_y)
             self._vertical_curve.show()
         x_name, y_name, z_name = self._axis_names
-        text = f"{x_name} = {x:.6g}\n{y_name} = {y:.6g}\n{z_name} = {z:.6g}"
+        lines = [f"{x_name} = {x:.6g}", f"{y_name} = {y:.6g}", f"{z_name} = {z:.6g}"]
+        if self._group_label:
+            lines.insert(0, self._group_label)
+        text = "\n".join(lines)
         if self._readout is not None:
             self._readout.setText(text)
             self._readout.setPos(x, y)

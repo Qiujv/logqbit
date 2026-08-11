@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QSizePolicy, QToolButton
 
 from logqbit.catalog import PlotColumns, resolve_plot_columns
 from logqbit.gui.browser.plot.fitting import fit_exponential, fit_quadratic
+from logqbit.gui.browser.plot.grouping import iter_plot_groups
 from logqbit.gui.browser.plot.mesh import (
     _build_grids_rect,
     _is_lexsorted,
@@ -36,11 +37,13 @@ class TestTagBar:
             ["x", "y", "signal", "reference"],
             ["y", "x", "y"],
             ["reference", "y", "signal", "reference"],
+            [],
         )
 
         assert tag_bar.axes == ["y", "x"]
         assert tag_bar.fields == ["reference", "signal"]
-        assert tag_bar._split()[2] == []
+        assert tag_bar.groupby == []
+        assert tag_bar._split()[3] == []
 
     def test_set_columns_uses_first_ignored_column_when_fields_are_empty(
         self,
@@ -51,11 +54,27 @@ class TestTagBar:
             ["x", "signal", "reference"],
             ["x", "x"],
             [],
+            [],
         )
 
         assert tag_bar.axes == ["x"]
         assert tag_bar.fields == ["signal"]
-        assert tag_bar._split()[2] == ["reference"]
+        assert tag_bar.groupby == []
+        assert tag_bar._split()[3] == ["reference"]
+
+    def test_set_columns_reserves_groupby_before_default_roles(self) -> None:
+        tag_bar = TagBar()
+
+        tag_bar.set_columns(
+            ["device", "x", "signal"],
+            [],
+            [],
+            ["device"],
+        )
+
+        assert tag_bar.axes == ["x"]
+        assert tag_bar.fields == ["signal"]
+        assert tag_bar.groupby == ["device"]
 
 
 def test_resolve_plot_columns_fills_axes_before_fields() -> None:
@@ -68,8 +87,28 @@ def test_resolve_plot_columns_fills_axes_before_fields() -> None:
     assert resolved == PlotColumns(
         axes=("x",),
         fields=("signal",),
+        groupby=(),
         ignored=("reference",),
     )
+
+
+def test_iter_plot_groups_preserves_order_multiple_keys_and_missing() -> None:
+    frame = pd.DataFrame(
+        {
+            "device": ["B", "A", "B", None],
+            "sweep": [2, 1, 2, 1],
+            "x": [0, 1, 2, 3],
+        }
+    )
+
+    groups = list(iter_plot_groups(frame, ["device", "sweep"]))
+
+    assert [group.label for group in groups] == [
+        "device=B, sweep=2",
+        "device=A, sweep=1",
+        "device=<NA>, sweep=1",
+    ]
+    assert [group.frame.index.tolist() for group in groups] == [[0, 2], [1], [3]]
 
 
 class TestFits:
@@ -99,6 +138,88 @@ class TestFits:
 
 
 class TestPlotManagerFitAndColorBar:
+    def test_save_tag_bar_persists_groupby_with_other_plot_roles(self) -> None:
+        manager = PlotManager()
+        updates: list[dict[str, object]] = []
+        manager._plot_record = SimpleNamespace(
+            meta=SimpleNamespace(update=lambda **changes: updates.append(changes))
+        )
+        manager.tag_bar.set_columns(
+            ["x", "signal", "device"],
+            ["x"],
+            ["signal"],
+            ["device"],
+        )
+
+        manager._save_tag_bar()
+
+        assert updates == [
+            {
+                "plot_axes": ["x"],
+                "plot_fields": ["signal"],
+                "plot_groupby": ["device"],
+            }
+        ]
+        manager.widget.deleteLater()
+
+    def test_grouped_1d_plots_each_group_and_labels_cursor_series(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {
+                "device": ["A", "A", "B", "B"],
+                "x": [0.0, 1.0, 0.0, 1.0],
+                "signal": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+
+        manager._refresh_plot_1d("x", ["signal"], ["device"])
+
+        assert [series.name for series in manager.cursor_controller._series] == [
+            "signal | device=A",
+            "signal | device=B",
+        ]
+        assert manager.fit_controller._field == "signal | device=A"
+        assert manager._legend is not None
+        assert [label.text for _, label in manager._legend.items] == [
+            "device=A",
+            "device=B",
+        ]
+        assert manager._legend.brush().color().alpha() == 200
+        assert manager._legend.pen().style() == Qt.NoPen
+        assert manager._legend.layout.horizontalSpacing() == 1
+        assert manager._legend.layout.verticalSpacing() == -4
+        assert manager._legend.layout.getContentsMargins() == (2.0, 2.0, 2.0, 2.0)
+        assert "2 groups, 2 curves" in manager.plot_status_label.text()
+        manager.widget.deleteLater()
+
+    def test_grouped_2d_cursor_uses_first_largest_group(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {
+                "device": ["small"] * 4 + ["large"] * 6 + ["same-size"] * 6,
+                "x": [0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 0, 0, 1, 1, 2, 2],
+                "y": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+                "z": list(range(16)),
+            }
+        )
+
+        manager._refresh_plot_2d("x", "y", "z", ["device"])
+
+        assert len(manager._mesh_items) == 3
+        assert manager.cursor_controller._mesh is not None
+        assert manager.cursor_controller._mesh.point_count == 6
+        assert manager.cursor_controller._group_label == "device=large"
+        assert manager._legend is not None
+        assert manager.plot_widget.getPlotItem().listDataItems() == []
+        assert manager._mesh_levels == pytest.approx((0.0, 15.0))
+        assert "cursor uses device=large (6 points)" in manager.plot_status_label.text()
+
+        manager.cursor_button.click()
+        assert "device=large" in manager.section_readout.text()
+        manager.widget.deleteLater()
+
     def test_fit_selection_uses_points_inside_both_rectangle_axes(self) -> None:
         manager = PlotManager()
         x = np.arange(-2.0, 4.0)

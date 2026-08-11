@@ -25,6 +25,7 @@ def _default_root(title: str) -> dict[str, object]:
         "trash": False,
         "plot_axes": [],
         "plot_fields": [],
+        "plot_groupby": [],
         "create_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "create_machine": socket.gethostname(),
     }
@@ -84,6 +85,11 @@ class LogMetadata:
     )
     plot_fields = _MetaField[tuple[str, ...], str | Iterable[str]](
         "plot_fields",
+        (),
+        lambda v: (v,) if isinstance(v, str) else tuple(str(i) for i in v),
+    )
+    plot_groupby = _MetaField[tuple[str, ...], str | Iterable[str]](
+        "plot_groupby",
         (),
         lambda v: (v,) if isinstance(v, str) else tuple(str(i) for i in v),
     )

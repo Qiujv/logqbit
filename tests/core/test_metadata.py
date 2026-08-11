@@ -18,6 +18,7 @@ def test_logmetadata_creates_defaults(tmp_path: Path) -> None:
     assert meta.trash is False
     assert meta.plot_axes == ()
     assert meta.plot_fields == ()
+    assert meta.plot_groupby == ()
     datetime.strptime(meta.root["create_time"], "%Y-%m-%d %H:%M:%S")
     assert meta.root["create_machine"] == socket.gethostname()
 
@@ -31,6 +32,7 @@ def test_logmetadata_persists_updates(tmp_path: Path) -> None:
     meta.trash = True
     meta.plot_axes = ("x", "y")
     meta.plot_fields = "signal"
+    meta.plot_groupby = "device"
 
     reloaded = LogMetadata(meta_path)
     assert reloaded.title == "demo-updated"
@@ -40,6 +42,8 @@ def test_logmetadata_persists_updates(tmp_path: Path) -> None:
     assert reloaded.root["plot_axes"] == ["x", "y"]
     assert reloaded.plot_fields == ("signal",)
     assert reloaded.root["plot_fields"] == ["signal"]
+    assert reloaded.plot_groupby == ("device",)
+    assert reloaded.root["plot_groupby"] == ["device"]
 
 
 def test_logmetadata_detects_external_change(tmp_path: Path) -> None:

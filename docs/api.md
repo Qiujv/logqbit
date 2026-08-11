@@ -171,10 +171,12 @@ log.meta.star = 2
 log.meta.trash = False
 log.meta.plot_axes = ["time"]
 log.meta.plot_fields = ["temperature"]
+log.meta.plot_groupby = ["device"]
 ```
 
-`plot_axes` 和 `plot_fields` 读取时是不可变 tuple；赋值时可以传一个字符串或任意字符串
-序列。单个字符串会被当成一个列名，而不是拆成字符。
+`plot_axes`、`plot_fields` 和 `plot_groupby` 读取时是不可变 tuple；赋值时可以传一个
+字符串或任意字符串序列。单个字符串会被当成一个列名，而不是拆成字符。
+`plot_groupby` 默认为空；指定一个或多个数据列后，Plot 页会按这些列值分组，并在同一画布绘制各组。
 
 如果要一次更新多个字段，使用 `update()` 只写一次文件：
 
@@ -187,6 +189,7 @@ meta.update(
     star=1,
     plot_axes="time",
     plot_fields=["temperature", "pressure"],
+    plot_groupby="device",
 )
 ```
 

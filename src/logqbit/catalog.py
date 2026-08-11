@@ -31,6 +31,7 @@ class PlotColumns:
 
     axes: tuple[str, ...]
     fields: tuple[str, ...]
+    groupby: tuple[str, ...]
     ignored: tuple[str, ...]
 
 
@@ -38,30 +39,41 @@ def resolve_plot_columns(
     columns: Sequence[str],
     preferred_axes: Sequence[str],
     preferred_fields: Sequence[str],
+    preferred_groupby: Sequence[str] = (),
 ) -> PlotColumns:
     """Resolve stored plot preferences into ordered, disjoint column roles."""
 
     columns = _ordered_unique(columns)
     available = set(columns)
-    axes = [column for column in _ordered_unique(preferred_axes) if column in available]
+    groupby = [
+        column for column in _ordered_unique(preferred_groupby) if column in available
+    ]
+    groupby_set = set(groupby)
+    axes = [
+        column
+        for column in _ordered_unique(preferred_axes)
+        if column in available and column not in groupby_set
+    ]
     axes_set = set(axes)
     fields = [
         column
         for column in _ordered_unique(preferred_fields)
-        if column in available and column not in axes_set
+        if column in available and column not in groupby_set and column not in axes_set
     ]
     fields_set = set(fields)
     ignored = [
         column
         for column in columns
-        if column not in axes_set and column not in fields_set
+        if column not in groupby_set
+        and column not in axes_set
+        and column not in fields_set
     ]
 
     if not axes and ignored:
         axes.append(ignored.pop(0))
     if not fields and ignored:
         fields.append(ignored.pop(0))
-    return PlotColumns(tuple(axes), tuple(fields), tuple(ignored))
+    return PlotColumns(tuple(axes), tuple(fields), tuple(groupby), tuple(ignored))
 
 
 def _ordered_unique(items: Sequence[str]) -> tuple[str, ...]:
@@ -131,6 +143,7 @@ class LogRecord:
             self.columns,
             self.meta.root.get("plot_axes", ()),
             self.meta.root.get("plot_fields", ()),
+            self.meta.root.get("plot_groupby", ()),
         )
 
     @property

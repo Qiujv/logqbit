@@ -33,7 +33,7 @@ logqbit-live-plotter
 
 ## 实用命令
 
-在当前目录创建 `logqbit_example/`，生成示例数据并启动图形化浏览器。
+在当前目录的 `logqbit_example/` 中生成一批示例数据，并启动图形化浏览器。
 
 ```bash
 logqbit browser-demo

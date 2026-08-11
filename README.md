@@ -50,7 +50,9 @@ print(lf.df)
 logqbit browser
 ```
 
-或者也可以通过 `logqbit shortcuts` 创建桌面快捷方式（仅 Windows 可用）。
+此功能需要安装 `logqbit[gui]`。
+
+你还可以通过 `logqbit shortcuts` 创建桌面快捷方式（仅 Windows 可用）。
 
 ### 用例 3：生成示例数据并打开浏览器
 
@@ -58,7 +60,7 @@ logqbit browser
 logqbit browser-demo
 ```
 
-这会在当前目录创建 `logqbit_example/`，生成示例数据并启动图形化浏览器。
+这会在当前目录的 `logqbit_example/` 中追加一批示例记录，并启动图形化浏览器。
 
 更多内容：
 

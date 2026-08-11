@@ -47,18 +47,33 @@ def test_resolve_plot_columns_applies_preferences_and_defaults() -> None:
     ) == PlotColumns(
         axes=("y",),
         fields=("signal",),
+        groupby=(),
         ignored=("x", "reference"),
     )
 
     assert resolve_plot_columns(["x", "signal", "reference"], [], []) == PlotColumns(
         axes=("x",),
         fields=("signal",),
+        groupby=(),
         ignored=("reference",),
     )
     assert resolve_plot_columns(["x", "signal"], "x", "signal") == PlotColumns(
         axes=("x",),
         fields=("signal",),
+        groupby=(),
         ignored=(),
+    )
+
+    assert resolve_plot_columns(
+        ["device", "x", "signal", "note"],
+        ["device", "x"],
+        ["signal", "device"],
+        ["missing", "device", "device"],
+    ) == PlotColumns(
+        axes=("x",),
+        fields=("signal",),
+        groupby=("device",),
+        ignored=("note",),
     )
 
 
@@ -147,7 +162,8 @@ def test_record_uses_editable_defaults_for_invalid_metadata(
     assert record.trash is False
     assert record.meta.plot_axes == ()
     assert record.meta.plot_fields == ()
-    assert record.resolved_plot_columns == PlotColumns((), (), ())
+    assert record.meta.plot_groupby == ()
+    assert record.resolved_plot_columns == PlotColumns((), (), (), ())
 
     record.meta.update(title="repaired")
 
@@ -219,6 +235,7 @@ def test_record_reads_current_in_memory_metadata(
         trash=True,
         plot_axes=["x"],
         plot_fields=["z"],
+        plot_groupby=["y"],
     )
 
     assert record.title == "updated"
@@ -226,10 +243,12 @@ def test_record_reads_current_in_memory_metadata(
     assert record.trash is True
     assert record.meta.plot_axes == ("x",)
     assert record.meta.plot_fields == ("z",)
+    assert record.meta.plot_groupby == ("y",)
     assert record.resolved_plot_columns == PlotColumns(
         axes=("x",),
         fields=("z",),
-        ignored=("y",),
+        groupby=("y",),
+        ignored=(),
     )
 
 
@@ -255,6 +274,7 @@ def test_metadata_refresh_resolves_plot_columns_without_inspecting_data(
     assert refreshed.resolved_plot_columns == PlotColumns(
         axes=("z",),
         fields=("x",),
+        groupby=(),
         ignored=("y",),
     )
 

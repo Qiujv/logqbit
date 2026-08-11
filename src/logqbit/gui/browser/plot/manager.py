@@ -35,15 +35,26 @@ if TYPE_CHECKING:
 from logqbit.catalog import resolve_plot_columns
 from logqbit.gui.browser.plot.cursor import CursorController, CursorSeries
 from logqbit.gui.browser.plot.fitting import FitController, FitViewBox
+from logqbit.gui.browser.plot.grouping import iter_plot_groups
 from logqbit.gui.browser.plot.mesh import build_plot_mesh
 
 PLOT_EXPORT_SCALE = 2
 PLOT_AUTO_RANGE_PADDING = 0.02
 COLOR_BAR_HEIGHT_FACTOR = 0.9
+PLOT_COLORS = (
+    "#1E90FF",
+    "#FF6347",
+    "#32CD32",
+    "#FF8C00",
+    "#9370DB",
+    "#00CED1",
+    "#FF1493",
+    "#8B4513",
+)
 
 
 class TagBar(QWidget):
-    """Assign columns to axes, fields, and ignored sections by dragging."""
+    """Assign columns to plot roles by dragging between sections."""
 
     changed = Signal()
     save_clicked = Signal()
@@ -56,7 +67,7 @@ class TagBar(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(4)
-        layout.addWidget(QLabel("axes | fields:"))
+        layout.addWidget(QLabel("axes | fields | group:"))
 
         self._list = QListWidget()
         self._list.setFlow(QListView.LeftToRight)
@@ -110,7 +121,7 @@ class TagBar(QWidget):
             item = self._list.item(index)
             if item.text() == self._SEP:
                 separator_count += 1
-            elif separator_count >= 2:
+            elif separator_count >= 3:
                 item.setForeground(self._GRAY)
             else:
                 item.setData(Qt.ForegroundRole, None)
@@ -120,8 +131,14 @@ class TagBar(QWidget):
         columns: Sequence[str],
         plot_axes: Sequence[str],
         plot_fields: Sequence[str],
+        plot_groupby: Sequence[str],
     ) -> None:
-        resolved = resolve_plot_columns(columns, plot_axes, plot_fields)
+        resolved = resolve_plot_columns(
+            columns,
+            plot_axes,
+            plot_fields,
+            plot_groupby,
+        )
 
         self._loading = True
         try:
@@ -132,6 +149,9 @@ class TagBar(QWidget):
             for name in resolved.fields:
                 self._list.addItem(name)
             self._list.addItem(self._make_sep())
+            for name in resolved.groupby:
+                self._list.addItem(name)
+            self._list.addItem(self._make_sep())
             for name in resolved.ignored:
                 item = QListWidgetItem(name)
                 item.setForeground(self._GRAY)
@@ -139,7 +159,7 @@ class TagBar(QWidget):
         finally:
             self._loading = False
 
-    def _split(self) -> tuple[list[str], list[str], list[str]]:
+    def _split(self) -> tuple[list[str], list[str], list[str], list[str]]:
         sections: list[list[str]] = []
         current: list[str] = []
         for index in range(self._list.count()):
@@ -150,9 +170,9 @@ class TagBar(QWidget):
             else:
                 current.append(text)
         sections.append(current)
-        while len(sections) < 3:
+        while len(sections) < 4:
             sections.append([])
-        return sections[0], sections[1], sections[2]
+        return sections[0], sections[1], sections[2], sections[3]
 
     @property
     def axes(self) -> list[str]:
@@ -162,6 +182,10 @@ class TagBar(QWidget):
     def fields(self) -> list[str]:
         return self._split()[1]
 
+    @property
+    def groupby(self) -> list[str]:
+        return self._split()[2]
+
 
 class PlotManager:
     def __init__(self, parent: QWidget | None = None):
@@ -170,7 +194,9 @@ class PlotManager:
         self._suppress_updates = False
         self._needs_refresh = False
         self._color_bar: pg.ColorBarItem | None = None
+        self._legend: pg.LegendItem | None = None
         self._mesh_item: pg.PColorMeshItem | None = None
+        self._mesh_items: list[pg.PColorMeshItem] = []
         self._mesh_levels: tuple[float, float] | None = None
         self._mesh_z_column: str | None = None
         self.widget = self._create_widget(parent)
@@ -421,12 +447,13 @@ class PlotManager:
         record.meta.update(
             plot_axes=self.tag_bar.axes,
             plot_fields=self.tag_bar.fields,
+            plot_groupby=self.tag_bar.groupby,
         )
 
     def reset_plot_state(self, message: str = "No data to plot.") -> None:
         self._plot_record = None
         self._plot_frame = None
-        self.tag_bar.set_columns([], [], [])
+        self.tag_bar.set_columns([], [], [], [])
         self._clear_plot(message)
         self._needs_refresh = False
 
@@ -444,14 +471,19 @@ class PlotManager:
         frame: pd.DataFrame | None,
     ) -> None:
         if frame is None or frame.empty or not len(frame.columns):
-            self.tag_bar.set_columns([], [], [])
+            self.tag_bar.set_columns([], [], [], [])
             return
 
         columns = list(frame.columns)
         resolved = record.resolved_plot_columns
 
         self._suppress_updates = True
-        self.tag_bar.set_columns(columns, resolved.axes, resolved.fields)
+        self.tag_bar.set_columns(
+            columns,
+            resolved.axes,
+            resolved.fields,
+            resolved.groupby,
+        )
         self._suppress_updates = False
 
     def update_plot(
@@ -480,11 +512,12 @@ class PlotManager:
 
         axes = self.tag_bar.axes
         fields = self.tag_bar.fields
+        groupby = self.tag_bar.groupby
 
         if len(axes) == 1 and len(fields) >= 1:
-            self._refresh_plot_1d(axes[0], fields)
+            self._refresh_plot_1d(axes[0], fields, groupby)
         elif len(axes) >= 2 and len(fields) >= 1:
-            self._refresh_plot_2d(axes[0], axes[1], fields[0])
+            self._refresh_plot_2d(axes[0], axes[1], fields[0], groupby)
         else:
             self._clear_plot("No data to plot.")
 
@@ -495,6 +528,7 @@ class PlotManager:
         hide_fit_buttons: bool = True,
     ) -> None:
         self._mesh_item = None
+        self._mesh_items = []
         self._mesh_levels = None
         self._mesh_z_column = None
         self.cursor_controller.clear()
@@ -502,9 +536,35 @@ class PlotManager:
         if hide_fit_buttons:
             self.fit_controller.set_visible(False)
         self.plot_widget.clear()
+        self._clear_legend()
         self._hide_color_bar()
         if message is not None:
             self.plot_status_label.setText(message)
+
+    def _clear_legend(self) -> None:
+        if self._legend is None:
+            return
+        plot_item = self.plot_widget.getPlotItem()
+        self._legend.clear()
+        scene = self._legend.scene()
+        if scene is not None:
+            scene.removeItem(self._legend)
+        if plot_item is not None:
+            plot_item.legend = None
+        self._legend = None
+
+    def _show_legend(self) -> None:
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is not None:
+            self._legend = plot_item.addLegend(
+                offset=(10, 10),
+                horSpacing=1,
+                verSpacing=-4,
+                pen=pg.mkPen(None),
+                brush=pg.mkBrush(255, 255, 255, 200),
+                labelTextSize="8pt",
+            )
+            self._legend.layout.setContentsMargins(2, 2, 2, 2)
 
     def _hide_color_bar(self) -> None:
         if self._color_bar is None:
@@ -557,7 +617,12 @@ class PlotManager:
         )
         plot_item.layout.setAlignment(self._color_bar, Qt.AlignVCenter)
 
-    def _refresh_plot_1d(self, x_col: str, y_cols: list[str]) -> None:
+    def _refresh_plot_1d(
+        self,
+        x_col: str,
+        y_cols: list[str],
+        groupby: Sequence[str] = (),
+    ) -> None:
         record = self._plot_record
         if record is None:
             self._clear_plot("No log selected.")
@@ -568,67 +633,74 @@ class PlotManager:
             self._clear_plot("No data to plot.")
             return
 
-        if x_col not in frame.columns:
-            self._clear_plot(f"Column '{x_col}' not in data.")
-            return
+        for col in (x_col, *groupby):
+            if col not in frame.columns:
+                self._clear_plot(f"Column '{col}' not in data.")
+                return
 
-        x_values = pd.to_numeric(frame[x_col], errors="coerce")
         self._clear_plot(hide_fit_buttons=False)
         self.fit_controller.set_visible(True)
+        if groupby:
+            self._show_legend()
 
-        COLORS = [
-            "#1E90FF",
-            "#FF6347",
-            "#32CD32",
-            "#FF8C00",
-            "#9370DB",
-            "#00CED1",
-            "#FF1493",
-            "#8B4513",
-        ]
         plotted = 0
+        plotted_groups: set[str] = set()
         fit_series: tuple[np.ndarray, np.ndarray, str, str] | None = None
         cursor_series: list[CursorSeries] = []
-        for i, y_col in enumerate(y_cols):
-            if y_col not in frame.columns:
-                continue
-            y_values = pd.to_numeric(frame[y_col], errors="coerce")
-            df = pd.DataFrame({"x": x_values, "y": y_values}).dropna()
-            if df.empty:
-                continue
-            color = COLORS[i % len(COLORS)]
-            show_markers = len(df) <= 2001
-            pen = pg.mkPen(color=color, width=2)
-            if show_markers:
-                self.plot_widget.plot(
-                    df["x"].values,
-                    df["y"].values,
-                    pen=pen,
-                    name=y_col,
-                    symbol="o",
-                    symbolSize=6,
-                    symbolPen=pg.mkPen(color=color),
-                    symbolBrush=pg.mkBrush("#FFFFFF"),
+        for plot_group in iter_plot_groups(frame, groupby):
+            x_values = pd.to_numeric(plot_group.frame[x_col], errors="coerce")
+            for y_col in y_cols:
+                if y_col not in plot_group.frame.columns:
+                    continue
+                y_values = pd.to_numeric(plot_group.frame[y_col], errors="coerce")
+                df = pd.DataFrame({"x": x_values, "y": y_values}).dropna()
+                if df.empty:
+                    continue
+                color = PLOT_COLORS[plotted % len(PLOT_COLORS)]
+                series_name = (
+                    f"{y_col} | {plot_group.label}" if plot_group.label else y_col
                 )
-            else:
-                self.plot_widget.plot(
-                    df["x"].values, df["y"].values, pen=pen, name=y_col
+                legend_name = (
+                    plot_group.label
+                    if plot_group.label and len(y_cols) == 1
+                    else series_name
                 )
-            if fit_series is None:
-                fit_series = (
-                    df["x"].to_numpy(dtype=float),
-                    df["y"].to_numpy(dtype=float),
-                    y_col,
-                    color,
+                show_markers = len(df) <= 2001
+                pen = pg.mkPen(color=color, width=2)
+                if show_markers:
+                    self.plot_widget.plot(
+                        df["x"].values,
+                        df["y"].values,
+                        pen=pen,
+                        name=legend_name,
+                        symbol="o",
+                        symbolSize=6,
+                        symbolPen=pg.mkPen(color=color),
+                        symbolBrush=pg.mkBrush("#FFFFFF"),
+                    )
+                else:
+                    self.plot_widget.plot(
+                        df["x"].values,
+                        df["y"].values,
+                        pen=pen,
+                        name=legend_name,
+                    )
+                if fit_series is None:
+                    fit_series = (
+                        df["x"].to_numpy(dtype=float),
+                        df["y"].to_numpy(dtype=float),
+                        series_name,
+                        color,
+                    )
+                cursor_series.append(
+                    CursorSeries(
+                        df["x"].to_numpy(dtype=float),
+                        df["y"].to_numpy(dtype=float),
+                        series_name,
+                    )
                 )
-            cursor_series.append(
-                CursorSeries(
-                    df["x"].to_numpy(dtype=float),
-                    df["y"].to_numpy(dtype=float),
-                    y_col,
-                )
-            )
-            plotted += 1
+                plotted += 1
+                plotted_groups.add(plot_group.label)
 
         if plotted == 0:
             self._clear_plot("No numeric data to plot.")
@@ -640,14 +712,23 @@ class PlotManager:
             plot_item.autoRange(padding=PLOT_AUTO_RANGE_PADDING)
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", ", ".join(y_cols))
-        self.plot_status_label.setText(f"1D plot: {x_col} vs {', '.join(y_cols[:3])}")
+        status = f"1D plot: {x_col} vs {', '.join(y_cols[:3])}"
+        if groupby:
+            status += f" ({len(plotted_groups)} groups, {plotted} curves)"
+        self.plot_status_label.setText(status)
         self.cursor_controller.configure_1d(cursor_series)
         if fit_series is not None:
             self.fit_controller.set_series(*fit_series)
         else:
             self.fit_controller.disable("No numeric field is available for fitting.")
 
-    def _refresh_plot_2d(self, x_col: str, y_col: str, z_col: str) -> None:
+    def _refresh_plot_2d(
+        self,
+        x_col: str,
+        y_col: str,
+        z_col: str,
+        groupby: Sequence[str] = (),
+    ) -> None:
         self.fit_controller.set_visible(False)
         record = self._plot_record
         if record is None:
@@ -659,44 +740,74 @@ class PlotManager:
             self._clear_plot("No data to plot.")
             return
 
-        for col in (x_col, y_col, z_col):
+        for col in (x_col, y_col, z_col, *groupby):
             if col not in frame.columns:
                 self._clear_plot(f"Column '{col}' not in data.")
                 return
 
-        sub = frame[[x_col, y_col, z_col]]
-        if all(np.issubdtype(t, np.number) for t in sub.dtypes):
-            arr = sub.to_numpy(dtype=float, copy=False)
-        else:
-            arr = sub.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        mesh_groups = []
+        for plot_group in iter_plot_groups(frame, groupby):
+            sub = plot_group.frame[[x_col, y_col, z_col]]
+            if all(np.issubdtype(t, np.number) for t in sub.dtypes):
+                arr = sub.to_numpy(dtype=float, copy=False)
+            else:
+                arr = sub.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
 
-        mask = ~np.isnan(arr).any(axis=1)
-        if not mask.any():
+            mask = ~np.isnan(arr).any(axis=1)
+            if not mask.any():
+                continue
+            filtered = arr[mask]
+            mesh = build_plot_mesh(filtered[:, 0], filtered[:, 1], filtered[:, 2])
+            mesh_groups.append((plot_group.label, mesh))
+
+        if not mesh_groups:
             self._clear_plot("No numeric data to plot.")
             return
 
-        filtered = arr[mask]
-        x_data, y_data, z_data = filtered[:, 0], filtered[:, 1], filtered[:, 2]
-        mesh_data = build_plot_mesh(x_data, y_data, z_data)
+        levels = (
+            min(mesh.levels[0] for _, mesh in mesh_groups),
+            max(mesh.levels[1] for _, mesh in mesh_groups),
+        )
 
         self._mesh_item = None
+        self._mesh_items = []
         self._mesh_levels = None
         self._mesh_z_column = None
         self.cursor_controller.clear()
         self.fit_controller.disable("Fit is only available for 1D plots.")
         self.plot_widget.clear()
-        pcm = pg.PColorMeshItem(
-            mesh_data.x_corners,
-            mesh_data.y_corners,
-            mesh_data.z_grid,
-            colorMap=self.cmap,
-            levels=mesh_data.levels,
+        self._clear_legend()
+        if groupby:
+            self._show_legend()
+
+        rendered_groups = []
+        for index, (label, mesh) in enumerate(mesh_groups):
+            pcm = pg.PColorMeshItem(
+                mesh.x_corners,
+                mesh.y_corners,
+                mesh.z_grid,
+                colorMap=self.cmap,
+                levels=levels,
+            )
+            self.plot_widget.addItem(pcm)
+            self._mesh_items.append(pcm)
+            rendered_groups.append((label, mesh, pcm))
+
+            if self._legend is not None:
+                color = PLOT_COLORS[index % len(PLOT_COLORS)]
+                legend_sample = pg.PlotDataItem(
+                    pen=pg.mkPen(color=color, width=2),
+                )
+                self._legend.addItem(legend_sample, label)
+
+        cursor_label, cursor_mesh, cursor_pcm = max(
+            rendered_groups,
+            key=lambda item: item[1].point_count,
         )
-        self.plot_widget.addItem(pcm)
-        self._mesh_item = pcm
-        self._mesh_levels = mesh_data.levels
+        self._mesh_item = cursor_pcm
+        self._mesh_levels = levels
         self._mesh_z_column = z_col
-        self._show_color_bar(pcm, mesh_data.levels, z_col)
+        self._show_color_bar(cursor_pcm, levels, z_col)
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", y_col)
 
@@ -705,11 +816,25 @@ class PlotManager:
             plot_item.enableAutoRange(enable=True)
             plot_item.autoRange(padding=PLOT_AUTO_RANGE_PADDING)
 
-        self.plot_status_label.setText(
-            f"2D plot: {mesh_data.point_count} points → "
-            f"{mesh_data.x_column_count}×{mesh_data.max_y_count} mesh"
+        total_points = sum(mesh.point_count for _, mesh, _ in rendered_groups)
+        if groupby:
+            status = (
+                f"2D plot: {total_points} points in {len(rendered_groups)} group(s); "
+                f"cursor uses {cursor_label} ({cursor_mesh.point_count} points)"
+            )
+        else:
+            status = (
+                f"2D plot: {cursor_mesh.point_count} points → "
+                f"{cursor_mesh.x_column_count}×{cursor_mesh.max_y_count} mesh"
+            )
+        self.plot_status_label.setText(status)
+        self.cursor_controller.configure_2d(
+            cursor_mesh,
+            x_col,
+            y_col,
+            z_col,
+            group_label=cursor_label,
         )
-        self.cursor_controller.configure_2d(mesh_data, x_col, y_col, z_col)
 
     @functools.cached_property
     def cmap(self):

@@ -62,18 +62,23 @@ Browser 把含有 `metadata.json` 的直接子目录识别为有效记录。
 
 ## 选择绘图列
 
-Plot 顶部的 TagBar 由两个分隔符划分为三段：
+Plot 顶部的 TagBar 由三个分隔符划分为四段：
 
 ```text
-axes | fields | ignored
+axes | fields | group | ignored
 ```
 
 拖动列名即可改变用途，图像会立即更新。右键点击 TagBar 并选择 `Save`，会把当前
-`plot_axes` 和 `plot_fields` 写入 `metadata.json`。如果 metadata 没有提供有效选择，
-TagBar 会按原始列顺序尽量取第一列作为 axis、第二列作为 field，让 Plot 页先有图可画。
+`plot_axes`、`plot_fields` 和 `plot_groupby` 写入 `metadata.json`。如果 metadata 没有提供
+有效 axis/field，TagBar 会按原始列顺序尽量取第一列作为 axis、第二列作为 field，让
+Plot 页先有图可画；group 中的列不会被用作默认 axis 或 field。
 
 - 一个 axis 加一个或多个 fields 会绘制 1D 曲线。
 - 两个或更多 axes 加至少一个 field 会绘制 2D 色图；只使用前两个 axes 和第一个 field。
+- group 非空时，会按照一列或多列值的组合分别绘图。1D 图为每组曲线显示 legend；
+  2D 图把各组 mesh 叠加在同一画布并共享色标。若 mesh 重叠，后绘制的组会遮盖先绘制的组。
+- 分组 2D cursor 使用有效点最多的一组；点数相同时使用数据中先出现的组。状态栏会显示
+  cursor 当前使用的组。
 
 ## 1D 拟合
 
