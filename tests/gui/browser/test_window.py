@@ -1,20 +1,35 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QEventLoop, QSettings, Qt, QTimer
 from PySide6.QtGui import QColor, QKeySequence, QPalette
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox, QStyle, QStyleOptionViewItem
+from PySide6.QtWidgets import (
+    QApplication,
+    QMessageBox,
+    QStyle,
+    QStyleOptionViewItem,
+)
 
 from logqbit import catalog as catalog_module
-from logqbit.catalog import LogCatalog, LogRecord
+from logqbit.catalog import (
+    LOGFOLDER_SID_COLUMN,
+    LogCatalog,
+    LogRecord,
+    MergeRecordsError,
+    MergeRecordsResult,
+    PreparedMerge,
+)
 from logqbit.gui.browser.window.model import (
     COL_CREATE_TIME,
     COL_ROWS,
 )
+from logqbit.gui.browser.window import merge as merge_module
+from logqbit.gui.browser.window.merge import MergeDialog
 from logqbit.gui.browser.window.view import LogBrowserWindow, LogListItemDelegate
 
 
@@ -42,9 +57,9 @@ class TestBrowserWindow:
             option.palette = palette
 
             display_option = LogListItemDelegate._display_option(option)
-            assert display_option.palette.color(
-                QPalette.HighlightedText
-            ) == QColor("white")
+            assert display_option.palette.color(QPalette.HighlightedText) == QColor(
+                "white"
+            )
         finally:
             window.close()
 
@@ -205,6 +220,294 @@ class TestBrowserWindow:
             actions[1].trigger()
             assert not window.log_table.isColumnHidden(COL_CREATE_TIME)
         finally:
+            window.close()
+
+    def test_append_target_uses_cached_columns_without_reading_data(
+        self,
+        sample_records: list[LogRecord],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        aggregate = LogRecord(
+            sample_records[0].path,
+            row_count=sample_records[0].row_count,
+            columns=(*sample_records[0].columns, LOGFOLDER_SID_COLUMN),
+            data_version=sample_records[0].data_version,
+        )
+        monkeypatch.setattr(
+            LogRecord,
+            "read_dataframe",
+            lambda _self: pytest.fail("finding the append target must not load data"),
+        )
+
+        assert (
+            PreparedMerge.find_append_target([sample_records[1], aggregate])
+            is aggregate
+        )
+        assert PreparedMerge.find_append_target(sample_records[:2]) is None
+
+    def test_append_opens_persistent_dialog_for_sole_sid_record(
+        self,
+        sample_records: list[LogRecord],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        window = LogBrowserWindow(sample_records[0].path.parent)
+        shown: list[tuple[list[LogRecord], LogRecord | None]] = []
+        monkeypatch.setattr(
+            window._actions,
+            "_show_merge_dialog",
+            lambda records, target=None: shown.append((records, target)),
+        )
+        try:
+            aggregate = LogRecord(
+                sample_records[0].path,
+                row_count=sample_records[0].row_count,
+                columns=(*sample_records[0].columns, LOGFOLDER_SID_COLUMN),
+                data_version=sample_records[0].data_version,
+            )
+            window._actions.append_into_existing_record([sample_records[1], aggregate])
+
+            assert len(shown) == 1
+            assert [record.path for record in shown[0][0]] == [
+                sample_records[1].path,
+                aggregate.path,
+            ]
+            assert shown[0][1] is aggregate
+        finally:
+            window.close()
+
+    def test_merge_dialog_summary_lists_folders_and_write_button_up_front(
+        self,
+        sample_records: list[LogRecord],
+    ) -> None:
+        window = LogBrowserWindow(sample_records[0].path.parent)
+        dialog = MergeDialog(
+            window,
+            sample_records[:2],
+            sample_records[0].path.parent,
+            target=sample_records[0],
+        )
+        try:
+            assert dialog._summary_label.text() == (
+                "Appending 1 folder into #0:\n#0: a, b, 1 rows\n#1: x, y, 1 rows"
+            )
+            assert dialog._write_button.text() == "Write File"
+            assert not dialog._write_button.isEnabled()
+        finally:
+            dialog.close()
+            window.close()
+
+    def test_merge_dialog_prepares_and_writes_in_one_window(
+        self,
+        sample_logfolder: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        refreshes: list[bool] = []
+        monkeypatch.setattr(window, "refresh_logs", lambda: refreshes.append(True))
+
+        prepared = SimpleNamespace(
+            is_noop=False,
+            target=None,
+            row_count=12,
+            appended_records=2,
+            skipped_records=0,
+            staging_path=None,
+            discard=lambda: None,
+        )
+        published: list[object] = []
+        records = scan_catalog(sample_logfolder)
+
+        def prepare(selected, destination):
+            assert selected == records
+            assert destination == sample_logfolder
+            return prepared
+
+        def publish():
+            published.append(prepared)
+            return MergeRecordsResult(
+                path=sample_logfolder / "3",
+                row_count=12,
+                appended_records=2,
+                skipped_records=0,
+                created=True,
+            )
+
+        prepared.publish = publish
+        monkeypatch.setattr(
+            merge_module.PreparedMerge,
+            "for_new_folder",
+            classmethod(
+                lambda _cls, selected, destination: prepare(selected, destination)
+            ),
+        )
+
+        analysis_loop = QEventLoop()
+        analyzed: list[bool] = []
+        completed: list[bool] = []
+        dialog = MergeDialog(
+            window,
+            records,
+            sample_logfolder,
+        )
+        dialog.files_written.connect(window.refresh_logs)
+        dialog.analysis_finished.connect(
+            lambda succeeded: (analyzed.append(succeeded), analysis_loop.quit())
+        )
+        dialog.merge_finished.connect(completed.append)
+        QTimer.singleShot(3000, analysis_loop.quit)
+        try:
+            assert "#0: x, y, z, 3 rows" in dialog._summary_label.text()
+            assert dialog._write_button.text() == "Write File"
+            assert not dialog._write_button.isEnabled()
+
+            analysis_loop.exec()
+
+            assert analyzed == [True]
+            assert published == []
+            assert dialog._write_button.isEnabled()
+            assert dialog._status_label.text() == "Ready to merge."
+
+            dialog._write_button.click()
+
+            assert completed == [True]
+            assert published == [prepared]
+            assert refreshes == [True]
+            assert dialog._status_label.text() == "Merge complete."
+            assert dialog._detail_label.text() == (
+                f"12 rows written to:\n{sample_logfolder / '3'}"
+            )
+            assert dialog._write_button.isHidden()
+            assert dialog._cancel_button.text() == "Close"
+            assert dialog._cancel_button.isEnabled()
+        finally:
+            dialog.close()
+            window.close()
+
+    def test_merge_dialog_keeps_validation_failure_in_same_window(
+        self,
+        sample_logfolder: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        records = scan_catalog(sample_logfolder)
+        target = records[0]
+
+        def prepare_append(selected):
+            assert selected == records
+            raise MergeRecordsError(
+                "The selected records need at least two common data columns."
+            )
+
+        prepared = SimpleNamespace(
+            is_noop=False,
+            target=None,
+            row_count=3,
+            appended_records=1,
+            skipped_records=0,
+            staging_path=None,
+            discard=lambda: None,
+        )
+
+        def prepare_new(selected, destination):
+            assert selected == records
+            assert destination == sample_logfolder
+            return prepared
+
+        monkeypatch.setattr(
+            merge_module.PreparedMerge,
+            "for_append",
+            classmethod(lambda _cls, selected: prepare_append(selected)),
+        )
+        monkeypatch.setattr(
+            merge_module.PreparedMerge,
+            "for_new_folder",
+            classmethod(
+                lambda _cls, selected, destination: prepare_new(selected, destination)
+            ),
+        )
+
+        loop = QEventLoop()
+        analyzed: list[bool] = []
+        dialog = MergeDialog(
+            window,
+            records,
+            sample_logfolder,
+            target=target,
+        )
+        dialog.analysis_finished.connect(
+            lambda succeeded: (analyzed.append(succeeded), loop.quit())
+        )
+        QTimer.singleShot(3000, loop.quit)
+        try:
+            loop.exec()
+
+            assert analyzed == [False]
+            assert dialog._status_label.text() == "Fail to merge."
+            assert dialog._detail_label.text() == (
+                "The selected records need at least two common data columns."
+            )
+            assert not dialog._try_new_button.isHidden()
+            assert dialog._cancel_button.text() == "Close"
+
+            dialog._try_new_button.click()
+
+            assert dialog._target is None
+            assert "into a new folder" in dialog._summary_label.text()
+            assert dialog._status_label.text() == "Ready to merge."
+            assert dialog._write_button.isEnabled()
+        finally:
+            dialog.close()
+            window.close()
+
+    def test_merge_dialog_displays_noop_without_enabling_write_back(
+        self,
+        sample_logfolder: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        records = scan_catalog(sample_logfolder)
+        target = records[0]
+        prepared = SimpleNamespace(
+            is_noop=True,
+            target=target,
+            row_count=20,
+            appended_records=0,
+            skipped_records=2,
+            staging_path=None,
+            discard=lambda: None,
+        )
+        monkeypatch.setattr(
+            merge_module.PreparedMerge,
+            "for_append",
+            classmethod(lambda _cls, _records: prepared),
+        )
+        loop = QEventLoop()
+        analyzed: list[bool] = []
+        dialog = MergeDialog(
+            window,
+            records,
+            sample_logfolder,
+            target=target,
+        )
+        dialog.analysis_finished.connect(
+            lambda succeeded: (analyzed.append(succeeded), loop.quit())
+        )
+        QTimer.singleShot(3000, loop.quit)
+        try:
+            assert dialog._write_button.text() == "Write File"
+            assert not dialog._write_button.isEnabled()
+
+            loop.exec()
+
+            assert analyzed == [True]
+            assert not dialog._write_button.isEnabled()
+            assert dialog._status_label.text() == "No merge needed."
+            assert (
+                "already contains all selected sources" in dialog._detail_label.text()
+            )
+            assert dialog._cancel_button.text() == "Close"
+        finally:
+            dialog.close()
             window.close()
 
     def test_open_explorer_shortcut_is_scoped_to_log_table(

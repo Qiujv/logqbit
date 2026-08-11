@@ -635,10 +635,9 @@ class PlotManager:
             self._legend = plot_item.addLegend(
                 offset=(10, 10),
                 horSpacing=1,
-                verSpacing=-4,
+                verSpacing=0,
                 pen=pg.mkPen(None),
                 brush=pg.mkBrush(255, 255, 255, 200),
-                labelTextSize="8pt",
             )
             self._legend.layout.setContentsMargins(2, 2, 2, 2)
 

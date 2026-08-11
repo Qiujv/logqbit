@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 from send2trash import send2trash
 
-from logqbit.catalog import LogCatalog, LogRecord, export_records
+from logqbit.catalog import LogCatalog, LogRecord, PreparedMerge, export_records
 from logqbit.gui.browser.detail.files import open_in_file_manager
 from logqbit.gui.browser.detail.view import RecordDetailView, RecordDetailWindow
 from logqbit.gui.browser.plot.mesh import warmup_plotter_jit
@@ -60,6 +60,7 @@ from logqbit.gui.browser.window.model import (
     SORT_ROLE,
     LogListTableModel,
 )
+from logqbit.gui.browser.window.merge import MergeDialog
 from logqbit.gui.browser.window.preferences import SettingsManager, ThemeManager
 
 logger = logging.getLogger(__name__)
@@ -572,7 +573,14 @@ class _BrowserActions:
         toggle_trash_action.setCheckable(True)
         send_to_recycle_action = menu.addAction("Send to Recycle Bin (Del)")
         open_explorer = menu.addAction("Open in Explorer (Ctrl+Enter)")
+        menu.addSeparator()
+        merge_new_action = menu.addAction("Merge into New LogFolder...")
+        append_action = menu.addAction("Append into Existing LogFolder...")
         export_action = menu.addAction("Export Items...")
+        can_merge = len(records) >= 2
+        append_target = PreparedMerge.find_append_target(records)
+        merge_new_action.setEnabled(can_merge)
+        append_action.setEnabled(append_target is not None)
         if not records:
             rename_action.setEnabled(False)
             toggle_star_action.setEnabled(False)
@@ -603,8 +611,38 @@ class _BrowserActions:
             self.toggle_show_starred_only()
         elif chosen == open_explorer and records:
             self.open_path_in_explorer(records[0].path, len(records) != 1)
+        elif chosen == merge_new_action and can_merge:
+            self.merge_into_new_logfolder(records)
+        elif chosen == append_action and append_target is not None:
+            self.append_into_existing_record(records)
         elif chosen == export_action and records:
             self.export_records(records)
+
+    def merge_into_new_logfolder(self, records: Iterable[LogRecord]) -> None:
+        self._show_merge_dialog(list(records))
+
+    def append_into_existing_record(
+        self,
+        records: Iterable[LogRecord],
+    ) -> None:
+        records = list(records)
+        target = PreparedMerge.find_append_target(records)
+        if target is not None:
+            self._show_merge_dialog(records, target)
+
+    def _show_merge_dialog(
+        self,
+        records: list[LogRecord],
+        target: LogRecord | None = None,
+    ) -> None:
+        dialog = MergeDialog(
+            self.window,
+            records,
+            self.window._base_dir,
+            target=target,
+        )
+        dialog.files_written.connect(self.window._schedule_list_refresh)
+        dialog.exec()
 
     def open_header_context_menu(self, point) -> None:
         menu = self.create_header_context_menu()

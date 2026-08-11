@@ -232,7 +232,7 @@ class TestPlotManagerFitAndColorBar:
         assert manager._legend.brush().color().alpha() == 200
         assert manager._legend.pen().style() == Qt.NoPen
         assert manager._legend.layout.horizontalSpacing() == 1
-        assert manager._legend.layout.verticalSpacing() == -4
+        assert manager._legend.layout.verticalSpacing() == 0
         assert manager._legend.layout.getContentsMargins() == (2.0, 2.0, 2.0, 2.0)
         assert "2 groups, 2 curves" in manager.plot_status_label.text()
         manager.widget.deleteLater()

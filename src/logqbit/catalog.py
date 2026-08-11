@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import logging
 import shutil
+import tempfile
+import time
+import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from functools import cached_property
@@ -15,6 +18,20 @@ import pyarrow.ipc
 
 from .file_version import FileVersion
 from .metadata import LogMetadata
+
+__all__ = [
+    "LogCatalog",
+    "LogRecord",
+    "PlotColumns",
+    "resolve_plot_columns",
+    "LOGFOLDER_SID_COLUMN",
+    "MergeRecordsError",
+    "MergeRecordsResult",
+    "PreparedMerge",
+    "append_records_into_record",
+    "merge_records_into_new",
+    "export_records",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -276,6 +293,471 @@ class LogCatalog:
             self._records.values(),
             key=lambda record: _log_name_sort_key(record.path.name),
         )
+
+
+LOGFOLDER_SID_COLUMN = "logfolder_sid"
+
+
+class MergeRecordsError(RuntimeError):
+    """Raised when selected records cannot be merged safely."""
+
+
+@dataclass(frozen=True)
+class MergeRecordsResult:
+    """Summary of one completed record merge."""
+
+    path: Path
+    row_count: int
+    appended_records: int
+    skipped_records: int
+    created: bool
+
+
+@dataclass(frozen=True)
+class _LoadedMergeRecord:
+    record: LogRecord
+    dataframe: pd.DataFrame
+    version: FileVersion
+    source_ids: frozenset[str]
+    had_sid_column: bool
+
+
+@dataclass(frozen=True)
+class PreparedMerge:
+    """Validated in-memory merge awaiting publication."""
+
+    dataframe: pd.DataFrame
+    loaded_records: tuple[_LoadedMergeRecord, ...]
+    source: LogRecord
+    target: LogRecord | None
+    destination_parent: Path | None
+    appended_records: int
+    skipped_records: int
+    staging_path: Path | None
+
+    @property
+    def is_noop(self) -> bool:
+        return self.target is not None and self.appended_records == 0
+
+    @property
+    def row_count(self) -> int:
+        return len(self.dataframe)
+
+    @classmethod
+    def for_new_folder(
+        cls,
+        records: Iterable[LogRecord],
+        destination_parent: str | Path,
+    ) -> PreparedMerge:
+        """Prepare selected records for publication as a new LogFolder."""
+        records = _validate_merge_records(records)
+        loaded = _load_merge_records(records)
+        _require_common_merge_columns(loaded)
+        _reject_overlapping_sources(loaded)
+        dataframe = pd.concat(
+            [item.dataframe for item in loaded],
+            ignore_index=True,
+        )
+        _require_unchanged_merge_sources(loaded)
+        destination_parent = Path(destination_parent)
+        staging_path = _stage_new_merged_logfolder(
+            destination_parent,
+            dataframe,
+            records[0],
+        )
+        return cls(
+            dataframe=dataframe,
+            loaded_records=tuple(loaded),
+            source=records[0],
+            target=None,
+            destination_parent=destination_parent,
+            appended_records=len(records),
+            skipped_records=0,
+            staging_path=staging_path,
+        )
+
+    @classmethod
+    def for_append(
+        cls,
+        records: Iterable[LogRecord],
+    ) -> PreparedMerge:
+        """Prepare records to append to their sole existing aggregate."""
+        records = _validate_merge_records(records)
+        target = cls.find_append_target(records)
+        if target is None:
+            raise MergeRecordsError(
+                f"Append requires exactly one selected record with a "
+                f"{LOGFOLDER_SID_COLUMN} column."
+            )
+
+        loaded = _load_merge_records(records)
+        _require_common_merge_columns(loaded)
+        loaded_target = next(item for item in loaded if item.record.path == target.path)
+        sid_records = [item for item in loaded if item.had_sid_column]
+        if len(sid_records) != 1 or sid_records[0] is not loaded_target:
+            raise MergeRecordsError(
+                f"Append requires exactly one selected record with a "
+                f"{LOGFOLDER_SID_COLUMN} column."
+            )
+
+        source_ids = set(loaded_target.source_ids)
+        frames = [loaded_target.dataframe]
+        appended_records = 0
+        skipped_records = 0
+        for item in loaded:
+            if item is loaded_target:
+                continue
+            if item.source_ids <= source_ids:
+                skipped_records += 1
+                continue
+            overlap = item.source_ids & source_ids
+            if overlap:
+                overlap_text = ", ".join(sorted(overlap))
+                raise MergeRecordsError(
+                    f"Record #{item.record.log_id} partially overlaps the target "
+                    f"through source ID(s): {overlap_text}."
+                )
+            frames.append(item.dataframe)
+            source_ids.update(item.source_ids)
+            appended_records += 1
+
+        if appended_records == 0:
+            _require_unchanged_merge_sources(loaded)
+            return cls(
+                dataframe=loaded_target.dataframe,
+                loaded_records=tuple(loaded),
+                source=target,
+                target=target,
+                destination_parent=None,
+                appended_records=0,
+                skipped_records=skipped_records,
+                staging_path=None,
+            )
+
+        dataframe = pd.concat(frames, ignore_index=True)
+        _require_unchanged_merge_sources(loaded)
+        staging_path = _stage_dataframe(dataframe, target.data_path)
+        return cls(
+            dataframe=dataframe,
+            loaded_records=tuple(loaded),
+            source=target,
+            target=target,
+            destination_parent=None,
+            appended_records=appended_records,
+            skipped_records=skipped_records,
+            staging_path=staging_path,
+        )
+
+    @staticmethod
+    def find_append_target(records: Iterable[LogRecord]) -> LogRecord | None:
+        """Find the sole selected aggregate using cached column summaries."""
+        records = list(records)
+        if len(records) < 2:
+            return None
+        targets = [
+            record for record in records if LOGFOLDER_SID_COLUMN in record.columns
+        ]
+        return targets[0] if len(targets) == 1 else None
+
+    def publish(self) -> MergeRecordsResult:
+        """Publish this prepared merge after rechecking every source version."""
+        if self.target is None:
+            return self._publish_new_folder()
+        return self._publish_append()
+
+    def discard(self) -> None:
+        """Remove temporary files retained by an unpublished merge."""
+        if self.staging_path is None:
+            return
+        if self.staging_path.is_dir():
+            shutil.rmtree(self.staging_path, ignore_errors=True)
+            return
+        try:
+            self.staging_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _publish_new_folder(self) -> MergeRecordsResult:
+        if self.staging_path is None:
+            raise MergeRecordsError("The prepared merge has no staged LogFolder.")
+        if self.destination_parent is None:
+            raise MergeRecordsError("The prepared merge has no destination directory.")
+        _require_unchanged_merge_sources(self.loaded_records)
+        self.destination_parent.mkdir(parents=True, exist_ok=True)
+        target_path = _publish_staged_logfolder(
+            self.staging_path,
+            self.destination_parent,
+            before_publish=lambda: _require_unchanged_merge_sources(
+                self.loaded_records
+            ),
+        )
+        return MergeRecordsResult(
+            path=target_path,
+            row_count=self.row_count,
+            appended_records=self.appended_records,
+            skipped_records=self.skipped_records,
+            created=True,
+        )
+
+    def _publish_append(self) -> MergeRecordsResult:
+        assert self.target is not None
+        if self.is_noop:
+            _require_unchanged_merge_sources(self.loaded_records)
+            return MergeRecordsResult(
+                path=self.target.path,
+                row_count=self.row_count,
+                appended_records=0,
+                skipped_records=self.skipped_records,
+                created=False,
+            )
+        if self.staging_path is None:
+            raise MergeRecordsError("The prepared append has no staged data file.")
+
+        _require_unchanged_merge_sources(self.loaded_records)
+        _replace_staged_file(
+            self.staging_path,
+            self.target.data_path,
+            before_replace=lambda: _require_unchanged_merge_sources(
+                self.loaded_records
+            ),
+        )
+        target_metadata = LogMetadata(
+            self.target.meta_path,
+            create=False,
+            default_on_error=True,
+        )
+        if not target_metadata.plot_groupby:
+            target_metadata.plot_groupby = (LOGFOLDER_SID_COLUMN,)
+        return MergeRecordsResult(
+            path=self.target.path,
+            row_count=self.row_count,
+            appended_records=self.appended_records,
+            skipped_records=self.skipped_records,
+            created=False,
+        )
+
+
+def merge_records_into_new(
+    records: Iterable[LogRecord],
+    destination_parent: str | Path,
+) -> MergeRecordsResult:
+    """Merge records into a newly numbered LogFolder directory."""
+    prepared = PreparedMerge.for_new_folder(records, destination_parent)
+    try:
+        return prepared.publish()
+    finally:
+        prepared.discard()
+
+
+def append_records_into_record(
+    records: Iterable[LogRecord],
+) -> MergeRecordsResult:
+    """Append records to the selected aggregate containing source IDs."""
+    prepared = PreparedMerge.for_append(records)
+    try:
+        return prepared.publish()
+    finally:
+        prepared.discard()
+
+
+def _validate_merge_records(records: Iterable[LogRecord]) -> list[LogRecord]:
+    records = list(records)
+    if len(records) < 2:
+        raise MergeRecordsError("Select at least two records to merge.")
+    paths = [record.path.resolve() for record in records]
+    if len(set(paths)) != len(paths):
+        raise MergeRecordsError("The selected records must be distinct.")
+    return records
+
+
+def _load_merge_records(
+    records: Sequence[LogRecord],
+) -> list[_LoadedMergeRecord]:
+    loaded: list[_LoadedMergeRecord] = []
+    for record in records:
+        version = FileVersion.from_path(record.data_path)
+        if version is None:
+            raise MergeRecordsError(f"Record #{record.log_id} has no data file.")
+        dataframe = record.read_dataframe()
+        if dataframe is None:
+            raise MergeRecordsError(
+                f"Could not read data from record #{record.log_id}."
+            )
+        if FileVersion.from_path(record.data_path) != version:
+            raise MergeRecordsError(
+                f"Record #{record.log_id} changed while it was being read. Try again."
+            )
+
+        sid_column_count = sum(
+            column == LOGFOLDER_SID_COLUMN for column in dataframe.columns
+        )
+        if sid_column_count > 1:
+            raise MergeRecordsError(
+                f"Record #{record.log_id} has multiple {LOGFOLDER_SID_COLUMN} columns."
+            )
+        had_sid_column = sid_column_count == 1
+        dataframe = dataframe.copy()
+        if had_sid_column:
+            dataframe[LOGFOLDER_SID_COLUMN] = dataframe[LOGFOLDER_SID_COLUMN].astype(
+                "string"
+            )
+            source_ids = frozenset(
+                str(value)
+                for value in pd.unique(
+                    dataframe[LOGFOLDER_SID_COLUMN].dropna()
+                ).tolist()
+            )
+        else:
+            source_id = str(record.log_id)
+            dataframe[LOGFOLDER_SID_COLUMN] = source_id
+            source_ids = frozenset((source_id,))
+        loaded.append(
+            _LoadedMergeRecord(
+                record=record,
+                dataframe=dataframe,
+                version=version,
+                source_ids=source_ids,
+                had_sid_column=had_sid_column,
+            )
+        )
+    return loaded
+
+
+def _reject_overlapping_sources(records: Sequence[_LoadedMergeRecord]) -> None:
+    owners: dict[str, LogRecord] = {}
+    for item in records:
+        for source_id in item.source_ids:
+            previous = owners.get(source_id)
+            if previous is not None:
+                raise MergeRecordsError(
+                    f"Records #{previous.log_id} and #{item.record.log_id} both "
+                    f"contain source ID {source_id!r}."
+                )
+            owners[source_id] = item.record
+
+
+def _require_common_merge_columns(
+    records: Sequence[_LoadedMergeRecord],
+) -> None:
+    common_columns = set(records[0].dataframe.columns)
+    for item in records[1:]:
+        common_columns.intersection_update(item.dataframe.columns)
+    common_columns.discard(LOGFOLDER_SID_COLUMN)
+    if len(common_columns) < 2:
+        common_text = ", ".join(sorted(str(column) for column in common_columns))
+        detail = common_text or "none"
+        raise MergeRecordsError(
+            "The selected records need at least two common data columns "
+            f"(found: {detail})."
+        )
+
+
+def _require_unchanged_merge_sources(
+    records: Sequence[_LoadedMergeRecord],
+) -> None:
+    for item in records:
+        if FileVersion.from_path(item.record.data_path) != item.version:
+            raise MergeRecordsError(
+                f"Record #{item.record.log_id} changed during the merge. Try again."
+            )
+
+
+def _stage_new_merged_logfolder(
+    parent: Path,
+    dataframe: pd.DataFrame,
+    source: LogRecord,
+) -> Path:
+    parent.mkdir(parents=True, exist_ok=True)
+    staging_path = Path(tempfile.mkdtemp(prefix=".logqbit-merge-", dir=parent))
+    try:
+        dataframe.to_feather(staging_path / "data.feather")
+        if source.const_path.is_file():
+            shutil.copy2(source.const_path, staging_path / "const.yaml")
+        source_metadata = LogMetadata(
+            source.meta_path,
+            create=False,
+            default_on_error=True,
+        )
+        metadata = LogMetadata(
+            staging_path / "metadata.json.pending",
+            source_metadata.title,
+        )
+        metadata.update(
+            plot_axes=source_metadata.plot_axes,
+            plot_fields=source_metadata.plot_fields,
+            plot_groupby=(LOGFOLDER_SID_COLUMN,),
+        )
+        return staging_path
+    except Exception:
+        shutil.rmtree(staging_path, ignore_errors=True)
+        raise
+
+
+def _publish_staged_logfolder(
+    staging_path: Path,
+    parent: Path,
+    *,
+    before_publish: Callable[[], None],
+) -> Path:
+    target_path: Path | None = None
+    try:
+        before_publish()
+        while True:
+            candidate_path = _next_export_logfolder_path(parent)
+            try:
+                candidate_path.mkdir(exist_ok=False)
+            except FileExistsError:  # pragma: no cover - concurrent allocation
+                continue
+            target_path = candidate_path
+            break
+        for source_name, target_name in (
+            ("data.feather", "data.feather"),
+            ("const.yaml", "const.yaml"),
+            ("metadata.json.pending", "metadata.json"),
+        ):
+            source_path = staging_path / source_name
+            if source_path.exists():
+                source_path.replace(target_path / target_name)
+        return target_path
+    except Exception:
+        if target_path is not None and target_path.exists():
+            shutil.rmtree(target_path)
+        raise
+    finally:
+        if staging_path.exists():
+            shutil.rmtree(staging_path)
+
+
+def _stage_dataframe(dataframe: pd.DataFrame, target_path: Path) -> Path:
+    staging_path = target_path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        dataframe.to_feather(staging_path)
+    except Exception:
+        try:
+            staging_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    return staging_path
+
+
+def _replace_staged_file(
+    staging_path: Path,
+    target_path: Path,
+    *,
+    before_replace: Callable[[], None],
+) -> None:
+    retry_delay = 0.1
+    for attempt in range(3):
+        before_replace()
+        try:
+            staging_path.replace(target_path)
+            return
+        except PermissionError:
+            if attempt == 2:
+                raise
+            time.sleep(retry_delay)
+            retry_delay *= 2
 
 
 def _log_name_sort_key(name: str) -> tuple[int, int | str]:

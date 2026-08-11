@@ -5,9 +5,14 @@ import pytest
 
 from logqbit import catalog as catalog_module
 from logqbit.catalog import (
+    LOGFOLDER_SID_COLUMN,
     LogCatalog,
     LogRecord,
+    MergeRecordsError,
     PlotColumns,
+    PreparedMerge,
+    append_records_into_record,
+    merge_records_into_new,
     resolve_plot_columns,
 )
 from logqbit.logfolder import LogFolder
@@ -303,3 +308,313 @@ def test_log_record_construction_has_no_file_creation(tmp_path: Path) -> None:
     assert not record.meta_path.exists()
     assert not record.data_path.exists()
     assert not record.const_path.exists()
+
+
+def _create_merge_record(
+    parent: Path,
+    dataframe: pd.DataFrame,
+    *,
+    title: str,
+    plot_groupby: tuple[str, ...] = (),
+) -> LogRecord:
+    with LogFolder.new(parent, title=title) as logfolder:
+        logfolder.add_df(dataframe)
+        logfolder.meta.update(
+            plot_axes=("x",),
+            plot_fields=("value",),
+            plot_groupby=plot_groupby,
+        )
+    return LogCatalog(parent).refresh()[-1]
+
+
+def test_merge_records_into_new_copies_metadata_const_and_adds_sid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [1, 2], "value": [10, 20]}),
+        title="first",
+    )
+    first.const_path.write_text("temperature: 20\n", encoding="utf-8")
+    second = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [3], "value": [30], "extra": [300]}),
+        title="second",
+    )
+
+    prepared = PreparedMerge.for_new_folder([first, second], tmp_path)
+
+    assert prepared.staging_path is not None
+    assert prepared.staging_path.is_dir()
+    assert sorted(
+        path.name for path in tmp_path.iterdir() if path.name.isdecimal()
+    ) == [
+        "0",
+        "1",
+    ]
+    assert [record.path for record in LogCatalog(tmp_path).refresh()] == [
+        first.path,
+        second.path,
+    ]
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "to_feather",
+        lambda *_args, **_kwargs: pytest.fail(
+            "publishing must not serialize the dataframe again"
+        ),
+    )
+
+    result = prepared.publish()
+
+    assert not prepared.staging_path.exists()
+
+    merged = LogRecord(result.path)
+    dataframe = merged.read_dataframe()
+    assert dataframe is not None
+    assert dataframe.index.tolist() == [0, 1, 2]
+    assert dataframe[LOGFOLDER_SID_COLUMN].astype(str).tolist() == ["0", "0", "1"]
+    assert set(dataframe.columns) == {"x", "value", "extra", LOGFOLDER_SID_COLUMN}
+    assert merged.title == "first"
+    assert merged.meta.plot_axes == ("x",)
+    assert merged.meta.plot_fields == ("value",)
+    assert merged.meta.plot_groupby == (LOGFOLDER_SID_COLUMN,)
+    assert merged.const_path.read_text(encoding="utf-8") == "temperature: 20\n"
+    assert result.created is True
+    assert result.appended_records == 2
+
+
+def test_merge_records_into_new_rejects_overlapping_source_ids(
+    tmp_path: Path,
+) -> None:
+    aggregate = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [1], "value": [10], LOGFOLDER_SID_COLUMN: ["1"]}),
+        title="aggregate",
+    )
+    raw = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [2], "value": [20]}),
+        title="raw",
+    )
+
+    with pytest.raises(MergeRecordsError, match="both contain source ID '1'"):
+        merge_records_into_new([aggregate, raw], tmp_path)
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["0", "1"]
+
+
+def test_merge_records_requires_two_common_columns_excluding_sid(
+    tmp_path: Path,
+) -> None:
+    first = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"value": [10], LOGFOLDER_SID_COLUMN: ["first"]}),
+        title="first",
+    )
+    second = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"value": [20]}),
+        title="second",
+    )
+
+    with pytest.raises(
+        MergeRecordsError,
+        match=r"at least two common data columns \(found: value\)",
+    ):
+        merge_records_into_new([first, second], tmp_path)
+    with pytest.raises(
+        MergeRecordsError,
+        match=r"at least two common data columns \(found: value\)",
+    ):
+        append_records_into_record([first, second])
+
+
+def test_merge_records_into_new_fails_before_creating_target_for_missing_data(
+    tmp_path: Path,
+) -> None:
+    first = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"value": [10]}),
+        title="first",
+    )
+    second = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"value": [20]}),
+        title="second",
+    )
+    second.data_path.unlink()
+
+    with pytest.raises(MergeRecordsError, match="has no data file"):
+        merge_records_into_new([first, second], tmp_path)
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["0", "1"]
+
+
+def test_append_records_into_existing_aggregate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [1], "value": [10], LOGFOLDER_SID_COLUMN: ["previous"]}),
+        title="target",
+    )
+    source = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [2, 3], "value": [20, 30]}),
+        title="source",
+    )
+
+    target_before = target.data_path.read_bytes()
+
+    prepared = PreparedMerge.for_append([source, target])
+
+    assert target.data_path.read_bytes() == target_before
+    assert prepared.appended_records == 1
+    assert prepared.staging_path is not None
+    assert prepared.staging_path.is_file()
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "to_feather",
+        lambda *_args, **_kwargs: pytest.fail(
+            "publishing must not serialize the dataframe again"
+        ),
+    )
+
+    result = prepared.publish()
+
+    assert not prepared.staging_path.exists()
+
+    dataframe = pd.read_feather(target.data_path)
+    assert dataframe["value"].tolist() == [10, 20, 30]
+    assert dataframe[LOGFOLDER_SID_COLUMN].astype(str).tolist() == [
+        "previous",
+        "1",
+        "1",
+    ]
+    assert target.meta.plot_groupby == (LOGFOLDER_SID_COLUMN,)
+    assert result.created is False
+    assert result.appended_records == 1
+    assert result.skipped_records == 0
+
+
+def test_append_is_idempotent_and_preserves_existing_groupby(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _create_merge_record(
+        tmp_path,
+        pd.DataFrame(
+            {
+                "x": [1],
+                "value": [10],
+                LOGFOLDER_SID_COLUMN: pd.Series(["1"], dtype="string"),
+            }
+        ),
+        title="target",
+        plot_groupby=("device",),
+    )
+    source = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [2], "value": [20]}),
+        title="source",
+    )
+    original_version = target.data_path.stat().st_mtime_ns
+
+    monkeypatch.setattr(
+        catalog_module.pd,
+        "concat",
+        lambda *_args, **_kwargs: pytest.fail("no-op must not concatenate data"),
+    )
+
+    prepared = PreparedMerge.for_append([target, source])
+
+    assert prepared.is_noop
+    result = prepared.publish()
+
+    assert result.appended_records == 0
+    assert result.skipped_records == 1
+    assert target.data_path.stat().st_mtime_ns == original_version
+    assert target.meta.plot_groupby == ("device",)
+
+
+def test_append_preserves_nonempty_groupby(
+    tmp_path: Path,
+) -> None:
+    target = _create_merge_record(
+        tmp_path,
+        pd.DataFrame(
+            {
+                "value": [10],
+                "device": ["a"],
+                LOGFOLDER_SID_COLUMN: ["previous"],
+            }
+        ),
+        title="target",
+        plot_groupby=("device",),
+    )
+    source = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"value": [20], "device": ["b"]}),
+        title="source",
+    )
+
+    result = append_records_into_record([target, source])
+
+    assert result.appended_records == 1
+    assert target.meta.plot_groupby == ("device",)
+
+
+def test_append_aborts_when_a_source_changes_after_prepare(
+    tmp_path: Path,
+) -> None:
+    target = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [1], "value": [10], LOGFOLDER_SID_COLUMN: ["previous"]}),
+        title="target",
+    )
+    source = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [2], "value": [20]}),
+        title="source",
+    )
+    target_before = target.data_path.read_bytes()
+    prepared = PreparedMerge.for_append([target, source])
+    pd.DataFrame({"x": [9], "value": [99]}).to_feather(source.data_path)
+
+    with pytest.raises(MergeRecordsError, match="changed during the merge"):
+        prepared.publish()
+
+    assert target.data_path.read_bytes() == target_before
+    prepared.discard()
+
+
+def test_append_requires_exactly_one_sid_record(tmp_path: Path) -> None:
+    first = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [1], "value": [10]}),
+        title="first",
+    )
+    second = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [2], "value": [20]}),
+        title="second",
+    )
+
+    with pytest.raises(MergeRecordsError, match="exactly one selected record"):
+        append_records_into_record([first, second])
+
+    first_aggregate = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [3], "value": [30], LOGFOLDER_SID_COLUMN: ["first"]}),
+        title="first aggregate",
+    )
+    second_aggregate = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [4], "value": [40], LOGFOLDER_SID_COLUMN: ["second"]}),
+        title="second aggregate",
+    )
+
+    with pytest.raises(MergeRecordsError, match="exactly one selected record"):
+        append_records_into_record([first_aggregate, second_aggregate])
