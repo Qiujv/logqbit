@@ -2,6 +2,7 @@
 AGENTS.md
 /logqbit_example/
 /src/logqbit/assets/*.ico
+*.lnk
 
 # Python bytecode and native extensions
 __pycache__/

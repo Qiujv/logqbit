@@ -1,54 +1,41 @@
 # 命令行工具
 
-## LogBrowser
+运行 `logqbit --help` 可查看当前可用命令。
 
-
-启动 LogBrowser，浏览 `LogFolder` 记录：
-
-```bash
-logqbit browser
-```
-
-Browser 在独立进程中运行，需要让 Browser 在当前进程中运行并保持终端连接时，可以使用 foreground 模式：
+## 打开 LogBrowser
 
 ```bash
-logqbit browser --foreground
+logqbit browser ./runs
 ```
 
-也可以通过 Python 模块启动：
+目录参数可省略。通常 Browser 会在独立进程中启动，不占用终端；需要在当前终端运行时使用：
 
 ```bash
-python -m logqbit.gui.browser ./runs
+logqbit browser ./runs --foreground
 ```
 
-界面和绘图交互见 [LogBrowser 使用指南](browser.md)。
-
-## Live Plotter
-
-旧的独立实时绘图窗口仍保留兼容入口，但不再是主要界面：
-
-```bash
-logqbit-live-plotter
-```
-
-## 实用命令
-
-在当前目录的 `logqbit_example/` 中生成一批示例数据，并启动图形化浏览器。
+## 创建示例数据
 
 ```bash
 logqbit browser-demo
 ```
 
-复制模板脚本到当前目录或指定目录。当前可用模板适合 LabRAD 数据迁移。
+命令会在当前目录的 `logqbit_example/` 中添加示例记录，并打开 Browser。重复运行会追加新的示例记录。
+
+## 复制迁移模板
 
 ```bash
 logqbit copy-template move_from_labrad
 logqbit copy-template move_from_labrad -o ./tools/
 ```
 
-在 Windows 上创建桌面快捷方式。
+该模板用于将已有 LabRAD 数据迁移为 LogQbit 记录；复制后请按自己的目录结构编辑。
+
+## Windows 快捷方式
 
 ```bash
 logqbit shortcuts
 logqbit shortcuts -o "C:\MyShortcuts"
 ```
+
+这会创建 LogBrowser 的 Windows 快捷方式。该命令需要安装 GUI extra。

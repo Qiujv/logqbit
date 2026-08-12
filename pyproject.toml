@@ -1,7 +1,7 @@
 [project]
 name = "logqbit"
 dynamic = ["version"]
-description = "Simple data logger and live plotter for lab-scale experiments."
+description = "A lightweight, directory-based toolkit for logging and organizing lab experiment data."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Qiujv", email = "qiujv@outlook.com" }]
@@ -14,6 +14,16 @@ dependencies = [
     "typing-extensions>=4.15.0",
 ]
 
+[project.optional-dependencies]
+gui = [
+    "numba>=0.65.0",
+    "pygments>=2.19.2",
+    "pyqtgraph>=0.14.0",
+    "pyside6>=6.9.3",
+    "scipy>=1.16.0",
+    "send2trash>=1.8.3",
+]
+
 [dependency-groups]
 dev = [
     "ipykernel>=6.30.1",
@@ -24,16 +34,6 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "ruff>=0.15.12",
-]
-
-[project.optional-dependencies]
-gui = [
-    "numba>=0.65.0",
-    "pygments>=2.19.2",
-    "pyqtgraph>=0.14.0",
-    "pyside6>=6.9.3",
-    "scipy>=1.16.0",
-    "send2trash>=1.8.3",
 ]
 
 [project.urls]

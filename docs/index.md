@@ -1,24 +1,14 @@
 # LogQbit 文档
 
-LogQbit 是一个面向实验室实验流程的轻量数据记录工具包。它把每次实验记录成一个目录，
-用通用文件格式保存数据、元数据和常量参数，并提供浏览器界面查看记录。
+LogQbit 用目录保存实验记录。每条记录可以包含表格数据、实验常量和少量用于浏览、筛选与绘图的信息；既可在 Python 中写入和读取，也可在 LogBrowser 中查看。
 
-## 核心概念
+## 从这里开始
 
-Python 代码里的主要入口是 `LogFolder`。一个 `LogFolder` 对应磁盘上的一个实验记录目录：
+1. 按[安装说明](install.md)安装核心包；要使用图形界面，请安装 GUI extra。
+2. 用 `LogFolder` 创建记录并写入数据。
+3. 运行 `logqbit browser ./runs` 浏览记录。
 
-```text
-runs/0/
-├── data.feather
-├── metadata.json
-└── const.yaml
-```
-
-- `data.feather`: 表格数据，适合用 pandas 读取和分析。
-- `metadata.json`: 浏览器相关的轻量状态，例如标题、收藏、回收站状态和绘图轴。
-- `const.yaml`: 实验常量、配置参数和人工可读的说明。
-
-最小写入示例：
+最小示例：
 
 ```python
 from logqbit import LogFolder
@@ -26,64 +16,22 @@ from logqbit import LogFolder
 log = LogFolder.new("./runs", title="cooldown")
 log.add_row(time=0.0, temperature=300.0)
 log.add_row(time=1.0, temperature=295.2)
-log.add_const(operator="alice", sample="device-a")
+log.add_const(sample="device-a", operator="alice")
+log.meta.plot_axes = ["time"]
 ```
 
-如果只想读取已经写好的数据，最简单的方式是直接用 pandas：
-
-```python
-import pandas as pd
-
-df = pd.read_feather("./runs/0/data.feather")
-```
-
-也可以通过 `LogFolder` 对象读取：
-
-```python
-from logqbit import LogFolder
-
-log = LogFolder("./runs/0")
-df = log.df
-```
-
-## 浏览和辅助文件
-
-LogQbit 的主要图形界面是 LogBrowser，用来浏览一组实验记录、查看数据表、检查常量和元数据，
-并打开绘图视图。使用前请安装 GUI extra：
-
-```bash
-pip install "logqbit[gui]"
-```
-
-安装后可以运行：
-
-```bash
-logqbit browser
-```
-
-实验记录目录里也可以放用户自己的辅助文件，例如截图、照片、分析摘要或仪器配置导出：
-
-```text
-runs/0/
-├── data.feather
-├── metadata.json
-├── const.yaml
-├── device_photo.png
-└── notes.txt
-```
-
-LogBrowser 会直接预览常见图片文件，例如 `.png`、`.jpg`、`.jpeg`、`.webp`、`.bmp`
-和 `.gif`。其它额外文件会显示在 `Files` 标签中，可以从 GUI 里打开。
+上例会在 `runs/` 下创建一条新记录。数据保存在 `data.feather`，常量保存在 `const.yaml`，记录标题和绘图设置保存在 `metadata.json`。通常不需要手动编辑这些文件。
 
 ## 文档目录
 
 - [安装](install.md)
+- [Core API](core.md)
 - [LogBrowser 使用指南](browser.md)
-- [Python API](api.md)
-- [命令行工具和 GUI](cli.md)
-- [LabRAD 迁移](migration_guide.md)
+- [命令行工具](cli.md)
+- [从 LabRAD 迁移](migration_guide.md)
 
 ## 项目主页
 
-- GitHub: https://github.com/Qiujv/logqbit
-- 文档站点: https://qiujv.github.io/logqbit/
+- GitHub: <https://github.com/Qiujv/logqbit>
+- 文档站点: <https://qiujv.github.io/logqbit/>
+- PyPI: <https://pypi.org/project/logqbit/>

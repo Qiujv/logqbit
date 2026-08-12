@@ -65,7 +65,6 @@ logqbit browser-demo
 更多内容：
 
 - 文档首页：https://qiujv.github.io/logqbit/
-- LogBrowser：https://qiujv.github.io/logqbit/browser/
+- LogFolder：https://qiujv.github.io/logqbit/core/
+- 数据浏览器：https://qiujv.github.io/logqbit/browser/
 - 命令行工具：https://qiujv.github.io/logqbit/cli/
-- LabRAD 迁移：https://qiujv.github.io/logqbit/migration_guide/
-- Python API：https://qiujv.github.io/logqbit/api/

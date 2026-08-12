@@ -37,6 +37,10 @@ build:
 docs:
     uv run mkdocs build --strict
 
+# Serve the documentation locally with live reload.
+docs-serve:
+    uv run mkdocs serve
+
 # Run the usual local checks before committing.
 check: lint test docs
 
