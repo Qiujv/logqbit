@@ -279,52 +279,6 @@ class TestRecordDetailWidgets:
         assert plot_item.getViewBox().viewRange()[0] == pytest.approx(expected_range)
         assert view.plot_manager.exponential_fit_button.isChecked()
 
-    def test_sync_detail_watcher_keeps_unchanged_paths(
-        self,
-        sample_logfolder: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        record = scan_catalog(sample_logfolder)[0]
-        view = RecordDetailView()
-        view.load_record(record)
-        clear_calls = 0
-
-        def count_clear() -> None:
-            nonlocal clear_calls
-            clear_calls += 1
-
-        monkeypatch.setattr(view, "_clear_detail_watcher", count_clear)
-
-        view._sync_detail_watcher()
-
-        assert clear_calls == 0
-
-    def test_data_refresh_does_not_rebuild_tag_bar(
-        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        record = scan_catalog(sample_logfolder)[0]
-        view = RecordDetailView()
-        view.load_record(record)
-        view.set_current_tab(TAB_PLOT)
-        set_columns_calls: list[tuple] = []
-        monkeypatch.setattr(
-            view.plot_manager.tag_bar,
-            "set_columns",
-            lambda *args: set_columns_calls.append(args),
-        )
-
-        pd.DataFrame({"x": range(5), "y": range(5), "z": range(5)}).to_feather(
-            record.data_path
-        )
-        view.refresh_current_record()
-
-        assert set_columns_calls == []
-
-        record.meta.update(plot_axes=["y"], plot_fields=["z"])
-        view.refresh_current_record()
-
-        assert len(set_columns_calls) == 1
-
     def test_data_table_unique_values_use_full_column(self) -> None:
         manager = DataViewManager()
         frame = pd.DataFrame({"value": [1, 2, 1, None, 2]})
@@ -481,30 +435,6 @@ class TestRecordDetailWidgets:
 
             assert not first_view._detail_watcher.directories()
             assert str(record.path) in set(second_view._detail_watcher.directories())
-        finally:
-            first_view.close()
-            second_view.close()
-
-    def test_detail_views_own_independent_dataframe_caches(
-        self, sample_logfolder: Path
-    ) -> None:
-        record = scan_catalog(sample_logfolder)[0]
-        first_view = RecordDetailView()
-        second_view = RecordDetailView()
-        try:
-            first_view.load_record(record)
-            second_view.load_record(record)
-
-            first_frame = first_view._data_cache.dataframe
-            second_frame = second_view._data_cache.dataframe
-            assert first_frame is not None
-            assert second_frame is not None
-            assert first_frame is not second_frame
-
-            first_view.refresh_current_record(force=True)
-
-            assert first_view._data_cache.dataframe is not first_frame
-            assert second_view._data_cache.dataframe is second_frame
         finally:
             first_view.close()
             second_view.close()

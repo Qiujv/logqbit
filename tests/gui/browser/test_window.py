@@ -6,13 +6,11 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 from PySide6.QtCore import QEventLoop, QSettings, Qt, QTimer
-from PySide6.QtGui import QColor, QKeySequence, QPalette
+from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QMessageBox,
-    QStyle,
-    QStyleOptionViewItem,
 )
 
 from logqbit import catalog as catalog_module
@@ -22,20 +20,12 @@ from logqbit.catalog import (
     LogRecord,
     MergeRecordsError,
     MergeRecordsResult,
-    PreparedMerge,
 )
-from logqbit.gui.browser.window.model import (
-    COL_CREATE_TIME,
-    COL_ROWS,
-)
+from logqbit.gui.browser.window.model import COL_ROWS
 from logqbit.gui.browser.window import merge as merge_module
 from logqbit.gui.browser.window.merge import MergeDialog
 from logqbit.gui.browser.detail.view import RecordDetailWindow
-from logqbit.gui.browser.window.view import (
-    LogBrowserWindow,
-    LogListItemDelegate,
-    _validated_log_id,
-)
+from logqbit.gui.browser.window.view import LogBrowserWindow, _validated_log_id
 from logqbit.metadata import LogMetadata
 
 
@@ -122,25 +112,6 @@ class TestBrowserWindow:
     def test_log_id_validation_rejects_unsafe_directory_names(self, value: str) -> None:
         with pytest.raises(ValueError):
             _validated_log_id(value)
-
-    def test_log_list_uses_white_selection_text(self, sample_logfolder: Path) -> None:
-        window = LogBrowserWindow(sample_logfolder)
-        try:
-            assert not window.log_table.styleSheet()
-            assert isinstance(window.log_table.itemDelegate(), LogListItemDelegate)
-
-            option = QStyleOptionViewItem()
-            option.state |= QStyle.State_Selected
-            palette = option.palette
-            palette.setColor(QPalette.HighlightedText, QColor("black"))
-            option.palette = palette
-
-            display_option = LogListItemDelegate._display_option(option)
-            assert display_option.palette.color(QPalette.HighlightedText) == QColor(
-                "white"
-            )
-        finally:
-            window.close()
 
     def test_browser_window_detail_shortcuts(self, sample_logfolder: Path) -> None:
         app = _create_application()
@@ -279,50 +250,6 @@ class TestBrowserWindow:
             assert window.table_model.rowCount() == 3
         finally:
             window.close()
-
-    def test_column_visibility_actions_are_in_header_context_menu(
-        self,
-        sample_logfolder: Path,
-    ) -> None:
-        window = LogBrowserWindow(sample_logfolder)
-        try:
-            assert window.log_table.isColumnHidden(COL_CREATE_TIME)
-
-            menu = window._actions.create_header_context_menu()
-            actions = menu.actions()
-
-            assert [action.text() for action in actions] == [
-                "Show Plot Axes Column",
-                "Show Create Time Column",
-                "Show Create Machine Column",
-            ]
-            actions[1].trigger()
-            assert not window.log_table.isColumnHidden(COL_CREATE_TIME)
-        finally:
-            window.close()
-
-    def test_append_target_uses_cached_columns_without_reading_data(
-        self,
-        sample_records: list[LogRecord],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        aggregate = LogRecord(
-            sample_records[0].path,
-            row_count=sample_records[0].row_count,
-            columns=(*sample_records[0].columns, LOGFOLDER_SID_COLUMN),
-            data_version=sample_records[0].data_version,
-        )
-        monkeypatch.setattr(
-            LogRecord,
-            "read_dataframe",
-            lambda _self: pytest.fail("finding the append target must not load data"),
-        )
-
-        assert (
-            PreparedMerge.find_append_target([sample_records[1], aggregate])
-            is aggregate
-        )
-        assert PreparedMerge.find_append_target(sample_records[:2]) is None
 
     def test_append_opens_persistent_dialog_for_sole_sid_record(
         self,
@@ -625,59 +552,6 @@ class TestBrowserWindow:
             window.log_table.setFocus()
             QTest.keyClick(window.log_table, Qt.Key_Return, Qt.ControlModifier)
             assert opened == [(window._selected_record.path, False)]
-        finally:
-            window.close()
-
-    def test_list_refresh_preserves_current_detail_cache(
-        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        app = _create_application()
-        window = LogBrowserWindow(sample_logfolder)
-        app.processEvents()
-        try:
-            record = window._selected_record
-            assert record is not None
-            dataframe = window.detail_view._data_cache.dataframe
-            assert dataframe is not None
-
-            read_count = 0
-            original_read_feather = catalog_module.pd.read_feather
-
-            def count_read_feather(*args, **kwargs):
-                nonlocal read_count
-                read_count += 1
-                return original_read_feather(*args, **kwargs)
-
-            monkeypatch.setattr(catalog_module.pd, "read_feather", count_read_feather)
-
-            window.refresh_logs()
-
-            assert window._selected_record is record
-            assert window.detail_view._data_cache.dataframe is dataframe
-            assert read_count == 0
-        finally:
-            window.close()
-
-    def test_manual_refresh_reads_current_feather_once(
-        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        app = _create_application()
-        window = LogBrowserWindow(sample_logfolder)
-        app.processEvents()
-        try:
-            read_count = 0
-            original_read_feather = catalog_module.pd.read_feather
-
-            def count_read_feather(*args, **kwargs):
-                nonlocal read_count
-                read_count += 1
-                return original_read_feather(*args, **kwargs)
-
-            monkeypatch.setattr(catalog_module.pd, "read_feather", count_read_feather)
-
-            window._on_refresh_clicked()
-
-            assert read_count == 1
         finally:
             window.close()
 

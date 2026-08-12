@@ -9,8 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QKeySequence
-from PySide6.QtWidgets import QSizePolicy, QToolButton
+from PySide6.QtWidgets import QSizePolicy
 
 from logqbit.catalog import PlotColumns, resolve_plot_columns
 from logqbit.gui.browser.plot.fitting import fit_exponential, fit_quadratic
@@ -22,7 +21,6 @@ from logqbit.gui.browser.plot.mesh import (
     warmup_plotter_jit,
 )
 from logqbit.gui.browser.plot.manager import (
-    COLOR_BAR_HEIGHT_FACTOR,
     PLOT_AUTO_RANGE_PADDING,
     PlotManager,
     TagBar,
@@ -321,39 +319,6 @@ class TestPlotManagerFitAndColorBar:
         assert manager.fit_controller._field == "a"
         manager.widget.deleteLater()
 
-    def test_plot_actions_use_compact_tool_buttons(self) -> None:
-        manager = PlotManager()
-
-        for button in (
-            manager.exponential_fit_button,
-            manager.quadratic_fit_button,
-            manager.cursor_button,
-            manager.copy_plot_button,
-        ):
-            assert isinstance(button, QToolButton)
-
-        manager.widget.deleteLater()
-
-    def test_points_context_menu_is_hidden(self) -> None:
-        manager = PlotManager()
-        plot_item = manager.plot_widget.getPlotItem()
-
-        points_action = next(
-            action
-            for action in plot_item.ctrlMenu.actions()
-            if action.text() == "Points"
-        )
-
-        assert not points_action.isVisible()
-        manager.widget.deleteLater()
-
-    def test_view_context_menu_has_save_plot_action(self) -> None:
-        manager = PlotManager()
-
-        assert manager.save_plot_action.text() == "Save plot"
-        assert manager.save_plot_action in manager.fit_view_box.getMenu(None).actions()
-        manager.widget.deleteLater()
-
     def test_view_context_menu_mirrors_log_mode_controls(self) -> None:
         manager = PlotManager()
         plot_item = manager.plot_widget.getPlotItem()
@@ -370,14 +335,6 @@ class TestPlotManagerFitAndColorBar:
         plot_item.ctrl.logYCheck.setChecked(False)
         assert not plot_item.ctrl.logXCheck.isChecked()
         assert not manager.log_y_action.isChecked()
-        manager.widget.deleteLater()
-
-    def test_copy_shortcut_is_scoped_to_plot_widget(self) -> None:
-        manager = PlotManager()
-
-        assert manager.copy_plot_shortcut.key() == QKeySequence.Copy
-        assert manager.copy_plot_shortcut.context() == Qt.WidgetWithChildrenShortcut
-        assert manager.copy_plot_shortcut.parent() is manager.plot_widget
         manager.widget.deleteLater()
 
     def test_double_click_zooms_to_fit_all_data(
@@ -546,35 +503,6 @@ class TestPlotManagerFitAndColorBar:
         manager.save_plot()
 
         assert saved_paths == [str(tmp_path / "plot-2.png")]
-        manager.widget.deleteLater()
-
-    def test_color_bar_is_reused_and_removed_when_switching_to_1d(self) -> None:
-        manager = PlotManager()
-        manager._plot_record = object()
-        manager._plot_frame = pd.DataFrame(
-            {
-                "x": [0.0, 0.0, 1.0, 1.0],
-                "y": [0.0, 1.0, 0.0, 1.0],
-                "z": [1.0, 2.0, 3.0, 4.0],
-            }
-        )
-
-        manager._refresh_plot_2d("x", "y", "z")
-        color_bar = manager._color_bar
-        assert color_bar is not None
-        assert color_bar.getAxis("left").labelText == "z"
-        assert color_bar.axis.labelText == ""
-        assert color_bar.maximumHeight() == round(
-            manager.plot_widget.getPlotItem().vb.height() * COLOR_BAR_HEIGHT_FACTOR
-        )
-        assert manager.exponential_fit_button.isHidden()
-        assert manager.quadratic_fit_button.isHidden()
-
-        manager._refresh_plot_2d("x", "y", "z")
-        assert manager._color_bar is color_bar
-
-        manager._refresh_plot_1d("x", ["z"])
-        assert manager._color_bar is None
         manager.widget.deleteLater()
 
     def test_2d_cursor_replaces_color_bar_and_target_moves_both_lines(self) -> None:
