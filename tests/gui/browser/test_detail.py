@@ -41,6 +41,29 @@ def scan_catalog(directory: Path) -> list[LogRecord]:
 
 
 class TestRecordDetailWidgets:
+    def test_continuous_file_events_do_not_postpone_refresh_forever(self) -> None:
+        view = RecordDetailView()
+        starts: list[bool] = []
+
+        class FakeTimer:
+            active = True
+
+            def isActive(self) -> bool:
+                return self.active
+
+            def start(self) -> None:
+                starts.append(True)
+
+        timer = FakeTimer()
+        view._refresh_timer = timer  # type: ignore[assignment]
+
+        view._schedule_detail_refresh()
+        assert starts == []
+
+        timer.active = False
+        view._schedule_detail_refresh()
+        assert starts == [True]
+
     def test_image_tab_copies_image_file(self, sample_logfolder: Path) -> None:
         app = _create_application()
         record = scan_catalog(sample_logfolder)[0]

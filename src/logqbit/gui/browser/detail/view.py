@@ -304,7 +304,8 @@ class RecordDetailView(QWidget):
             self._clear_detail_watcher()
 
     def _schedule_detail_refresh(self) -> None:
-        self._refresh_timer.start()
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start()
 
     def _create_detail_watcher(self) -> QFileSystemWatcher:
         watcher = QFileSystemWatcher(self)

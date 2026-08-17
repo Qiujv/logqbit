@@ -117,5 +117,6 @@ def test_shortcuts_create_only_browser_shortcut(
     assert len(commands) == 1
     powershell_script = commands[0][2]
     assert str(gui_entrypoint) in powershell_script
-    assert "$Shortcut.Arguments" not in powershell_script
+    assert "$Shortcut.Arguments = '--foreground'" in powershell_script
+    assert f"{icon_path},0" in powershell_script
     assert "live_plotter" not in powershell_script

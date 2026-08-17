@@ -13,10 +13,12 @@ from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication, QSplashScreen
 
 _FOREGROUND_OPTION = "--foreground"
 _STARTUP_MODULE = "logqbit.gui.browser.startup"
+_WINDOWS_APP_USER_MODEL_ID = "Qiujv.LogQbit.Browser"
 
 
 def launch_browser(directory: str | Path | None = None) -> None:
@@ -96,6 +98,30 @@ def _windows_gui_launch(executable: str) -> tuple[str, dict[str, str]]:
     return gui_executable, environment
 
 
+def _set_windows_app_user_model_id() -> None:
+    """Give the browser a stable Windows taskbar identity."""
+    if platform.system() != "Windows":
+        return
+
+    import ctypes
+
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(  # type: ignore[attr-defined]
+        _WINDOWS_APP_USER_MODEL_ID
+    )
+
+
+def _browser_window_icon() -> QIcon:
+    """Load the native Windows icon, falling back to the source SVG."""
+    from PySide6.QtGui import QIcon
+
+    assets = files("logqbit") / "assets"
+    for filename in ("browser.ico", "browser.svg"):
+        icon = QIcon(str(assets / filename))
+        if not icon.isNull():
+            return icon
+    return QIcon()
+
+
 def _show_startup_splash(app: QApplication) -> QSplashScreen:
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor, QPixmap
@@ -134,24 +160,25 @@ def _show_startup_error(error: Exception) -> None:
 
 def run_browser_application(argv: Sequence[str]) -> int:
     """Show a lightweight splash before importing the full browser window."""
-    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
+    _set_windows_app_user_model_id()
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
+    app.setApplicationName("LogQbit Log Browser")
+    icon = _browser_window_icon()
+    if not icon.isNull():
+        app.setWindowIcon(icon)
     splash = _show_startup_splash(app)
 
     try:
         from logqbit.gui.browser.window.view import LogBrowserWindow
 
-        app.setApplicationName("LogQbit Log Browser")
-        icon = QIcon(str(files("logqbit") / "assets" / "browser.svg"))
-        if not icon.isNull():
-            app.setWindowIcon(icon)
-
         directory = Path(argv[0]).expanduser().resolve() if argv else None
         window = LogBrowserWindow(directory)
+        if not icon.isNull():
+            window.setWindowIcon(icon)
         window.show()
         splash.finish(window)
         return app.exec()

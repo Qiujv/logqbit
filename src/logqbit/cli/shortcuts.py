@@ -77,7 +77,8 @@ def create_shortcuts(output_dir: Path | None = None) -> int:
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut({_powershell_single_quoted(shortcut_path)})
 $Shortcut.TargetPath = {_powershell_single_quoted(browser_entrypoint)}
-$Shortcut.IconLocation = {_powershell_single_quoted(browser_ico)}
+$Shortcut.Arguments = '--foreground'
+$Shortcut.IconLocation = {_powershell_single_quoted(f"{browser_ico},0")}
 $Shortcut.Save()
 """
         result = subprocess.run(
