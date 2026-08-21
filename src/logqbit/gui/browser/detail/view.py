@@ -179,7 +179,7 @@ class RecordDetailView(QWidget):
         dataframe = self._data_cache.dataframe
         self._record = record
         self.detail_id_label.setText(f"#{record.log_id}")
-        self.detail_label.setText(str(record.path))
+        self.detail_label.setText(record.path.as_posix())
         self.yaml_view.set_yaml_text(record.read_yaml_text())
         if metadata_changed or data_changed:
             self.data_view_manager.show_data_table(

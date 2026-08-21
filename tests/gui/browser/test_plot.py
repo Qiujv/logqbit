@@ -466,6 +466,7 @@ class TestPlotManagerFitAndColorBar:
                 observed["copy"] = copy
                 observed["title"] = self.plot_item.titleLabel.text
                 observed["visible"] = self.plot_item.titleLabel.isVisible()
+                observed["size"] = self.plot_item.titleLabel.opts["size"]
                 observed["width"] = self._parameters["width"]
 
         monkeypatch.setattr(
@@ -478,6 +479,9 @@ class TestPlotManagerFitAndColorBar:
             "copy": True,
             "title": f"Example title — {str(record_path).replace('/', '/<wbr>')}",
             "visible": True,
+            "size": (
+                f"{plot_item.getAxis('bottom').label.document().defaultFont().pointSizeF():g}pt"
+            ),
             "width": 800,
         }
         assert not plot_item.titleLabel.isVisible()

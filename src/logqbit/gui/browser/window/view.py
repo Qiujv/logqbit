@@ -245,7 +245,7 @@ class LogBrowserWindow(QMainWindow):
 
     def _create_top_bar(self) -> QHBoxLayout:
         top_bar = QHBoxLayout()
-        self.directory_label = QLabel(str(self._base_dir))
+        self.directory_label = QLabel(self._base_dir.as_posix())
         self.directory_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.directory_label.setContextMenuPolicy(Qt.CustomContextMenu)
         self.directory_label.customContextMenuRequested.connect(
@@ -430,12 +430,12 @@ class LogBrowserWindow(QMainWindow):
         path = Path(directory)
         if path != self._base_dir:
             self._base_dir = path
-            self.directory_label.setText(str(self._base_dir))
+            self.directory_label.setText(self._base_dir.as_posix())
             self._update_window_title()
             self._sync_directory_watcher()
             self.refresh_logs()
         else:
-            self.directory_label.setText(str(self._base_dir))
+            self.directory_label.setText(self._base_dir.as_posix())
         self.settings_manager.update_recent_directories(path)
         self._rebuild_directory_menu()
 

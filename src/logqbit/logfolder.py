@@ -144,7 +144,10 @@ class LogFolder:
             dims={k: len(a) for k, a in run_axs.items()},
         )
         if len(self.meta.plot_axes) == 0:
-            self.meta.plot_axes = list(run_axs.keys())
+            if strip_underscores:
+                self.meta.plot_axes = [k.strip("_") for k in run_axs.keys()]
+            else:
+                self.meta.plot_axes = list(run_axs.keys())
 
         step_table = list(itertools.product(*run_axs.values()))
 

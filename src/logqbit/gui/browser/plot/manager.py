@@ -495,10 +495,12 @@ class PlotManager:
             available_width = max(1.0, plot_item.vb.width())
             title_label.item.setTextWidth(available_width)
             title = html.escape(record.title)
-            path = html.escape(str(record.path)).replace("/", "/<wbr>")
+            path = html.escape(record.path.as_posix()).replace("/", "/<wbr>")
+            axis_font = plot_item.getAxis("bottom").label.document().defaultFont()
             plot_item.setTitle(
                 f"{title} — {path}",
                 color="k",
+                size=f"{axis_font.pointSizeF():g}pt",
             )
             title_height = title_label.item.boundingRect().height()
             title_label.setMaximumHeight(title_height)

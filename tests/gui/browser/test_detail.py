@@ -250,7 +250,7 @@ class TestRecordDetailWidgets:
         assert not (
             view.detail_id_label.textInteractionFlags() & Qt.TextSelectableByMouse
         )
-        assert view.detail_label.text() == str(record.path)
+        assert view.detail_label.text() == record.path.as_posix()
         assert view.detail_label.textInteractionFlags() & Qt.TextSelectableByMouse
         assert view.detail_label.contextMenuPolicy() == Qt.NoContextMenu
         assert view.detail_label.wordWrap()
