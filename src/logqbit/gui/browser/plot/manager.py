@@ -41,7 +41,7 @@ from logqbit.gui.browser.plot.grouping import iter_plot_groups
 from logqbit.gui.browser.plot.mesh import build_plot_mesh
 
 PLOT_EXPORT_SCALE = 2
-PLOT_AUTO_RANGE_PADDING = 0.02
+PLOT_AUTO_RANGE_PADDING = 0.01
 COLOR_BAR_HEIGHT_FACTOR = 0.9
 PLOT_COLORS = (
     "#1E90FF",
@@ -455,20 +455,31 @@ class PlotManager:
         previous_title = title_label.text
         previous_options = dict(title_label.opts)
         title_was_visible = title_label.isVisible()
+        previous_text_width = title_label.item.textWidth()
         record = self._plot_record
         if record is not None:
+            available_width = max(1.0, plot_item.vb.width())
+            title_label.item.setTextWidth(available_width)
+            title = html.escape(record.title)
+            path = html.escape(str(record.path)).replace("/", "/<wbr>")
             plot_item.setTitle(
-                html.escape(str(record.path)),
+                f"{title} — {path}",
                 color="k",
-                size="9pt",
             )
+            title_height = title_label.item.boundingRect().height()
+            title_label.setMaximumHeight(title_height)
+            plot_item.layout.setRowFixedHeight(0, title_height)
             plot_item.layout.activate()
         try:
             yield plot_item
         finally:
             if title_was_visible:
                 plot_item.setTitle(previous_title, **previous_options)
+                title_label.item.setTextWidth(previous_text_width)
+                title_label.updateMin()
             else:
+                title_label.item.setTextWidth(previous_text_width)
+                title_label.setText("")
                 plot_item.setTitle(None)
             plot_item.layout.activate()
 

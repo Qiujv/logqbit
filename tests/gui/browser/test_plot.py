@@ -377,7 +377,9 @@ class TestPlotManagerFitAndColorBar:
     ) -> None:
         manager = PlotManager()
         record_path = Path("/logs/example-record")
-        manager._plot_record = SimpleNamespace(path=record_path)
+        manager._plot_record = SimpleNamespace(path=record_path, title="Example title")
+        plot_item = manager.plot_widget.getPlotItem()
+        initial_minimum_width = plot_item.layout.minimumWidth()
         observed: dict[str, object] = {}
 
         class FakeExporter:
@@ -402,11 +404,13 @@ class TestPlotManagerFitAndColorBar:
 
         assert observed == {
             "copy": True,
-            "title": str(record_path),
+            "title": f"Example title — {str(record_path).replace('/', '/<wbr>')}",
             "visible": True,
             "width": 800,
         }
-        assert not manager.plot_widget.getPlotItem().titleLabel.isVisible()
+        assert not plot_item.titleLabel.isVisible()
+        assert plot_item.titleLabel.text == ""
+        assert plot_item.layout.minimumWidth() == initial_minimum_width
         manager.widget.deleteLater()
 
     def test_save_plot_writes_png_with_record_path_title(
@@ -415,7 +419,7 @@ class TestPlotManagerFitAndColorBar:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         manager = PlotManager()
-        manager._plot_record = SimpleNamespace(path=tmp_path)
+        manager._plot_record = SimpleNamespace(path=tmp_path, title="Example title")
         observed: dict[str, object] = {}
 
         class FakeExporter:
@@ -447,7 +451,7 @@ class TestPlotManagerFitAndColorBar:
 
         assert observed == {
             "to_bytes": True,
-            "title": str(tmp_path),
+            "title": f"Example title — {str(tmp_path).replace('/', '/<wbr>')}",
             "width": 800,
             "path": str(tmp_path / "plot.png"),
             "format": "PNG",
