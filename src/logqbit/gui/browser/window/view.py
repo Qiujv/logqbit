@@ -621,7 +621,7 @@ class _BrowserActions:
         show_starred_action.setCheckable(True)
         show_starred_action.setChecked(self.window._show_starred_only)
         menu.addSeparator()
-        make_note_action = menu.addAction("Make Note...")
+        make_note_action = menu.addAction("Make 🏷️Note...")
         rename_action = menu.addAction("Rename Title... (F2)")
         change_id_action = menu.addAction("Change ID...")
         toggle_star_action = menu.addAction("Toggle ⭐Star (S)")

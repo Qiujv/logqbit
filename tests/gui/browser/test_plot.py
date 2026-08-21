@@ -477,7 +477,7 @@ class TestPlotManagerFitAndColorBar:
 
         assert observed == {
             "copy": True,
-            "title": f"Example title — {str(record_path).replace('/', '/<wbr>')}",
+            "title": f"Example title — {record_path.as_posix().replace('/', '/<wbr>')}",
             "visible": True,
             "size": (
                 f"{plot_item.getAxis('bottom').label.document().defaultFont().pointSizeF():g}pt"
@@ -527,7 +527,7 @@ class TestPlotManagerFitAndColorBar:
 
         assert observed == {
             "to_bytes": True,
-            "title": f"Example title — {str(tmp_path).replace('/', '/<wbr>')}",
+            "title": f"Example title — {tmp_path.as_posix().replace('/', '/<wbr>')}",
             "width": 800,
             "path": str(tmp_path / "plot.png"),
             "format": "PNG",
