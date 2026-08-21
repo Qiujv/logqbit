@@ -78,12 +78,13 @@ class TagBar(QWidget):
         self._list.setDefaultDropAction(Qt.MoveAction)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._list.setToolTip("Click to toggle field. Drag to reorder.")
         row_height = self._list.fontMetrics().height() + 4
         self._list.setFixedHeight(row_height + self._list.frameWidth() * 2)
         self._list.installEventFilter(self)
         self._list.setContextMenuPolicy(Qt.CustomContextMenu)
         self._list.customContextMenuRequested.connect(self._show_context_menu)
-        self._list.itemClicked.connect(lambda _: self._list.clearSelection())
+        self._list.itemClicked.connect(self._toggle_item_role)
 
         model = self._list.model()
         model.rowsInserted.connect(lambda *_: self._on_model_changed())
@@ -131,6 +132,39 @@ class TagBar(QWidget):
         menu = QMenu(self)
         menu.addAction("Save", self.save_clicked.emit)
         menu.exec(self._list.mapToGlobal(pos))
+
+    def _toggle_item_role(self, item: QListWidgetItem) -> None:
+        item_index = self._list.row(item)
+        separators = [
+            index
+            for index in range(self._list.count())
+            if self._list.item(index).text() == self._SEP
+        ]
+        if item.text() == self._SEP or len(separators) < 2:
+            self._list.clearSelection()
+            return
+        if item_index < separators[0]:
+            self._list.clearSelection()
+            return
+
+        was_field = separators[0] < item_index < separators[1]
+        self._loading = True
+        try:
+            item = self._list.takeItem(item_index)
+            separator_indices = [
+                index
+                for index in range(self._list.count())
+                if self._list.item(index).text() == self._SEP
+            ]
+            second_separator = separator_indices[1]
+            self._list.insertItem(
+                second_separator + 1 if was_field else second_separator,
+                item,
+            )
+        finally:
+            self._loading = False
+        self._list.clearSelection()
+        self._on_model_changed()
 
     def eventFilter(self, obj, event):
         if obj is self._list and event.type() == QEvent.Wheel:

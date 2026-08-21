@@ -118,6 +118,78 @@ class TestTagBar:
         assert tag_bar.groupby == []
         assert tag_bar.groupby_button.text() == "group by"
 
+    def test_clicking_field_moves_it_to_start_of_ignored_columns(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(
+            ["x", "signal", "reference", "note"],
+            ["x"],
+            ["signal", "reference"],
+            [],
+        )
+        changes: list[None] = []
+        tag_bar.changed.connect(lambda: changes.append(None))
+
+        tag_bar._toggle_item_role(tag_bar._list.item(2))
+
+        assert tag_bar.axes == ["x"]
+        assert tag_bar.fields == ["reference"]
+        assert tag_bar._split()[2] == ["signal", "note"]
+        assert changes == [None]
+
+    def test_clicking_axis_does_not_change_roles(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(["x", "signal"], ["x"], ["signal"], [])
+        changes: list[None] = []
+        tag_bar.changed.connect(lambda: changes.append(None))
+
+        tag_bar._toggle_item_role(tag_bar._list.item(0))
+
+        assert tag_bar.axes == ["x"]
+        assert tag_bar.fields == ["signal"]
+        assert changes == []
+
+    def test_clicking_non_field_moves_it_to_end_of_fields(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(
+            ["x", "signal", "reference"],
+            ["x"],
+            ["signal"],
+            [],
+        )
+
+        tag_bar._toggle_item_role(tag_bar._list.item(4))
+
+        assert tag_bar.axes == ["x"]
+        assert tag_bar.fields == ["signal", "reference"]
+        assert tag_bar._split()[2] == []
+
+    def test_clicking_groupby_column_moves_it_to_fields(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(
+            ["x", "signal", "device"],
+            ["x"],
+            ["signal"],
+            ["device"],
+        )
+
+        tag_bar._toggle_item_role(tag_bar._list.item(4))
+
+        assert tag_bar.axes == ["x"]
+        assert tag_bar.fields == ["signal", "device"]
+        assert tag_bar.groupby == []
+
+    def test_clicking_separator_does_not_change_roles(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(["x", "signal"], ["x"], ["signal"], [])
+        changes: list[None] = []
+        tag_bar.changed.connect(lambda: changes.append(None))
+
+        tag_bar._toggle_item_role(tag_bar._list.item(1))
+
+        assert tag_bar.axes == ["x"]
+        assert tag_bar.fields == ["signal"]
+        assert changes == []
+
 
 def test_resolve_plot_columns_fills_axes_before_fields() -> None:
     resolved = resolve_plot_columns(
