@@ -25,12 +25,11 @@ plugins:
             show_signature_annotations: true
             show_source: false
 nav:
-  - 首页: index.md
-  - 安装: install.md
-  - LogFolder: core.md
-  - 数据浏览器: browser.md
+  - 首页与安装: index.md
+  - 核心 API: core.md
+  - LogBrowser: browser.md
   - 命令行工具: cli.md
-  - LabRAD 迁移: migration_guide.md
+  - 从 LabRAD 迁移: migration_guide.md
 markdown_extensions:
   - admonition
   - tables

@@ -153,14 +153,14 @@ def test_record_parses_ascii_integer_and_decimal_ids(
     assert LogRecord(record_path).log_id == expected
 
 
-def test_refresh_replaces_only_changed_record(sample_logfolder: Path) -> None:
+def test_refresh_updates_changed_record_in_place(sample_logfolder: Path) -> None:
     catalog = LogCatalog()
     record = catalog.refresh(sample_logfolder)[0]
 
     pd.DataFrame({"x": range(10), "y": range(10)}).to_feather(record.data_path)
     refreshed = catalog.refresh(sample_logfolder)[0]
 
-    assert refreshed is not record
+    assert refreshed is record
     assert refreshed.row_count == 10
     assert refreshed.columns == ("x", "y")
 
@@ -189,7 +189,7 @@ def test_refresh_retries_data_inspection_after_failure(
     )
     recovered = catalog.refresh(sample_logfolder)[0]
 
-    assert recovered is not failed
+    assert recovered is failed
     assert recovered.row_count == 3
     assert recovered.columns == ("x", "y", "z")
 
@@ -230,6 +230,90 @@ def test_record_reads_dataframe_without_catalog_cache(
     assert second is not None
     assert first is not second
     pd.testing.assert_frame_equal(first, second)
+
+
+def test_record_df_caches_dataframe_snapshot(
+    sample_logfolder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = LogRecord(sample_logfolder / "0")
+    original_read_feather = catalog_module.pd.read_feather
+    read_count = 0
+
+    def read_feather(*args, **kwargs):
+        nonlocal read_count
+        read_count += 1
+        return original_read_feather(*args, **kwargs)
+
+    monkeypatch.setattr(catalog_module.pd, "read_feather", read_feather)
+
+    first = record.df
+    second = record.df
+
+    assert first is not None
+    assert second is first
+    assert read_count == 1
+    assert record.row_count == len(first)
+    assert record.columns == tuple(first.columns)
+
+
+def test_record_df_cache_can_be_replaced_and_deleted(sample_logfolder: Path) -> None:
+    record = LogRecord(sample_logfolder / "0")
+    cached = record.df
+    assert cached is not None
+
+    replacement = record.read_dataframe()
+    assert replacement is not None
+    record.df = replacement
+    assert record.df is replacement
+
+    del record.df
+    reloaded = record.df
+    assert reloaded is not None
+    assert reloaded is not replacement
+    pd.testing.assert_frame_equal(reloaded, replacement)
+
+
+def test_record_refresh_invalidates_df_when_data_changes(
+    sample_logfolder: Path,
+) -> None:
+    record = LogRecord(sample_logfolder / "0")
+    cached = record.df
+    assert cached is not None
+
+    expected = pd.DataFrame({"x": [10, 20], "signal": [1.0, 2.0]})
+    expected.to_feather(record.data_path)
+
+    assert record.refresh() is record
+    assert record.df is not cached
+    pd.testing.assert_frame_equal(record.df, expected)
+
+
+def test_record_accessors_do_not_create_missing_files(tmp_path: Path) -> None:
+    record_path = tmp_path / "note"
+    record_path.mkdir()
+    record = LogRecord(record_path)
+
+    assert record.df is None
+    assert record.row_count == 0
+    assert record.columns == ()
+    with pytest.raises(FileNotFoundError, match="Metadata file"):
+        record.meta
+    with pytest.raises(FileNotFoundError, match="Registry file"):
+        record.const
+    assert not record.meta_path.exists()
+    assert not record.data_path.exists()
+    assert not record.const_path.exists()
+
+
+def test_record_const_aliases_existing_registry(tmp_path: Path) -> None:
+    record_path = tmp_path / "record"
+    record_path.mkdir()
+    (record_path / "const.yaml").write_text("temperature: 20\n", encoding="utf-8")
+    record = LogRecord(record_path)
+
+    assert record.const is record.reg
+    assert record.const["temperature"] == 20
 
 
 def test_record_reads_dataframe_from_memory_buffer(

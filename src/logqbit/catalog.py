@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
+from typing import Self
 
 import pandas as pd
 import pyarrow
@@ -19,6 +20,7 @@ import pyarrow.ipc
 
 from .file_version import FileVersion
 from .metadata import LogMetadata
+from .registry import Registry
 
 __all__ = [
     "LogCatalog",
@@ -36,8 +38,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
-_KNOWN_LOG_FILENAMES = {"const.yaml", "data.feather", "metadata.json"}
 _FLOAT_LOG_ID_PATTERN = re.compile(r"[+-]?[0-9]+(?:\.[0-9]+)?")
 
 
@@ -102,19 +102,34 @@ def _ordered_unique(items: Sequence[str]) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True)
+class _DataSummary:
+    data_version: FileVersion | None
+    row_count: int
+    columns: tuple[str, ...]
+
+
 class LogRecord:
-    """One catalog record with cached summary fields and explicit disk access."""
+    """Handle to one existing log record.
 
-    path: Path
-    row_count: int = 0
-    columns: tuple[str, ...] = ()
-    data_version: FileVersion | None = None
+    The standard record files are exposed through lazy accessors without
+    creating a dataframe writer or missing files. Catalog summary data is
+    inspected on demand and refreshed in place.
+    """
 
-    def __post_init__(self) -> None:
-        path = Path(self.path)
+    def __init__(self, path: str | Path) -> None:
+        path = Path(path)
         if not path.is_dir():
             raise FileNotFoundError(f"Log directory at '{path}' does not exist.")
-        object.__setattr__(self, "path", path)
+        self._path = path
+        self._data_summary: _DataSummary | None = None
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(path={self.path!r})"
+
+    @property
+    def path(self) -> Path:
+        """Directory containing this record's files."""
+        return self._path
 
     @property
     def log_id(self) -> int | float | str:
@@ -142,39 +157,64 @@ class LogRecord:
             default_on_error=True,
         )
 
-    # Read-only metadata fields cached in memory. Sync by manual meta.reload().
+    @cached_property
+    def reg(self) -> Registry:
+        """Return the existing ``const.yaml`` registry without creating it."""
+        return Registry(self.const_path, create=False)
+
+    @property
+    def const(self) -> Registry:
+        """Alias for :attr:`reg`."""
+        return self.reg
+
+    # Common metadata shortcuts delegate to LogMetadata's synchronized fields.
     @property
     def title(self) -> str:
-        return str(self.meta.root.get("title", "untitled"))
+        return self.meta.title
 
     @property
     def star(self) -> int:
-        return int(self.meta.root.get("star", 0))
+        return self.meta.star
 
     @property
     def trash(self) -> bool:
-        return bool(self.meta.root.get("trash", False))
+        return self.meta.trash
+
+    @property
+    def row_count(self) -> int:
+        """Number of rows in the current on-disk dataframe."""
+        return self._require_data_summary().row_count
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """Column names in the current on-disk dataframe."""
+        return self._require_data_summary().columns
+
+    @property
+    def data_version(self) -> FileVersion | None:
+        """Filesystem identity of the inspected ``data.feather`` generation."""
+        return self._require_data_summary().data_version
 
     @property
     def resolved_plot_columns(self) -> PlotColumns:
         """Return the effective plot roles for the current data columns."""
         return resolve_plot_columns(
             self.columns,
-            self.meta.root.get("plot_axes", ()),
-            self.meta.root.get("plot_fields", ()),
-            self.meta.root.get("plot_groupby", ()),
+            self.meta.plot_axes,
+            self.meta.plot_fields,
+            self.meta.plot_groupby,
         )
 
     @property
     def create_time(self) -> str:
-        return str(self.meta.root.get("create_time", ""))
+        return self.meta.create_time
 
     @property
     def create_machine(self) -> str:
-        return str(self.meta.root.get("create_machine", ""))
+        return self.meta.create_machine
 
     def read_dataframe(self) -> pd.DataFrame | None:
-        """Read the current Feather file once, without retaining a cache."""
+        """Read the current Feather file, bypassing the cached :attr:`df`."""
         if not self.data_path.exists():
             return None
         try:
@@ -183,12 +223,48 @@ class LogRecord:
             logger.error("Failed to read feather file %s: %s", self.data_path, exc)
             return None
 
-    def refresh(self) -> LogRecord:
-        """Return a record whose metadata and data summary match the disk state."""
-        self.meta.reload()
+    @cached_property
+    def df(self) -> pd.DataFrame | None:
+        """Return a lazily cached in-memory snapshot of ``data.feather``.
+
+        Mutating the returned dataframe changes only this cached object. Call
+        :meth:`read_dataframe` to read the current file without using it.
+        """
+        version_before = FileVersion.from_path(self.data_path)
+        dataframe = self.read_dataframe()
+        version_after = FileVersion.from_path(self.data_path)
+        if dataframe is not None:
+            if version_before == version_after:
+                self._data_summary = _DataSummary(
+                    data_version=version_after,
+                    row_count=len(dataframe),
+                    columns=tuple(str(column) for column in dataframe.columns),
+                )
+            else:
+                self._data_summary = None
+        elif version_after is None:
+            self._data_summary = _DataSummary(None, 0, ())
+        return dataframe
+
+    def refresh(self) -> Self:
+        """Refresh cached file-backed state in place and return this record."""
+        metadata = self.__dict__.get("meta")
+        if metadata is not None:
+            metadata.reload()
+        self._refresh_data_summary()
+        return self
+
+    def _require_data_summary(self) -> _DataSummary:
+        if self._data_summary is None:
+            self._refresh_data_summary()
+        assert self._data_summary is not None
+        return self._data_summary
+
+    def _refresh_data_summary(self) -> bool:
         data_version = FileVersion.from_path(self.data_path)
-        if self.data_version == data_version:
-            return self
+        previous = self._data_summary
+        if previous is not None and previous.data_version == data_version:
+            return False
 
         try:
             row_count, columns = _inspect_data(self.data_path, data_version)
@@ -196,44 +272,11 @@ class LogRecord:
             logger.warning("Failed to inspect feather file %s: %s", self.data_path, exc)
             row_count, columns = 0, ()
             data_version = _RETRY_VERSION
-        return LogRecord(
-            path=self.path,
-            row_count=row_count,
-            columns=columns,
-            data_version=data_version,
-        )
 
-    def read_yaml_text(self) -> str:
-        if not self.const_path.exists():
-            return "const.yaml not found."
-        try:
-            text = self.const_path.read_text(encoding="utf-8", errors="ignore")
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error("Failed to read yaml file %s: %s", self.const_path, exc)
-            return f"Failed to read const.yaml: {exc}"
-        return text if text.strip() else "(const.yaml is empty)"
-
-    def list_image_files(self) -> list[Path]:
-        return self._list_files(lambda path: path.suffix.lower() in _IMAGE_EXTENSIONS)
-
-    def list_other_files(self) -> list[Path]:
-        return self._list_files(
-            lambda path: (
-                path.name not in _KNOWN_LOG_FILENAMES
-                and path.suffix.lower() not in _IMAGE_EXTENSIONS
-            )
-        )
-
-    def _list_files(self, predicate: Callable[[Path], bool]) -> list[Path]:
-        try:
-            files = [
-                child
-                for child in self.path.iterdir()
-                if child.is_file() and predicate(child)
-            ]
-        except OSError:
-            return []
-        return sorted(files)
+        self._data_summary = _DataSummary(data_version, row_count, columns)
+        if previous is not None:
+            self.__dict__.pop("df", None)
+        return True
 
 
 def _read_data_buffer(data_path: Path) -> pyarrow.BufferReader:
@@ -247,6 +290,9 @@ def _inspect_data(
 ) -> tuple[int, tuple[str, ...]]:
     if version is None:
         return 0, ()
+    # TODO: Benchmark a lightweight schema/count_rows path with before/after
+    # FileVersion checks, including Windows replace behavior, so catalog
+    # inspection does not need to buffer the entire Feather file.
     with pyarrow.ipc.open_file(_read_data_buffer(data_path)) as reader:
         row_count = sum(
             reader.get_batch(index).num_rows
@@ -286,10 +332,11 @@ class LogCatalog:
             del self._records[removed_path]
 
         for path in paths:
-            previous = self._records.get(path)
-            if previous is None:
-                previous = LogRecord(path)
-            self._records[path] = previous.refresh()
+            record = self._records.get(path)
+            if record is None:
+                record = LogRecord(path)
+                self._records[path] = record
+            record.refresh()
 
         return sorted(
             self._records.values(),

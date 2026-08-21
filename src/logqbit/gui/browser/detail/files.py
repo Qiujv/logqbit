@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
-from pathlib import Path
-
 from collections.abc import Callable
+from pathlib import Path
 
 import pyqtgraph as pg
 from PySide6.QtCore import QMimeData, QPoint, Qt, QUrl, Signal
@@ -28,6 +27,54 @@ from PySide6.QtWidgets import (
 from send2trash import send2trash
 
 logger = logging.getLogger(__name__)
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+_KNOWN_RECORD_FILENAMES = {"const.yaml", "data.feather", "metadata.json"}
+
+
+def read_yaml_text(path: Path) -> str:
+    """Return display text for a record's ``const.yaml`` file."""
+    if not path.exists():
+        return "const.yaml not found."
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Failed to read yaml file %s: %s", path, exc)
+        return f"Failed to read const.yaml: {exc}"
+    return text if text.strip() else "(const.yaml is empty)"
+
+
+def list_image_files(record_path: Path) -> list[Path]:
+    """List image files rendered as record detail tabs."""
+    return _list_record_files(
+        record_path,
+        lambda path: path.suffix.lower() in _IMAGE_EXTENSIONS,
+    )
+
+
+def list_other_files(record_path: Path) -> list[Path]:
+    """List non-standard files that are not rendered as image tabs."""
+    return _list_record_files(
+        record_path,
+        lambda path: (
+            path.name not in _KNOWN_RECORD_FILENAMES
+            and path.suffix.lower() not in _IMAGE_EXTENSIONS
+        ),
+    )
+
+
+def _list_record_files(
+    record_path: Path,
+    predicate: Callable[[Path], bool],
+) -> list[Path]:
+    try:
+        files = [
+            child
+            for child in record_path.iterdir()
+            if child.is_file() and predicate(child)
+        ]
+    except OSError:
+        return []
+    return sorted(files)
 
 
 def open_in_file_manager(

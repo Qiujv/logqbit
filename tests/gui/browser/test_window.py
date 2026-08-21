@@ -264,12 +264,12 @@ class TestBrowserWindow:
             lambda records, target=None: shown.append((records, target)),
         )
         try:
-            aggregate = LogRecord(
-                sample_records[0].path,
-                row_count=sample_records[0].row_count,
-                columns=(*sample_records[0].columns, LOGFOLDER_SID_COLUMN),
-                data_version=sample_records[0].data_version,
-            )
+            aggregate = sample_records[0]
+            dataframe = aggregate.read_dataframe()
+            assert dataframe is not None
+            dataframe[LOGFOLDER_SID_COLUMN] = "aggregate"
+            dataframe.to_feather(aggregate.data_path)
+            aggregate.refresh()
             window._actions.append_into_existing_record([sample_records[1], aggregate])
 
             assert len(shown) == 1
@@ -591,8 +591,9 @@ class TestBrowserWindow:
 
             assert inspect_count == 1
             assert read_count == 1
-            assert record.row_count == 3
+            assert record.row_count == 10
             assert window._selected_record is not None
+            assert window._selected_record is record
             assert window._selected_record.row_count == 10
         finally:
             window.close()

@@ -23,8 +23,6 @@ pip install logqbit
 pip install "logqbit[gui]"
 ```
 
-更详细的安装说明见：https://qiujv.github.io/logqbit/install/
-
 ## 用例
 
 ### 用例 1：记录一组实验数据
@@ -65,6 +63,7 @@ logqbit browser-demo
 更多内容：
 
 - 文档首页：https://qiujv.github.io/logqbit/
-- LogFolder：https://qiujv.github.io/logqbit/core/
+- 核心 API：https://qiujv.github.io/logqbit/core/
 - 数据浏览器：https://qiujv.github.io/logqbit/browser/
 - 命令行工具：https://qiujv.github.io/logqbit/cli/
+- PyPI：https://pypi.org/project/logqbit/

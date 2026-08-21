@@ -38,7 +38,9 @@ from PySide6.QtWidgets import (
 from logqbit.gui.browser.detail.data import DataViewManager
 from logqbit.gui.browser.detail.files import (
     ImageTab,
+    list_image_files,
     open_in_file_manager,
+    read_yaml_text,
 )
 from logqbit.gui.browser.detail.yaml import YamlView
 from logqbit.gui.browser.plot.manager import PlotManager
@@ -111,7 +113,7 @@ def record_watch_paths(record: LogRecord) -> list[str]:
         record.const_path,
         record.data_path,
         record.meta_path,
-        *record.list_image_files(),
+        *list_image_files(record.path),
     ):
         if extra and extra.exists():
             paths.append(str(extra))
@@ -180,14 +182,14 @@ class RecordDetailView(QWidget):
         self._record = record
         self.detail_id_label.setText(f"#{record.log_id}")
         self.detail_label.setText(record.path.as_posix())
-        self.yaml_view.set_yaml_text(record.read_yaml_text())
+        self.yaml_view.set_yaml_text(read_yaml_text(record.const_path))
         if metadata_changed or data_changed:
             self.data_view_manager.show_data_table(
                 record,
                 dataframe,
                 preview_only=True,
             )
-        self._update_image_tabs(record.list_image_files())
+        self._update_image_tabs(list_image_files(record.path))
         self.files_button.setEnabled(True)
         defer_plot = self.tab_widget.currentIndex() != TAB_PLOT
         if metadata_changed:

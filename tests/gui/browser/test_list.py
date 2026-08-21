@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 from PySide6.QtCore import Qt
 
 from logqbit.catalog import LogCatalog, LogRecord
@@ -85,7 +86,9 @@ class TestLogListTableModel:
 
     def test_data_display_rows(self, sample_records: list[LogRecord]) -> None:
         """Test displaying row count."""
-        record = LogRecord(sample_records[0].path, row_count=1_234)
+        record = sample_records[0]
+        pd.DataFrame({"x": range(1_234)}).to_feather(record.data_path)
+        record.refresh()
         model = LogListTableModel()
         model.set_records([record])
 

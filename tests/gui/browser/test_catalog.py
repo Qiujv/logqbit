@@ -5,6 +5,11 @@ from pathlib import Path
 import pandas as pd
 
 from logqbit.catalog import LogCatalog, LogRecord, export_records
+from logqbit.gui.browser.detail.files import (
+    list_image_files,
+    list_other_files,
+    read_yaml_text,
+)
 from logqbit.gui.browser.detail.view import record_watch_paths
 from logqbit.logfolder import LogFolder
 
@@ -58,7 +63,7 @@ class TestLogRecord:
         records = scan_catalog(sample_logfolder)
         record = records[0]
 
-        yaml_text = record.read_yaml_text()
+        yaml_text = read_yaml_text(record.const_path)
 
         assert isinstance(yaml_text, str)
         assert len(yaml_text) > 0
@@ -71,7 +76,7 @@ class TestLogRecord:
         records = scan_catalog(tmp_path)
         record = records[0]
 
-        yaml_text = record.read_yaml_text()
+        yaml_text = read_yaml_text(record.const_path)
         assert "const.yaml not found" in yaml_text
 
     def test_list_image_files(self, tmp_path: Path) -> None:
@@ -86,7 +91,7 @@ class TestLogRecord:
         records = scan_catalog(tmp_path)
         record = records[0]
 
-        images = record.list_image_files()
+        images = list_image_files(record.path)
 
         assert len(images) == 2
         assert all(img.suffix.lower() in {".png", ".jpg"} for img in images)
@@ -103,7 +108,7 @@ class TestLogRecord:
         extra_binary.write_bytes(b"123")
         ignored_image.touch()
 
-        other_files = record.list_other_files()
+        other_files = list_other_files(record.path)
 
         assert [path.name for path in other_files] == ["notes.txt", "snapshot.bin"]
 
