@@ -569,13 +569,13 @@ class TestBrowserWindow:
 
             inspect_count = 0
             read_count = 0
-            original_open_file = catalog_module.pyarrow.ipc.open_file
+            original_dataset = catalog_module.pyarrow.dataset.dataset
             original_read_feather = catalog_module.pd.read_feather
 
-            def count_open_file(*args, **kwargs):
+            def count_dataset(*args, **kwargs):
                 nonlocal inspect_count
                 inspect_count += 1
-                return original_open_file(*args, **kwargs)
+                return original_dataset(*args, **kwargs)
 
             def count_read_feather(*args, **kwargs):
                 nonlocal read_count
@@ -583,7 +583,7 @@ class TestBrowserWindow:
                 return original_read_feather(*args, **kwargs)
 
             monkeypatch.setattr(
-                catalog_module.pyarrow.ipc, "open_file", count_open_file
+                catalog_module.pyarrow.dataset, "dataset", count_dataset
             )
             monkeypatch.setattr(catalog_module.pd, "read_feather", count_read_feather)
 

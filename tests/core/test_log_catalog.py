@@ -34,10 +34,10 @@ def test_refresh_reuses_unchanged_records(
     catalog = LogCatalog()
     first_record = catalog.refresh(sample_logfolder)[0]
 
-    def fail_open_file(*args, **kwargs):
+    def fail_dataset(*args, **kwargs):
         raise AssertionError("unchanged Feather should not be inspected")
 
-    monkeypatch.setattr(catalog_module.pyarrow.ipc, "open_file", fail_open_file)
+    monkeypatch.setattr(catalog_module.pyarrow.dataset, "dataset", fail_dataset)
 
     second_record = catalog.refresh(sample_logfolder)[0]
 
@@ -170,12 +170,12 @@ def test_refresh_retries_data_inspection_after_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     catalog = LogCatalog()
-    original_open_file = catalog_module.pyarrow.ipc.open_file
+    original_dataset = catalog_module.pyarrow.dataset.dataset
 
-    def fail_open_file(*args, **kwargs):
+    def fail_dataset(*args, **kwargs):
         raise OSError("temporary read failure")
 
-    monkeypatch.setattr(catalog_module.pyarrow.ipc, "open_file", fail_open_file)
+    monkeypatch.setattr(catalog_module.pyarrow.dataset, "dataset", fail_dataset)
     failed = catalog.refresh(sample_logfolder)[0]
 
     assert failed.row_count == 0
@@ -183,9 +183,9 @@ def test_refresh_retries_data_inspection_after_failure(
     assert failed.data_version is not None
 
     monkeypatch.setattr(
-        catalog_module.pyarrow.ipc,
-        "open_file",
-        original_open_file,
+        catalog_module.pyarrow.dataset,
+        "dataset",
+        original_dataset,
     )
     recovered = catalog.refresh(sample_logfolder)[0]
 
@@ -335,24 +335,62 @@ def test_record_reads_dataframe_from_memory_buffer(
     assert isinstance(sources[0], catalog_module.pyarrow.BufferReader)
 
 
-def test_catalog_inspects_data_from_memory_buffer(
+def test_catalog_inspects_data_with_dataset(
     sample_logfolder: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_open_file = catalog_module.pyarrow.ipc.open_file
-    sources = []
+    original_dataset = catalog_module.pyarrow.dataset.dataset
+    calls = []
 
-    def open_file(source, *args, **kwargs):
-        sources.append(source)
-        return original_open_file(source, *args, **kwargs)
+    def dataset(source, *args, **kwargs):
+        calls.append((source, kwargs))
+        return original_dataset(source, *args, **kwargs)
 
-    monkeypatch.setattr(catalog_module.pyarrow.ipc, "open_file", open_file)
+    monkeypatch.setattr(catalog_module.pyarrow.dataset, "dataset", dataset)
 
     records = LogCatalog(sample_logfolder).refresh()
 
     assert len(records) == 1
-    assert len(sources) == 1
-    assert isinstance(sources[0], catalog_module.pyarrow.BufferReader)
+    assert calls == [(records[0].data_path, {"format": "feather"})]
+
+
+def test_catalog_retries_when_data_changes_during_inspection(
+    sample_logfolder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = LogCatalog(sample_logfolder)
+    record = catalog.refresh()[0]
+    original_dataset = catalog_module.pyarrow.dataset.dataset
+    pd.DataFrame({"x": range(4)}).to_feather(record.data_path)
+
+    class ChangingDataset:
+        def __init__(self, source):
+            self._source = source
+            self.schema = source.schema
+
+        def count_rows(self):
+            row_count = self._source.count_rows()
+            pd.DataFrame({"x": range(5)}).to_feather(record.data_path)
+            return row_count
+
+    monkeypatch.setattr(
+        catalog_module.pyarrow.dataset,
+        "dataset",
+        lambda *args, **kwargs: ChangingDataset(
+            original_dataset(*args, **kwargs)
+        ),
+    )
+
+    assert catalog.refresh()[0] is record
+    assert record.row_count == 3
+
+    monkeypatch.setattr(
+        catalog_module.pyarrow.dataset,
+        "dataset",
+        original_dataset,
+    )
+    assert catalog.refresh()[0] is record
+    assert record.row_count == 5
 
 
 def test_record_reads_current_in_memory_metadata(
@@ -394,10 +432,10 @@ def test_metadata_refresh_resolves_plot_columns_without_inspecting_data(
         plot_fields=["x"],
     )
 
-    def fail_open_file(*args, **kwargs):
+    def fail_dataset(*args, **kwargs):
         raise AssertionError("metadata-only refresh should not inspect Feather")
 
-    monkeypatch.setattr(catalog_module.pyarrow.ipc, "open_file", fail_open_file)
+    monkeypatch.setattr(catalog_module.pyarrow.dataset, "dataset", fail_dataset)
 
     refreshed = catalog.refresh()[0]
 
