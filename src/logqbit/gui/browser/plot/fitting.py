@@ -8,9 +8,9 @@ from typing import Literal
 import numpy as np
 import pyqtgraph as pg
 from scipy.optimize import curve_fit
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QAbstractButton, QGraphicsRectItem, QLabel
+from PySide6.QtWidgets import QApplication, QAbstractButton, QGraphicsRectItem, QLabel
 
 FitKind = Literal["exponential", "quadratic"]
 
@@ -124,10 +124,24 @@ class FitViewBox(pg.ViewBox):
     selection_finished = Signal(str, object)
     selection_canceled = Signal()
     zoom_fit_requested = Signal()
+    cursor_click_requested = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
         self._fit_kind: FitKind | None = None
+        self._pending_cursor_click = None
+        self._cursor_click_timer = QTimer(self)
+        self._cursor_click_timer.setSingleShot(True)
+        self._cursor_click_timer.timeout.connect(self._emit_cursor_click)
+
+    def _emit_cursor_click(self) -> None:
+        if self._pending_cursor_click is not None:
+            self.cursor_click_requested.emit(self._pending_cursor_click)
+            self._pending_cursor_click = None
+
+    def cancel_pending_cursor_click(self) -> None:
+        self._cursor_click_timer.stop()
+        self._pending_cursor_click = None
 
     def arm(self, kind: FitKind) -> None:
         self._fit_kind = kind
@@ -158,8 +172,14 @@ class FitViewBox(pg.ViewBox):
 
     def mouseClickEvent(self, event) -> None:
         if event.double() and event.button() == Qt.LeftButton:
+            self.cancel_pending_cursor_click()
             event.accept()
             self.zoom_fit_requested.emit()
+            return
+        if event.button() == Qt.LeftButton:
+            self._pending_cursor_click = event.pos()
+            self._cursor_click_timer.start(QApplication.doubleClickInterval())
+            event.accept()
             return
         if self._fit_kind is not None and event.button() == Qt.RightButton:
             event.accept()

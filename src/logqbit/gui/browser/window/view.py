@@ -331,7 +331,7 @@ class LogBrowserWindow(QMainWindow):
             self.removeAction(action)
         self._shortcuts.clear()
 
-        def add_shortcut(key: int, callback) -> None:
+        def add_shortcut(key: int | QKeySequence.StandardKey, callback) -> None:
             action = QAction(self)
             action.setShortcut(QKeySequence(key))
             action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
@@ -343,7 +343,9 @@ class LogBrowserWindow(QMainWindow):
         add_shortcut(Qt.Key_T, self._actions.shortcut_toggle_trash)
         add_shortcut(Qt.Key_S, self._actions.shortcut_toggle_star)
         add_shortcut(Qt.Key_F2, self._actions.shortcut_rename_title)
+        add_shortcut(Qt.Key_F3, self._actions.shortcut_change_id)
         add_shortcut(Qt.Key_F5, self._on_refresh_clicked)
+        add_shortcut(QKeySequence.New, self._actions.shortcut_make_note)
         add_shortcut(Qt.Key_0, lambda: self._actions.shortcut_set_star(0))
         add_shortcut(Qt.Key_1, lambda: self._actions.shortcut_set_star(1))
         add_shortcut(Qt.Key_2, lambda: self._actions.shortcut_set_star(2))
@@ -405,7 +407,9 @@ class LogBrowserWindow(QMainWindow):
             self.theme_button.setToolTip(tooltip)
 
     def _update_window_title(self) -> None:
-        self.setWindowTitle(f"{self._base_dir.name} - LogQbit Browser")
+        self.setWindowTitle(
+            f"{self._base_dir.parent.name} / {self._base_dir.name} - LogQbit Browser"
+        )
 
     def _sync_directory_watcher(self) -> None:
         try:
@@ -614,16 +618,9 @@ class _BrowserActions:
     def open_table_context_menu(self, point) -> None:
         records = self.get_selected_records()
         menu = QMenu(self.window)
-        show_trash_action = menu.addAction("Show Trashed Items")
-        show_trash_action.setCheckable(True)
-        show_trash_action.setChecked(self.window._show_trash)
-        show_starred_action = menu.addAction("Show Starred Items Only")
-        show_starred_action.setCheckable(True)
-        show_starred_action.setChecked(self.window._show_starred_only)
-        menu.addSeparator()
-        make_note_action = menu.addAction("Make 🏷️Note...")
+        make_note_action = menu.addAction("Make 🏷️Note... (Ctrl+N)")
         rename_action = menu.addAction("Rename Title... (F2)")
-        change_id_action = menu.addAction("Change ID...")
+        change_id_action = menu.addAction("Change ID... (F3)")
         toggle_star_action = menu.addAction("Toggle ⭐Star (S)")
         toggle_star_action.setCheckable(True)
         toggle_trash_action = menu.addAction("Toggle 🗑️Trash (T)")
@@ -668,10 +665,6 @@ class _BrowserActions:
             self.set_records_trash(records, toggle_trash_action.isChecked())
         elif chosen == send_to_recycle_action and records:
             self.send_records_to_recycle_bin(records)
-        elif chosen == show_trash_action:
-            self.toggle_show_trash()
-        elif chosen == show_starred_action:
-            self.toggle_show_starred_only()
         elif chosen == open_explorer and records:
             self.open_path_in_explorer(records[0].path, len(records) != 1)
         elif chosen == merge_new_action and can_merge:
@@ -714,6 +707,15 @@ class _BrowserActions:
 
     def create_header_context_menu(self) -> QMenu:
         menu = QMenu(self.window)
+        show_trash_action = menu.addAction("Show Trashed Items")
+        show_trash_action.setCheckable(True)
+        show_trash_action.setChecked(self.window._show_trash)
+        show_trash_action.triggered.connect(self.toggle_show_trash)
+        show_starred_action = menu.addAction("Show Starred Items Only")
+        show_starred_action.setCheckable(True)
+        show_starred_action.setChecked(self.window._show_starred_only)
+        show_starred_action.triggered.connect(self.toggle_show_starred_only)
+        menu.addSeparator()
         for label, column in (
             ("Show Plot Axes Column", COL_PLOT_AXES),
             ("Show Create Time Column", COL_CREATE_TIME),
@@ -1002,3 +1004,11 @@ class _BrowserActions:
         records = self.get_selected_records()
         if len(records) == 1:
             self.rename_record_title(records[0])
+
+    def shortcut_change_id(self) -> None:
+        records = self.get_selected_records()
+        if len(records) == 1:
+            self.change_record_id(records[0])
+
+    def shortcut_make_note(self) -> None:
+        self.make_note()

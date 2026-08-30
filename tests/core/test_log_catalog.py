@@ -550,6 +550,32 @@ def test_merge_records_into_new_copies_metadata_const_and_adds_sid(
     assert result.appended_records == 2
 
 
+def test_merge_records_into_new_accepts_custom_folder_id_and_title(
+    tmp_path: Path,
+) -> None:
+    first = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [1], "value": [10]}),
+        title="first",
+    )
+    second = _create_merge_record(
+        tmp_path,
+        pd.DataFrame({"x": [2], "value": [20]}),
+        title="second",
+    )
+
+    prepared = PreparedMerge.for_new_folder(
+        [first, second],
+        tmp_path,
+        folder_id="combined-run",
+        title="Combined run",
+    )
+    result = prepared.publish()
+
+    assert result.path == tmp_path / "combined-run"
+    assert LogRecord(result.path).title == "Combined run"
+
+
 def test_merge_records_into_new_rejects_overlapping_source_ids(
     tmp_path: Path,
 ) -> None:

@@ -10,8 +10,10 @@ from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -51,12 +53,34 @@ class MergeDialog(QDialog):
         self._target = target
         self._prepared: PreparedMerge | None = None
         self._closed = False
+        self._analysis_timer = QTimer(self)
+        self._analysis_timer.setSingleShot(True)
+        self._analysis_timer.timeout.connect(self._start_analysis)
 
         layout = QVBoxLayout(self)
         self._summary_label = QLabel(self._summary_text(), self)
         self._summary_label.setWordWrap(True)
         self._summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._summary_label)
+
+        self._new_folder_options = QWidget(self)
+        options_layout = QFormLayout(self._new_folder_options)
+        self._new_folder_id_edit = QLineEdit(self._new_folder_options)
+        self._new_folder_id_edit.setPlaceholderText("Automatic")
+        self._new_folder_title_edit = QLineEdit(
+            self._records[0].title,
+            self._new_folder_options,
+        )
+        options_layout.addRow("New folder ID:", self._new_folder_id_edit)
+        options_layout.addRow("Title:", self._new_folder_title_edit)
+        self._new_folder_options.setVisible(target is None)
+        self._new_folder_id_edit.textChanged.connect(
+            self._schedule_new_folder_analysis
+        )
+        self._new_folder_title_edit.textChanged.connect(
+            self._schedule_new_folder_analysis
+        )
+        layout.addWidget(self._new_folder_options)
 
         self._status_label = QLabel("Preparing merge...", self)
         status_font = self._status_label.font()
@@ -119,6 +143,8 @@ class MergeDialog(QDialog):
                 self._prepared = PreparedMerge.for_new_folder(
                     self._records,
                     self._destination_parent,
+                    folder_id=self._new_folder_id_edit.text().strip() or None,
+                    title=self._new_folder_title_edit.text(),
                 )
             else:
                 self._prepared = PreparedMerge.for_append(self._records)
@@ -212,7 +238,16 @@ class MergeDialog(QDialog):
         self._discard_prepared()
         self._target = None
         self._summary_label.setText(self._summary_text())
+        self._new_folder_options.show()
         self._start_analysis()
+
+    def _schedule_new_folder_analysis(self) -> None:
+        if self._target is not None or self._closed:
+            return
+        self._write_button.setEnabled(False)
+        self._status_label.setText("Updating merge...")
+        self._set_status_color(QColor("#777777"))
+        self._analysis_timer.start(150)
 
     def reject(self) -> None:
         self._closed = True

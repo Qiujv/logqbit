@@ -7,6 +7,9 @@ from pathlib import Path
 
 import logqbit
 
+HOMEPAGE_URL = "https://github.com/Qiujv/logqbit"
+DOCUMENTATION_URL = "https://qiujv.github.io/logqbit/"
+
 
 def about_message() -> str:
     """Build the Browser About dialog message."""
@@ -19,4 +22,6 @@ def about_message() -> str:
         "<b>LogQbit by Qiujv</b><br>"
         f"Version: {project_version}<br>"
         f"Path: {package_path}<br>"
+        f'Homepage: <a href="{HOMEPAGE_URL}">{HOMEPAGE_URL}</a><br>'
+        f'Documentation: <a href="{DOCUMENTATION_URL}">{DOCUMENTATION_URL}</a><br>'
     )

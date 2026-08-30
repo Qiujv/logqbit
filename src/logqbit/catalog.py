@@ -353,6 +353,14 @@ class LogCatalog:
 
 
 LOGFOLDER_SID_COLUMN = "logfolder_sid"
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 class MergeRecordsError(RuntimeError):
@@ -388,6 +396,7 @@ class PreparedMerge:
     source: LogRecord
     target: LogRecord | None
     destination_parent: Path | None
+    new_folder_id: str | None
     appended_records: int
     skipped_records: int
     staging_path: Path | None
@@ -405,6 +414,9 @@ class PreparedMerge:
         cls,
         records: Iterable[LogRecord],
         destination_parent: str | Path,
+        *,
+        folder_id: str | None = None,
+        title: str | None = None,
     ) -> PreparedMerge:
         """Prepare selected records for publication as a new LogFolder."""
         records = _validate_merge_records(records)
@@ -417,10 +429,13 @@ class PreparedMerge:
         )
         _require_unchanged_merge_sources(loaded)
         destination_parent = Path(destination_parent)
+        if folder_id is not None:
+            folder_id = _validate_new_folder_id(folder_id)
         staging_path = _stage_new_merged_logfolder(
             destination_parent,
             dataframe,
             records[0],
+            title=title,
         )
         return cls(
             dataframe=dataframe,
@@ -428,6 +443,7 @@ class PreparedMerge:
             source=records[0],
             target=None,
             destination_parent=destination_parent,
+            new_folder_id=folder_id,
             appended_records=len(records),
             skipped_records=0,
             staging_path=staging_path,
@@ -486,6 +502,7 @@ class PreparedMerge:
                 source=target,
                 target=target,
                 destination_parent=None,
+                new_folder_id=None,
                 appended_records=0,
                 skipped_records=skipped_records,
                 staging_path=None,
@@ -500,6 +517,7 @@ class PreparedMerge:
             source=target,
             target=target,
             destination_parent=None,
+            new_folder_id=None,
             appended_records=appended_records,
             skipped_records=skipped_records,
             staging_path=staging_path,
@@ -544,6 +562,7 @@ class PreparedMerge:
         target_path = _publish_staged_logfolder(
             self.staging_path,
             self.destination_parent,
+            folder_id=self.new_folder_id,
             before_publish=lambda: _require_unchanged_merge_sources(
                 self.loaded_records
             ),
@@ -597,9 +616,17 @@ class PreparedMerge:
 def merge_records_into_new(
     records: Iterable[LogRecord],
     destination_parent: str | Path,
+    *,
+    folder_id: str | None = None,
+    title: str | None = None,
 ) -> MergeRecordsResult:
-    """Merge records into a newly numbered LogFolder directory."""
-    prepared = PreparedMerge.for_new_folder(records, destination_parent)
+    """Merge records into a new LogFolder directory."""
+    prepared = PreparedMerge.for_new_folder(
+        records,
+        destination_parent,
+        folder_id=folder_id,
+        title=title,
+    )
     try:
         return prepared.publish()
     finally:
@@ -723,6 +750,8 @@ def _stage_new_merged_logfolder(
     parent: Path,
     dataframe: pd.DataFrame,
     source: LogRecord,
+    *,
+    title: str | None,
 ) -> Path:
     parent.mkdir(parents=True, exist_ok=True)
     staging_path = Path(tempfile.mkdtemp(prefix=".logqbit-merge-", dir=parent))
@@ -737,7 +766,7 @@ def _stage_new_merged_logfolder(
         )
         metadata = LogMetadata(
             staging_path / "metadata.json.pending",
-            source_metadata.title,
+            source_metadata.title if title is None else title,
         )
         metadata.update(
             plot_axes=source_metadata.plot_axes,
@@ -754,17 +783,26 @@ def _publish_staged_logfolder(
     staging_path: Path,
     parent: Path,
     *,
+    folder_id: str | None,
     before_publish: Callable[[], None],
 ) -> Path:
     target_path: Path | None = None
     try:
         before_publish()
         while True:
-            candidate_path = _next_export_logfolder_path(parent)
+            candidate_path = (
+                parent / folder_id
+                if folder_id is not None
+                else _next_export_logfolder_path(parent)
+            )
             try:
                 candidate_path.mkdir(exist_ok=False)
-            except FileExistsError:  # pragma: no cover - concurrent allocation
-                continue
+            except FileExistsError as exc:
+                if folder_id is not None:
+                    raise MergeRecordsError(
+                        f"LogFolder ID {folder_id!r} already exists."
+                    ) from exc
+                continue  # pragma: no cover - concurrent allocation
             target_path = candidate_path
             break
         for source_name, target_name in (
@@ -783,6 +821,23 @@ def _publish_staged_logfolder(
     finally:
         if staging_path.exists():
             shutil.rmtree(staging_path)
+
+
+def _validate_new_folder_id(folder_id: str) -> str:
+    folder_id = folder_id.strip()
+    if not folder_id:
+        raise MergeRecordsError("LogFolder ID cannot be empty.")
+    if folder_id in {".", ".."} or Path(folder_id).name != folder_id:
+        raise MergeRecordsError("LogFolder ID must be a single directory name.")
+    if any(character in folder_id for character in '\\<>:"|?*'):
+        raise MergeRecordsError("LogFolder ID contains invalid directory characters.")
+    if any(ord(character) < 32 for character in folder_id):
+        raise MergeRecordsError("LogFolder ID cannot contain control characters.")
+    if folder_id.endswith((" ", ".")):
+        raise MergeRecordsError("LogFolder ID cannot end with a space or period.")
+    if folder_id.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
+        raise MergeRecordsError("LogFolder ID is reserved on Windows.")
+    return folder_id
 
 
 def _stage_dataframe(dataframe: pd.DataFrame, target_path: Path) -> Path:

@@ -8,11 +8,11 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtWidgets import QSizePolicy
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtWidgets import QSizePolicy, QStyleOptionViewItem
 
 from logqbit.catalog import PlotColumns, resolve_plot_columns
-from logqbit.gui.browser.plot.fitting import fit_exponential, fit_quadratic
+from logqbit.gui.browser.plot.fitting import FitViewBox, fit_exponential, fit_quadratic
 from logqbit.gui.browser.plot.grouping import iter_plot_groups
 from logqbit.gui.browser.plot.mesh import (
     _build_grids_rect,
@@ -28,6 +28,23 @@ from logqbit.gui.browser.plot.manager import (
 
 
 class TestTagBar:
+    def test_tag_items_are_compact_but_short_tags_remain_clickable(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(["x", "signal"], ["x"], ["signal"], [])
+
+        item = tag_bar._list.item(0)
+        metrics = tag_bar._list.fontMetrics()
+        option = QStyleOptionViewItem()
+        option.font = tag_bar._list.font()
+        size = tag_bar._list.itemDelegate().sizeHint(
+            option,
+            tag_bar._list.model().index(tag_bar._list.row(item), 0),
+        )
+
+        assert tag_bar._list.spacing() == 2
+        assert tag_bar._list.styleSheet() == ""
+        assert size.width() >= metrics.horizontalAdvance("00")
+
     def test_set_columns_deduplicates_without_reordering(self) -> None:
         tag_bar = TagBar()
 
@@ -189,6 +206,77 @@ class TestTagBar:
         assert tag_bar.axes == ["x"]
         assert tag_bar.fields == ["signal"]
         assert changes == []
+
+
+class TestCursorClickHandling:
+    def test_single_click_is_deferred_and_double_click_cancels_it(self) -> None:
+        class ClickEvent:
+            def __init__(self, position: QPointF, *, double: bool) -> None:
+                self._position = position
+                self._double = double
+                self.accepted = False
+
+            def button(self):
+                return Qt.LeftButton
+
+            def double(self) -> bool:
+                return self._double
+
+            def pos(self) -> QPointF:
+                return self._position
+
+            def accept(self) -> None:
+                self.accepted = True
+
+        view_box = FitViewBox()
+        clicks: list[QPointF] = []
+        zooms: list[None] = []
+        view_box.cursor_click_requested.connect(clicks.append)
+        view_box.zoom_fit_requested.connect(lambda: zooms.append(None))
+
+        single = ClickEvent(QPointF(1, 2), double=False)
+        view_box.mouseClickEvent(single)
+        assert single.accepted
+        assert clicks == []
+
+        view_box.mouseClickEvent(ClickEvent(QPointF(1, 2), double=True))
+        view_box._emit_cursor_click()
+
+        assert clicks == []
+        assert zooms == [None]
+
+    def test_cursor_click_moves_to_the_nearest_1d_data_point(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {"x": [0.0, 1.0, 2.0], "z": [1.0, 2.0, 3.0]}
+        )
+        manager._refresh_plot_1d("x", ["z"])
+        manager.cursor_button.click()
+
+        position = manager.fit_view_box.mapFromView(QPointF(1.8, 2.0))
+        manager.fit_view_box.cursor_click_requested.emit(position)
+
+        assert manager.cursor_controller._vertical_line.value() == pytest.approx(2.0)
+        manager.widget.deleteLater()
+
+    def test_preview_coordinates_use_a_tenth_of_the_minor_tick_spacing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        manager = PlotManager()
+        axis = manager.plot_widget.getAxis("bottom")
+        monkeypatch.setattr(
+            axis,
+            "tickSpacing",
+            lambda *_args: [(1.0, 0.0), (0.2, 0.1)],
+        )
+
+        assert manager.cursor_controller._snap_preview_coordinate(
+            0.371,
+            "bottom",
+        ) == pytest.approx(0.38)
+        manager.widget.deleteLater()
 
 
 def test_resolve_plot_columns_fills_axes_before_fields() -> None:
@@ -409,6 +497,48 @@ class TestPlotManagerFitAndColorBar:
         assert not manager.log_y_action.isChecked()
         manager.widget.deleteLater()
 
+    def test_marker_size_menu_updates_1d_markers_and_hides_for_2d(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {"x": [0.0, 1.0], "y": [2.0, 3.0]}
+        )
+
+        manager._refresh_plot_1d("x", ["y"])
+
+        item = manager.plot_widget.getPlotItem().listDataItems()[0]
+        large_action = next(
+            action
+            for action in manager.marker_size_actions.actions()
+            if action.text() == "Large"
+        )
+        assert manager.marker_size_menu.menuAction().isVisible()
+        assert item.opts["symbol"] == "o"
+        assert item.opts["symbolSize"] == 6
+
+        large_action.trigger()
+
+        assert item.opts["symbolSize"] == 8
+        assert large_action.isChecked()
+
+        values = np.arange(2002, dtype=float)
+        manager._plot_frame = pd.DataFrame({"x": values, "y": values})
+        manager._refresh_plot_1d("x", ["y"])
+
+        assert manager.plot_widget.getPlotItem().listDataItems()[0].opts["symbol"] is None
+
+        manager._plot_frame = pd.DataFrame(
+            {
+                "x": [0.0, 0.0, 1.0, 1.0],
+                "y": [0.0, 1.0, 0.0, 1.0],
+                "z": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+        manager._refresh_plot_2d("x", "y", "z")
+
+        assert not manager.marker_size_menu.menuAction().isVisible()
+        manager.widget.deleteLater()
+
     def test_double_click_zooms_to_fit_all_data(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -585,7 +715,7 @@ class TestPlotManagerFitAndColorBar:
         assert saved_paths == [str(tmp_path / "plot-2.png")]
         manager.widget.deleteLater()
 
-    def test_2d_cursor_replaces_color_bar_and_target_moves_both_lines(self) -> None:
+    def test_2d_cursor_replaces_color_bar_and_click_moves_both_lines(self) -> None:
         manager = PlotManager()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
@@ -607,15 +737,7 @@ class TestPlotManagerFitAndColorBar:
         assert manager.plot_layout.columnStretch(1) == 1
         assert manager.plot_layout.rowStretch(1) == 1
 
-        controller._target.setPos(0.1, 0.2)
-        assert controller._vertical_line.value() == pytest.approx(0.1)
-        assert controller._horizontal_line.value() == pytest.approx(0.2)
-        assert controller._horizontal_curve.isVisible() is False
-        assert controller._vertical_curve.isVisible() is False
-        assert not manager.section_readout.text()
-        assert not manager.horizontal_section_widget.isHidden()
-
-        controller._finish_2d_drag()
+        controller._update_2d(0.1, 0.2)
         assert controller._vertical_line.value() == pytest.approx(0.0)
         assert controller._horizontal_line.value() == pytest.approx(0.0)
         assert controller._horizontal_curve.isVisible()

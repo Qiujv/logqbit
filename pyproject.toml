@@ -38,6 +38,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/Qiujv/logqbit"
+Documentation = "https://qiujv.github.io/logqbit/"
 
 [project.scripts]
 logqbit = "logqbit.cli:main"

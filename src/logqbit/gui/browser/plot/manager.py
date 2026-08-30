@@ -14,10 +14,18 @@ import pandas as pd
 import pyqtgraph as pg
 from pyqtgraph.exporters import ImageExporter
 from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QKeySequence, QShortcut
+from PySide6.QtGui import (
+    QActionGroup,
+    QColor,
+    QImage,
+    QKeySequence,
+    QPalette,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QGridLayout,
     QCheckBox,
+    QApplication,
     QHBoxLayout,
     QLabel,
     QListView,
@@ -25,6 +33,9 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QSizePolicy,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -43,6 +54,7 @@ from logqbit.gui.browser.plot.mesh import build_plot_mesh
 PLOT_EXPORT_SCALE = 2
 PLOT_AUTO_RANGE_PADDING = 0.01
 COLOR_BAR_HEIGHT_FACTOR = 0.9
+MARKER_SIZES = {"Small": 4, "Medium": 6, "Large": 8}
 PLOT_COLORS = (
     "#1E90FF",
     "#FF6347",
@@ -55,6 +67,67 @@ PLOT_COLORS = (
 )
 
 
+class _CompactTagDelegate(QStyledItemDelegate):
+    """Tighten tag padding while retaining the active native Qt style."""
+
+    def __init__(self, horizontal_padding: int, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._horizontal_padding = horizontal_padding
+
+    def paint(self, painter, option, index) -> None:
+        display_option = QStyleOptionViewItem(option)
+        self.initStyleOption(display_option, index)
+        text = display_option.text
+        display_option.text = ""
+        style = (
+            display_option.widget.style()
+            if display_option.widget
+            else QApplication.style()
+        )
+        style.drawControl(
+            QStyle.CE_ItemViewItem,
+            display_option,
+            painter,
+            display_option.widget,
+        )
+
+        color_role = (
+            QPalette.HighlightedText
+            if display_option.state & QStyle.State_Selected
+            else QPalette.Text
+        )
+        painter.save()
+        painter.setPen(display_option.palette.color(color_role))
+        painter.drawText(
+            display_option.rect.adjusted(
+                self._horizontal_padding,
+                0,
+                -self._horizontal_padding,
+                0,
+            ),
+            Qt.AlignCenter,
+            text,
+        )
+        painter.restore()
+
+    def sizeHint(self, option, index):  # noqa: N802
+        display_option = QStyleOptionViewItem(option)
+        self.initStyleOption(display_option, index)
+        text_width = display_option.fontMetrics.horizontalAdvance(display_option.text)
+        if display_option.text != TagBar._SEP:
+            text_width = max(
+                text_width,
+                display_option.fontMetrics.horizontalAdvance("00"),
+            )
+        size = super().sizeHint(option, index)
+        size.setWidth(text_width + self._horizontal_padding * 2)
+        return size
+
+
+# Keep TagBar sizing in a delegate, rather than a stylesheet, so native palettes
+# remain responsive to light and dark theme changes.
+
+
 class TagBar(QWidget):
     """Assign columns to plot roles by dragging between sections."""
 
@@ -63,17 +136,23 @@ class TagBar(QWidget):
 
     _SEP = "|"
     _GRAY = QColor("#888888")
+    _ITEM_SPACING = 2
+    _ITEM_HORIZONTAL_PADDING = 2
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 0, 4, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(self._ITEM_SPACING)
         layout.addWidget(QLabel("axes | fields:"))
 
         self._list = QListWidget()
         self._list.setFlow(QListView.LeftToRight)
         self._list.setWrapping(False)
+        self._list.setSpacing(self._ITEM_SPACING)
+        self._list.setItemDelegate(
+            _CompactTagDelegate(self._ITEM_HORIZONTAL_PADDING, self._list)
+        )
         self._list.setDragDropMode(QListWidget.InternalMove)
         self._list.setDefaultDropAction(Qt.MoveAction)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -178,6 +257,9 @@ class TagBar(QWidget):
         item.setForeground(self._GRAY)
         return item
 
+    def _make_tag_item(self, name: str) -> QListWidgetItem:
+        return QListWidgetItem(name)
+
     def _update_item_colors(self) -> None:
         separator_count = 0
         for index in range(self._list.count()):
@@ -214,13 +296,13 @@ class TagBar(QWidget):
     def _set_list_columns(self, resolved) -> None:
         self._list.clear()
         for name in resolved.axes:
-            self._list.addItem(name)
+            self._list.addItem(self._make_tag_item(name))
         self._list.addItem(self._make_sep())
         for name in resolved.fields:
-            self._list.addItem(name)
+            self._list.addItem(self._make_tag_item(name))
         self._list.addItem(self._make_sep())
         for name in (*resolved.groupby, *resolved.ignored):
-            item = QListWidgetItem(name)
+            item = self._make_tag_item(name)
             item.setForeground(self._GRAY)
             self._list.addItem(item)
 
@@ -309,6 +391,7 @@ class PlotManager:
         self._mesh_items: list[pg.PColorMeshItem] = []
         self._mesh_levels: tuple[float, float] | None = None
         self._mesh_z_column: str | None = None
+        self._marker_size = MARKER_SIZES["Medium"]
         self.widget = self._create_widget(parent)
 
     def _create_widget(self, parent: QWidget | None = None) -> QWidget:
@@ -423,6 +506,10 @@ class PlotManager:
             self.cursor_button,
             self._cursor_visibility_changed,
             self._cursor_activated,
+            self.fit_view_box.cancel_pending_cursor_click,
+        )
+        self.fit_view_box.cursor_click_requested.connect(
+            self.cursor_controller.move_to_click
         )
         self.exponential_fit_button.clicked.connect(self._fit_activated)
         self.quadratic_fit_button.clicked.connect(self._fit_activated)
@@ -443,6 +530,25 @@ class PlotManager:
         self.log_y_action.setCheckable(True)
         self.log_y_action.toggled.connect(plot_item.ctrl.logYCheck.setChecked)
         plot_item.ctrl.logYCheck.toggled.connect(self.log_y_action.setChecked)
+
+        self.marker_size_menu = menu.addMenu("Marker size")
+        self.marker_size_actions = QActionGroup(self.marker_size_menu)
+        self.marker_size_actions.setExclusive(True)
+        for label, size in MARKER_SIZES.items():
+            action = self.marker_size_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(size == self._marker_size)
+            action.triggered.connect(
+                lambda checked, size=size: checked and self._set_marker_size(size)
+            )
+            self.marker_size_actions.addAction(action)
+        self.marker_size_menu.menuAction().setVisible(False)
+
+    def _set_marker_size(self, size: int) -> None:
+        self._marker_size = size
+        for item in self.plot_widget.getPlotItem().listDataItems():
+            if item.opts["symbol"] is not None:
+                item.setSymbolSize(size)
 
     def zoom_fit_all(self) -> None:
         """Resize the plot view to include all plotted data."""
@@ -654,6 +760,7 @@ class PlotManager:
         self._mesh_items = []
         self._mesh_levels = None
         self._mesh_z_column = None
+        self.marker_size_menu.menuAction().setVisible(False)
         self.cursor_controller.clear()
         self.fit_controller.disable("Fit is available for a single 1D field.")
         if hide_fit_buttons:
@@ -796,7 +903,7 @@ class PlotManager:
                         pen=pen,
                         name=legend_name,
                         symbol="o",
-                        symbolSize=6,
+                        symbolSize=self._marker_size,
                         symbolPen=pg.mkPen(color=color),
                         symbolBrush=pg.mkBrush("#FFFFFF"),
                     )
@@ -828,6 +935,8 @@ class PlotManager:
             self._clear_plot("No numeric data to plot.")
             return
 
+        self.marker_size_menu.menuAction().setVisible(True)
+
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.enableAutoRange(enable=True)
@@ -851,6 +960,7 @@ class PlotManager:
         z_col: str,
         groupby: Sequence[str] = (),
     ) -> None:
+        self.marker_size_menu.menuAction().setVisible(False)
         self.fit_controller.set_visible(False)
         record = self._plot_record
         if record is None:

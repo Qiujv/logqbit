@@ -40,6 +40,19 @@ def scan_catalog(directory: Path) -> list[LogRecord]:
 
 
 class TestBrowserWindow:
+    def test_window_title_includes_parent_directory(
+        self,
+        sample_logfolder: Path,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        try:
+            assert window.windowTitle() == (
+                f"{sample_logfolder.parent.name} / {sample_logfolder.name}"
+                " - LogQbit Browser"
+            )
+        finally:
+            window.close()
+
     def test_make_note_creates_metadata_only_and_selects_it(
         self,
         sample_logfolder: Path,
@@ -161,6 +174,53 @@ class TestBrowserWindow:
         assert calls == [("logs", None), ("detail", True)]
         window.close()
 
+    def test_header_menu_owns_list_filters_and_record_shortcuts(
+        self,
+        sample_records: list[LogRecord],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        window = LogBrowserWindow(sample_records[0].path.parent)
+        refreshed: list[None] = []
+        changed_ids: list[LogRecord] = []
+        made_notes: list[None] = []
+        monkeypatch.setattr(window, "refresh_logs", lambda: refreshed.append(None))
+        monkeypatch.setattr(
+            window._actions,
+            "change_record_id",
+            lambda record: changed_ids.append(record),
+        )
+        monkeypatch.setattr(
+            window._actions,
+            "make_note",
+            lambda: made_notes.append(None),
+        )
+        window.log_table.selectRow(0)
+
+        menu = window._actions.create_header_context_menu()
+        actions = {action.text(): action for action in menu.actions()}
+        actions["Show Trashed Items"].trigger()
+        actions["Show Starred Items Only"].trigger()
+        change_id_shortcut = next(
+            action
+            for action in window._shortcuts
+            if action.shortcut() == QKeySequence(Qt.Key_F3)
+        )
+        make_note_shortcut = next(
+            action
+            for action in window._shortcuts
+            if action.shortcut() == QKeySequence(QKeySequence.New)
+        )
+
+        change_id_shortcut.trigger()
+        make_note_shortcut.trigger()
+
+        assert window._show_trash is False
+        assert window._show_starred_only is True
+        assert refreshed == [None, None]
+        assert [record.path for record in changed_ids] == [sample_records[0].path]
+        assert made_notes == [None]
+        window.close()
+
     def test_directory_menu_can_clear_missing_recent_folders(
         self,
         sample_logfolder: Path,
@@ -226,6 +286,8 @@ class TestBrowserWindow:
 
             assert shown and shown[0][0] is window
             assert shown[0][1] == "About LogQbit"
+            assert "https://github.com/Qiujv/logqbit" in shown[0][2]
+            assert "https://qiujv.github.io/logqbit/" in shown[0][2]
         finally:
             window.close()
 
@@ -323,9 +385,10 @@ class TestBrowserWindow:
         published: list[object] = []
         records = scan_catalog(sample_logfolder)
 
-        def prepare(selected, destination):
+        def prepare(selected, destination, **kwargs):
             assert selected == records
             assert destination == sample_logfolder
+            assert kwargs == {"folder_id": None, "title": records[0].title}
             return prepared
 
         def publish():
@@ -343,7 +406,11 @@ class TestBrowserWindow:
             merge_module.PreparedMerge,
             "for_new_folder",
             classmethod(
-                lambda _cls, selected, destination: prepare(selected, destination)
+                lambda _cls, selected, destination, **kwargs: prepare(
+                    selected,
+                    destination,
+                    **kwargs,
+                )
             ),
         )
 
@@ -389,6 +456,55 @@ class TestBrowserWindow:
             dialog.close()
             window.close()
 
+    def test_merge_dialog_passes_custom_new_folder_id_and_title(
+        self,
+        sample_logfolder: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        window = LogBrowserWindow(sample_logfolder)
+        records = scan_catalog(sample_logfolder)
+        prepared = SimpleNamespace(
+            is_noop=False,
+            target=None,
+            row_count=12,
+            appended_records=2,
+            skipped_records=0,
+            staging_path=None,
+            discard=lambda: None,
+        )
+        received: list[tuple[str | None, str | None]] = []
+
+        def prepare(_selected, _destination, *, folder_id, title):
+            received.append((folder_id, title))
+            return prepared
+
+        monkeypatch.setattr(
+            merge_module.PreparedMerge,
+            "for_new_folder",
+            classmethod(
+                lambda _cls, selected, destination, **kwargs: prepare(
+                    selected,
+                    destination,
+                    **kwargs,
+                )
+            ),
+        )
+        dialog = MergeDialog(window, records, sample_logfolder)
+        try:
+            assert dialog._new_folder_id_edit.text() == ""
+            assert dialog._new_folder_title_edit.text() == records[0].title
+
+            dialog._new_folder_id_edit.setText("combined-run")
+            dialog._new_folder_title_edit.setText("Combined run")
+            dialog._analysis_timer.stop()
+            dialog._start_analysis()
+
+            assert received == [("combined-run", "Combined run")]
+            assert dialog._write_button.isEnabled()
+        finally:
+            dialog.close()
+            window.close()
+
     def test_merge_dialog_keeps_validation_failure_in_same_window(
         self,
         sample_logfolder: Path,
@@ -414,9 +530,10 @@ class TestBrowserWindow:
             discard=lambda: None,
         )
 
-        def prepare_new(selected, destination):
+        def prepare_new(selected, destination, **kwargs):
             assert selected == records
             assert destination == sample_logfolder
+            assert kwargs == {"folder_id": None, "title": records[0].title}
             return prepared
 
         monkeypatch.setattr(
@@ -428,7 +545,11 @@ class TestBrowserWindow:
             merge_module.PreparedMerge,
             "for_new_folder",
             classmethod(
-                lambda _cls, selected, destination: prepare_new(selected, destination)
+                lambda _cls, selected, destination, **kwargs: prepare_new(
+                    selected,
+                    destination,
+                    **kwargs,
+                )
             ),
         )
 
