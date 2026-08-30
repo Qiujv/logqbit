@@ -286,11 +286,11 @@ class LogBrowserWindow(QMainWindow):
         table.setSelectionBehavior(QTableView.SelectRows)
         table.setSelectionMode(QTableView.ExtendedSelection)
         table.verticalHeader().setVisible(False)
-        table.setAlternatingRowColors(True)
+        table.setAlternatingRowColors(False)
         table.setSortingEnabled(True)
 
         font_height = table.fontMetrics().height()
-        table.verticalHeader().setDefaultSectionSize(font_height + 4)
+        table.verticalHeader().setDefaultSectionSize(font_height)
 
         header = table.horizontalHeader()
         header.setSectionResizeMode(COL_ID, QHeaderView.ResizeToContents)
@@ -590,8 +590,7 @@ class _BrowserActions:
         self.window = window
 
     def show_top_bar_context_menu(self, position) -> None:
-        menu = QMenu(self.window.directory_label)
-        menu.addAction("About", self.show_about_dialog)
+        menu = self.create_header_context_menu()
         menu.exec(self.window.directory_label.mapToGlobal(position))
 
     def show_about_dialog(self) -> None:
@@ -727,6 +726,8 @@ class _BrowserActions:
             action.triggered.connect(
                 lambda checked=False, target=column: self.toggle_column(target, checked)
             )
+        menu.addSeparator()
+        menu.addAction("About", self.show_about_dialog)
         return menu
 
     def toggle_column(self, column: int, visible: bool) -> None:

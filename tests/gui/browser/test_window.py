@@ -198,6 +198,7 @@ class TestBrowserWindow:
 
         menu = window._actions.create_header_context_menu()
         actions = {action.text(): action for action in menu.actions()}
+        assert "About" in actions
         actions["Show Trashed Items"].trigger()
         actions["Show Starred Items Only"].trigger()
         change_id_shortcut = next(
