@@ -22,11 +22,12 @@ from logqbit.catalog import (
     MergeRecordsError,
     MergeRecordsResult,
 )
-from logqbit.gui.browser.window.model import COL_ROWS
+from logqbit.gui.browser.window.model import COL_ID, COL_ROWS
 from logqbit.gui.browser.window import merge as merge_module
 from logqbit.gui.browser.window.merge import MergeDialog
 from logqbit.gui.browser.detail.view import RecordDetailWindow
 from logqbit.gui.browser.window.view import LogBrowserWindow, _validated_log_id
+from logqbit.logfolder import LogFolder
 from logqbit.metadata import LogMetadata
 
 
@@ -50,6 +51,28 @@ class TestBrowserWindow:
             assert window.windowTitle() == (
                 f"{sample_logfolder.parent.name} / {sample_logfolder.name}"
                 " - LogQbit Browser"
+            )
+        finally:
+            window.close()
+
+    def test_log_list_resizes_id_column_after_initial_load(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        app = _create_application()
+        record_path = tmp_path / "1000"
+        record_path.mkdir()
+        LogMetadata(record_path / "metadata.json", title="four-digit ID", create=True)
+
+        window = LogBrowserWindow(tmp_path)
+        window.show()
+        try:
+            QTest.qWait(100)
+            app.processEvents()
+
+            assert window.log_table.horizontalHeader().resizeContentsPrecision() == -1
+            assert window.log_table.columnWidth(COL_ID) >= (
+                window.log_table.fontMetrics().horizontalAdvance("1000")
             )
         finally:
             window.close()
@@ -144,6 +167,31 @@ class TestBrowserWindow:
             QTest.keyClick(window.detail_view.data_view_manager.data_table, Qt.Key_Left)
             app.processEvents()
             assert window.detail_view.current_tab_index() == 0
+        finally:
+            window.close()
+
+    def test_directory_switch_reuses_cached_catalog(
+        self,
+        sample_logfolder: Path,
+        tmp_path: Path,
+    ) -> None:
+        other_directory = tmp_path / "other"
+        with LogFolder.new(other_directory, title="other") as log:
+            log.add_row(x=1)
+
+        window = LogBrowserWindow(sample_logfolder)
+        try:
+            window.set_directory(other_directory)
+
+            assert window.table_model.rowCount() == 1
+            assert other_directory in window._catalog_cache
+            assert window.table_model.get_record(0).path.parent == other_directory
+
+            cached_catalog = window._catalog
+            window.set_directory(sample_logfolder)
+            window.set_directory(other_directory)
+
+            assert window._catalog is cached_catalog
         finally:
             window.close()
 

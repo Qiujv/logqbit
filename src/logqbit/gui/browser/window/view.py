@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections import OrderedDict
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -72,6 +73,7 @@ logger = logging.getLogger(__name__)
 # Constants
 REFRESH_DEBOUNCE_MS = 250
 DETAIL_LOAD_DEBOUNCE_MS = 100
+CATALOG_CACHE_SIZE = 3
 DISABLE_JIT_WARMUP_ENV = "LOGQBIT_BROWSER_DISABLE_JIT_WARMUP"
 
 _plotter_jit_warmup_started = False
@@ -187,6 +189,7 @@ class LogBrowserWindow(QMainWindow):
         self._detail_load_timer.timeout.connect(self._load_selected_log)
         self._detail_windows: list[RecordDetailWindow] = []
         self._catalog = LogCatalog()
+        self._catalog_cache: OrderedDict[Path, LogCatalog] = OrderedDict()
         self._actions = _BrowserActions(self)
 
         # Theme management
@@ -306,6 +309,9 @@ class LogBrowserWindow(QMainWindow):
         header.setSectionResizeMode(COL_PLOT_AXES, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(COL_CREATE_TIME, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(COL_CREATE_MACHINE, QHeaderView.ResizeToContents)
+        # The Qt default samples only 1,000 rows for ResizeToContents.  Scan the
+        # full list so IDs such as 1000 are not clipped in larger directories.
+        header.setResizeContentsPrecision(-1)
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(False)  # For compact view.
         header.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -444,6 +450,8 @@ class LogBrowserWindow(QMainWindow):
             self.directory_label.setText(self._base_dir.as_posix())
             self._update_window_title()
             self._sync_directory_watcher()
+            catalog = self._catalog_cache.get(self._base_dir)
+            self._catalog = catalog if catalog is not None else LogCatalog()
             self.refresh_logs()
         else:
             self.directory_label.setText(self._base_dir.as_posix())
@@ -460,6 +468,7 @@ class LogBrowserWindow(QMainWindow):
             else None
         )
         all_records = self._catalog.refresh(self._base_dir)
+        self._cache_catalog(self._base_dir, self._catalog)
 
         # Filter out trash if needed
         if self._show_trash:
@@ -470,6 +479,7 @@ class LogBrowserWindow(QMainWindow):
             records = [record for record in records if record.star > 0]
 
         self.table_model.set_records(records)
+        self._resize_content_columns()
 
         row_count = self.table_proxy.rowCount()
         if row_count:
@@ -502,6 +512,23 @@ class LogBrowserWindow(QMainWindow):
                 self.detail_view.clear("No logs found.")
             self._selected_record = None
             self.log_table.clearSelection()
+
+    def _cache_catalog(self, directory: Path, catalog: LogCatalog) -> None:
+        directory = Path(directory)
+        self._catalog_cache.pop(directory, None)
+        self._catalog_cache[directory] = catalog
+        while len(self._catalog_cache) > CATALOG_CACHE_SIZE:
+            self._catalog_cache.popitem(last=False)
+
+    def _resize_content_columns(self) -> None:
+        for column in (
+            COL_ID,
+            COL_ROWS,
+            COL_PLOT_AXES,
+            COL_CREATE_TIME,
+            COL_CREATE_MACHINE,
+        ):
+            self.log_table.resizeColumnToContents(column)
 
     def refresh_current_log(self, *, force: bool = False) -> None:
         if not self._selected_record:
