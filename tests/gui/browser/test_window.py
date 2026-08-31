@@ -10,6 +10,7 @@ from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import (
     QApplication,
+    QHeaderView,
     QMessageBox,
     QSizePolicy,
     QToolButton,
@@ -71,7 +72,9 @@ class TestBrowserWindow:
             QTest.qWait(100)
             app.processEvents()
 
-            assert window.log_table.horizontalHeader().resizeContentsPrecision() == -1
+            header = window.log_table.horizontalHeader()
+            assert header.resizeContentsPrecision() == -1
+            assert header.sectionResizeMode(COL_ID) == QHeaderView.Interactive
             assert window.log_table.columnWidth(COL_ID) >= (
                 window.log_table.fontMetrics().horizontalAdvance("1000")
             )

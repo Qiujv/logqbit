@@ -330,12 +330,12 @@ class LogBrowserWindow(QMainWindow):
         table.verticalHeader().setDefaultSectionSize(font_height)
 
         header = table.horizontalHeader()
-        header.setSectionResizeMode(COL_ID, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_ID, QHeaderView.Interactive)
         header.setSectionResizeMode(COL_TITLE, QHeaderView.Stretch)
-        header.setSectionResizeMode(COL_ROWS, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_PLOT_AXES, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_CREATE_TIME, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_CREATE_MACHINE, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_ROWS, QHeaderView.Interactive)
+        header.setSectionResizeMode(COL_PLOT_AXES, QHeaderView.Interactive)
+        header.setSectionResizeMode(COL_CREATE_TIME, QHeaderView.Interactive)
+        header.setSectionResizeMode(COL_CREATE_MACHINE, QHeaderView.Interactive)
         # The Qt default samples only 1,000 rows for ResizeToContents.  Scan the
         # full list so IDs such as 1000 are not clipped in larger directories.
         header.setResizeContentsPrecision(-1)
@@ -747,6 +747,7 @@ class LogBrowserWindow(QMainWindow):
         ):
             self._selected_record = record
             self.table_model.notify_record_changed(record)
+            self._resize_content_columns()
 
     def _on_refresh_clicked(self) -> None:
         previous_record = self._selected_record
