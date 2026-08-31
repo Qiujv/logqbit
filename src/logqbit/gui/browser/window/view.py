@@ -71,6 +71,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 REFRESH_DEBOUNCE_MS = 250
+DETAIL_LOAD_DEBOUNCE_MS = 100
 DISABLE_JIT_WARMUP_ENV = "LOGQBIT_BROWSER_DISABLE_JIT_WARMUP"
 
 _plotter_jit_warmup_started = False
@@ -180,6 +181,10 @@ class LogBrowserWindow(QMainWindow):
         self._show_starred_only = False
         self._shortcuts: list[QAction] = []
         self._list_refresh_pending = False
+        self._detail_load_timer = QTimer(self)
+        self._detail_load_timer.setSingleShot(True)
+        self._detail_load_timer.setInterval(DETAIL_LOAD_DEBOUNCE_MS)
+        self._detail_load_timer.timeout.connect(self._load_selected_log)
         self._detail_windows: list[RecordDetailWindow] = []
         self._catalog = LogCatalog()
         self._actions = _BrowserActions(self)
@@ -246,6 +251,8 @@ class LogBrowserWindow(QMainWindow):
     def _create_top_bar(self) -> QHBoxLayout:
         top_bar = QHBoxLayout()
         self.directory_label = QLabel(self._base_dir.as_posix())
+        self.directory_label.setWordWrap(True)
+        self.directory_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.directory_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.directory_label.setContextMenuPolicy(Qt.CustomContextMenu)
         self.directory_label.customContextMenuRequested.connect(
@@ -488,6 +495,7 @@ class LogBrowserWindow(QMainWindow):
             if selected_record is not previous_record:
                 self._load_log(selected_record)
         else:
+            self._detail_load_timer.stop()
             if all_records:
                 self.detail_view.clear("No logs to display.")
             else:
@@ -529,7 +537,11 @@ class LogBrowserWindow(QMainWindow):
         if record is None:
             return
         self._selected_record = record
-        self._load_log(record)
+        self._detail_load_timer.start()
+
+    def _load_selected_log(self) -> None:
+        if self._selected_record is not None:
+            self._load_log(self._selected_record)
 
     def _load_log(self, record: LogRecord) -> None:
         self.detail_view.load_record(record)
@@ -596,11 +608,17 @@ class _BrowserActions:
     def show_about_dialog(self) -> None:
         from logqbit.gui.browser.about import about_message
 
-        QMessageBox.about(
-            self.window,
-            "About LogQbit",
-            about_message(),
+        dialog = QMessageBox(self.window)
+        dialog.setWindowTitle("About LogQbit")
+        dialog.setIcon(QMessageBox.Information)
+        dialog.setText(about_message())
+        dialog.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+            | Qt.TextSelectableByKeyboard
+            | Qt.LinksAccessibleByMouse
         )
+        dialog.setStandardButtons(QMessageBox.Ok)
+        dialog.exec()
 
     def get_selected_records(self) -> list[LogRecord]:
         selection_model = self.window.log_table.selectionModel()

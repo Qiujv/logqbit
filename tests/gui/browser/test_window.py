@@ -5,12 +5,13 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-from PySide6.QtCore import QEventLoop, QSettings, Qt, QTimer
+from PySide6.QtCore import QEventLoop, QItemSelectionModel, QSettings, Qt, QTimer
 from PySide6.QtGui import QKeySequence
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import (
     QApplication,
     QMessageBox,
+    QSizePolicy,
 )
 
 from logqbit import catalog as catalog_module
@@ -146,6 +147,35 @@ class TestBrowserWindow:
         finally:
             window.close()
 
+    def test_log_selection_debounces_detail_load(
+        self,
+        sample_records: list[LogRecord],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        app = _create_application()
+        window = LogBrowserWindow(sample_records[0].path.parent)
+        loaded_records: list[LogRecord] = []
+        monkeypatch.setattr(window, "_load_log", loaded_records.append)
+        try:
+            selection_model = window.log_table.selectionModel()
+            for row in (1, 2):
+                selection_model.select(
+                    window.table_proxy.index(row, 0),
+                    QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+                )
+            app.processEvents()
+
+            assert loaded_records == []
+
+            timeout_spy = QSignalSpy(window._detail_load_timer.timeout)
+            assert timeout_spy.wait(1000)
+
+            assert [record.path for record in loaded_records] == [
+                sample_records[2].path
+            ]
+        finally:
+            window.close()
+
     def test_browser_f5_runs_manual_refresh(
         self,
         sample_logfolder: Path,
@@ -274,21 +304,31 @@ class TestBrowserWindow:
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         window = LogBrowserWindow(sample_logfolder)
-        shown: list[tuple[object, str, str]] = []
+        shown: list[QMessageBox] = []
         monkeypatch.setattr(
             QMessageBox,
-            "about",
-            lambda parent, title, text: shown.append((parent, title, text)),
+            "exec",
+            lambda dialog: shown.append(dialog),
         )
         try:
             assert window.directory_label.contextMenuPolicy() == Qt.CustomContextMenu
+            assert window.directory_label.wordWrap()
+            assert (
+                window.directory_label.sizePolicy().horizontalPolicy()
+                == QSizePolicy.Expanding
+            )
+            assert window.directory_label.alignment() == (
+                Qt.AlignLeft | Qt.AlignVCenter
+            )
 
             window._actions.show_about_dialog()
 
-            assert shown and shown[0][0] is window
-            assert shown[0][1] == "About LogQbit"
-            assert "https://github.com/Qiujv/logqbit" in shown[0][2]
-            assert "https://qiujv.github.io/logqbit/" in shown[0][2]
+            assert shown and shown[0].parent() is window
+            assert shown[0].windowTitle() == "About LogQbit"
+            assert "https://github.com/Qiujv/logqbit" in shown[0].text()
+            assert "https://qiujv.github.io/logqbit/" in shown[0].text()
+            assert shown[0].textInteractionFlags() & Qt.TextSelectableByMouse
+            assert shown[0].textInteractionFlags() & Qt.TextSelectableByKeyboard
         finally:
             window.close()
 
