@@ -49,6 +49,23 @@ class TestSettingsManager:
         assert manager.load_pinned_records(first) == ["2", "10"]
         assert manager.load_pinned_records(tmp_path / "second") == []
 
+    def test_saving_recent_directories_prunes_other_pins(self, tmp_path: Path) -> None:
+        manager = SettingsManager()
+        manager._settings = QSettings(
+            str(tmp_path / "browser-settings.ini"),
+            QSettings.IniFormat,
+        )
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        manager.save_recent_directories([first, second])
+        manager.save_pinned_records(first, ["1"])
+        manager.save_pinned_records(second, ["2"])
+
+        manager.save_recent_directories([first])
+
+        assert manager.load_pinned_records(first) == ["1"]
+        assert manager.load_pinned_records(second) == []
+
 
 @pytest.mark.parametrize(
     ("mode", "scheme"),

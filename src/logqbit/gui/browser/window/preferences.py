@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
@@ -58,6 +58,19 @@ class SettingsManager:
             SETTINGS_RECENT_DIRS_KEY,
             [str(path) for path in self._recent_directories],
         )
+        raw_pins = self._settings.value(SETTINGS_PINS_KEY, "{}")
+        try:
+            stored_pins = json.loads(str(raw_pins))
+        except (TypeError, ValueError):
+            stored_pins = {}
+        if isinstance(stored_pins, dict):
+            recent_keys = {str(path) for path in self._recent_directories}
+            stored_pins = {
+                directory: names
+                for directory, names in stored_pins.items()
+                if directory in recent_keys
+            }
+            self._settings.setValue(SETTINGS_PINS_KEY, json.dumps(stored_pins))
         self._settings.sync()
 
     def update_recent_directories(self, path: Path) -> list[Path]:
