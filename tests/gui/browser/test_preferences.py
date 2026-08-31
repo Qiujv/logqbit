@@ -36,6 +36,19 @@ class TestSettingsManager:
 
         assert manager.load_recent_directories() == [first]
 
+    def test_pinned_records_are_scoped_to_directory(self, tmp_path: Path) -> None:
+        manager = SettingsManager()
+        manager._settings = QSettings(
+            str(tmp_path / "browser-settings.ini"),
+            QSettings.IniFormat,
+        )
+        first = tmp_path / "first"
+
+        manager.save_pinned_records(first, ["2", "10", "2"])
+
+        assert manager.load_pinned_records(first) == ["2", "10"]
+        assert manager.load_pinned_records(tmp_path / "second") == []
+
 
 @pytest.mark.parametrize(
     ("mode", "scheme"),

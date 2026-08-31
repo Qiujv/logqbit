@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
@@ -14,6 +15,7 @@ SETTINGS_ORG = "LogQbit"
 SETTINGS_APP = "LogBrowser"
 SETTINGS_RECENT_DIRS_KEY = "recent/directories"
 SETTINGS_THEME_KEY = "ui/theme"
+SETTINGS_PINS_KEY = "browser/pins"
 
 
 class SettingsManager:
@@ -81,6 +83,31 @@ class SettingsManager:
 
     def save_theme_mode(self, mode: str) -> None:
         self._settings.setValue(SETTINGS_THEME_KEY, mode)
+        self._settings.sync()
+
+    def load_pinned_records(self, directory: Path) -> list[str]:
+        raw_value = self._settings.value(SETTINGS_PINS_KEY, "{}")
+        try:
+            stored = json.loads(str(raw_value))
+        except (TypeError, ValueError):
+            stored = {}
+        names = stored.get(str(Path(directory)), []) if isinstance(stored, dict) else []
+        return [str(name) for name in names if str(name)]
+
+    def save_pinned_records(self, directory: Path, names: list[str]) -> None:
+        raw_value = self._settings.value(SETTINGS_PINS_KEY, "{}")
+        try:
+            stored = json.loads(str(raw_value))
+        except (TypeError, ValueError):
+            stored = {}
+        if not isinstance(stored, dict):
+            stored = {}
+        key = str(Path(directory))
+        if names:
+            stored[key] = list(dict.fromkeys(str(name) for name in names if name))
+        else:
+            stored.pop(key, None)
+        self._settings.setValue(SETTINGS_PINS_KEY, json.dumps(stored))
         self._settings.sync()
 
 

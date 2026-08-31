@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QMessageBox,
     QSizePolicy,
+    QToolButton,
 )
 
 from logqbit import catalog as catalog_module
@@ -221,6 +222,36 @@ class TestBrowserWindow:
             assert [record.path for record in loaded_records] == [
                 sample_records[2].path
             ]
+        finally:
+            window.close()
+
+    def test_pinned_record_button_selects_and_loads_record(
+        self,
+        sample_records: list[LogRecord],
+    ) -> None:
+        app = _create_application()
+        window = LogBrowserWindow(sample_records[0].path.parent)
+        target = sample_records[1]
+        window.show()
+        try:
+            window._pin_record(target)
+            app.processEvents()
+
+            assert window._pinned_record_names == [target.path.name]
+            buttons = window._pin_button_container.findChildren(QToolButton)
+            pin_button = next(button for button in buttons if button.text() == "#1")
+            assert window.pin_bar.height() == window.fontMetrics().height() + 4
+            assert pin_button.isVisible()
+            assert pin_button.width() > 0
+            pin_button.click()
+
+            assert window._selected_record is not None
+            assert window._selected_record.path == target.path
+            assert window.detail_view.current_record is not None
+            assert window.detail_view.current_record.path == target.path
+
+            window._unpin_record(target)
+            assert window._pinned_record_names == []
         finally:
             window.close()
 

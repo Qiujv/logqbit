@@ -21,8 +21,10 @@ from PySide6.QtGui import (
     QKeySequence,
     QPalette,
     QShortcut,
+    QWheelEvent,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QDialog,
     QDialogButtonBox,
@@ -40,6 +42,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QScrollArea,
     QStyle,
     QStyleOptionViewItem,
     QTableView,
@@ -167,6 +170,19 @@ class LogListItemDelegate(QItemDelegate):
         )
 
 
+class PinScrollArea(QScrollArea):
+    """A compact pin strip that scrolls only along its horizontal axis."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        delta = event.pixelDelta().x() or event.pixelDelta().y()
+        if not delta:
+            delta = event.angleDelta().x() or event.angleDelta().y()
+        if delta:
+            scrollbar = self.horizontalScrollBar()
+            scrollbar.setValue(scrollbar.value() - delta)
+        event.accept()
+
+
 class LogBrowserWindow(QMainWindow):
     def __init__(
         self, directory: Path | None = None, parent: QWidget | None = None
@@ -179,6 +195,7 @@ class LogBrowserWindow(QMainWindow):
         # State
         self._base_dir = Path(directory) if directory else Path.cwd()
         self._selected_record: LogRecord | None = None
+        self._all_records: list[LogRecord] = []
         self._show_trash = True
         self._show_starred_only = False
         self._shortcuts: list[QAction] = []
@@ -204,6 +221,9 @@ class LogBrowserWindow(QMainWindow):
             self.settings_manager.update_recent_directories(self._base_dir)
         elif recent:
             self._base_dir = recent[0]
+        self._pinned_record_names = self.settings_manager.load_pinned_records(
+            self._base_dir
+        )
 
         # File watchers
         self._dir_watcher = QFileSystemWatcher(self)
@@ -232,14 +252,21 @@ class LogBrowserWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal, central)
 
         # Left: Log table
+        list_panel = QWidget(splitter)
+        list_layout = QVBoxLayout(list_panel)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        list_layout.setSpacing(2)
         self.log_table, self.table_model, self.table_proxy = self._create_log_table(
-            splitter
+            list_panel
         )
+        list_layout.addWidget(self.log_table, stretch=1)
+        self.pin_bar = self._create_pin_bar(list_panel)
+        list_layout.addWidget(self.pin_bar)
 
         # Right: Detail panel
         detail_widget = self._create_detail_panel(splitter)
 
-        splitter.addWidget(self.log_table)
+        splitter.addWidget(list_panel)
         splitter.addWidget(detail_widget)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
@@ -339,6 +366,31 @@ class LogBrowserWindow(QMainWindow):
         self.detail_view.record_refreshed.connect(self._on_detail_record_refreshed)
         return self.detail_view
 
+    def _create_pin_bar(self, parent: QWidget) -> QWidget:
+        pin_bar = QWidget(parent)
+        pin_height = pin_bar.fontMetrics().height() + 4
+        pin_bar.setFixedHeight(pin_height)
+        pin_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        pin_layout = QHBoxLayout(pin_bar)
+        pin_layout.setContentsMargins(4, 0, 4, 0)
+        pin_layout.setSpacing(4)
+        pin_layout.addWidget(QLabel("📌Pins:"))
+
+        self.pin_scroll_area = PinScrollArea(pin_bar)
+        self.pin_scroll_area.setWidgetResizable(True)
+        self.pin_scroll_area.setFrameShape(QScrollArea.NoFrame)
+        self.pin_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.pin_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.pin_scroll_area.setFixedHeight(pin_height)
+        self._pin_button_container = QWidget(self.pin_scroll_area)
+        self._pin_button_layout = QHBoxLayout(self._pin_button_container)
+        self._pin_button_layout.setContentsMargins(0, 0, 0, 0)
+        self._pin_button_layout.setSpacing(2)
+        self._pin_button_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.pin_scroll_area.setWidget(self._pin_button_container)
+        pin_layout.addWidget(self.pin_scroll_area, stretch=1)
+        return pin_bar
+
     def _setup_shortcuts(self) -> None:
         for action in self._shortcuts:
             self.removeAction(action)
@@ -358,6 +410,7 @@ class LogBrowserWindow(QMainWindow):
         add_shortcut(Qt.Key_F2, self._actions.shortcut_rename_title)
         add_shortcut(Qt.Key_F3, self._actions.shortcut_change_id)
         add_shortcut(Qt.Key_F5, self._on_refresh_clicked)
+        add_shortcut(QKeySequence("Ctrl+P"), self._actions.shortcut_pin_record)
         add_shortcut(QKeySequence.New, self._actions.shortcut_make_note)
         add_shortcut(Qt.Key_0, lambda: self._actions.shortcut_set_star(0))
         add_shortcut(Qt.Key_1, lambda: self._actions.shortcut_set_star(1))
@@ -452,6 +505,9 @@ class LogBrowserWindow(QMainWindow):
             self._sync_directory_watcher()
             catalog = self._catalog_cache.get(self._base_dir)
             self._catalog = catalog if catalog is not None else LogCatalog()
+            self._pinned_record_names = self.settings_manager.load_pinned_records(
+                self._base_dir
+            )
             self.refresh_logs()
         else:
             self.directory_label.setText(self._base_dir.as_posix())
@@ -468,6 +524,7 @@ class LogBrowserWindow(QMainWindow):
             else None
         )
         all_records = self._catalog.refresh(self._base_dir)
+        self._all_records = all_records
         self._cache_catalog(self._base_dir, self._catalog)
 
         # Filter out trash if needed
@@ -480,6 +537,7 @@ class LogBrowserWindow(QMainWindow):
 
         self.table_model.set_records(records)
         self._resize_content_columns()
+        self._rebuild_pin_bar(all_records)
 
         row_count = self.table_proxy.rowCount()
         if row_count:
@@ -529,6 +587,115 @@ class LogBrowserWindow(QMainWindow):
             COL_CREATE_MACHINE,
         ):
             self.log_table.resizeColumnToContents(column)
+
+    def _rebuild_pin_bar(self, all_records: list[LogRecord]) -> None:
+        for index in range(self._pin_button_layout.count() - 1, -1, -1):
+            layout_item = self._pin_button_layout.takeAt(index)
+            if widget := layout_item.widget():
+                widget.deleteLater()
+
+        records_by_name = {record.path.name: record for record in all_records}
+        visible_paths = {
+            record.path
+            for row in range(self.table_model.rowCount())
+            if (record := self.table_model.get_record(row)) is not None
+        }
+        names = [
+            name for name in self._pinned_record_names if name in records_by_name
+        ]
+        if names != self._pinned_record_names:
+            self._pinned_record_names = names
+            self.settings_manager.save_pinned_records(self._base_dir, names)
+        if not names:
+            self._pin_button_layout.addWidget(QLabel("(none)"))
+        for name in names:
+            record = records_by_name[name]
+            button = QToolButton(self._pin_button_container)
+            button.setText(f"#{record.log_id}")
+            button.setAutoRaise(True)
+            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            button.setToolTip(f"{record.title or '(untitled)'}\n{record.path}")
+            button.setEnabled(record.path in visible_paths)
+            if not button.isEnabled():
+                button.setToolTip(f"Hidden by current filters.\n{button.toolTip()}")
+            button.clicked.connect(
+                lambda _checked=False, target=record: self._jump_to_pinned_record(target)
+            )
+            button.setContextMenuPolicy(Qt.CustomContextMenu)
+            button.customContextMenuRequested.connect(
+                lambda point, target=record, source=button: self._open_pin_context_menu(
+                    source, point, target
+                )
+            )
+            self._pin_button_layout.addWidget(button)
+        self._pin_button_layout.activate()
+        content_size = self._pin_button_layout.sizeHint()
+        self._pin_button_container.setMinimumSize(content_size)
+
+    def _pin_record(self, record: LogRecord) -> None:
+        name = record.path.name
+        if name not in self._pinned_record_names:
+            self._pinned_record_names.append(name)
+            self.settings_manager.save_pinned_records(
+                self._base_dir, self._pinned_record_names
+            )
+            self._rebuild_pin_bar(self._all_records)
+
+    def _unpin_record(self, record: LogRecord) -> None:
+        name = record.path.name
+        if name in self._pinned_record_names:
+            self._pinned_record_names.remove(name)
+            self.settings_manager.save_pinned_records(
+                self._base_dir, self._pinned_record_names
+            )
+            self._rebuild_pin_bar(self._all_records)
+
+    def _rename_pinned_record(self, old_path: Path, new_path: Path) -> None:
+        if old_path.parent != self._base_dir:
+            return
+        try:
+            index = self._pinned_record_names.index(old_path.name)
+        except ValueError:
+            return
+        self._pinned_record_names[index] = new_path.name
+        self.settings_manager.save_pinned_records(
+            self._base_dir, self._pinned_record_names
+        )
+
+    def _jump_to_pinned_record(self, record: LogRecord) -> None:
+        source_row = next(
+            (
+                row
+                for row in range(self.table_model.rowCount())
+                if (current := self.table_model.get_record(row))
+                and current.path == record.path
+            ),
+            None,
+        )
+        if source_row is None:
+            return
+        proxy_index = self.table_proxy.mapFromSource(
+            self.table_model.index(source_row, 0)
+        )
+        if not proxy_index.isValid():
+            return
+        selection_blocker = QSignalBlocker(self.log_table.selectionModel())
+        try:
+            self.log_table.selectRow(proxy_index.row())
+        finally:
+            selection_blocker.unblock()
+        self.log_table.scrollTo(proxy_index, QAbstractItemView.PositionAtCenter)
+        self._selected_record = record
+        self._detail_load_timer.stop()
+        self._load_log(record)
+
+    def _open_pin_context_menu(
+        self, button: QToolButton, point, record: LogRecord
+    ) -> None:
+        menu = QMenu(button)
+        unpin_action = menu.addAction(f"Unpin #{record.log_id}")
+        if menu.exec(button.mapToGlobal(point)) == unpin_action:
+            self._unpin_record(record)
 
     def refresh_current_log(self, *, force: bool = False) -> None:
         if not self._selected_record:
@@ -662,6 +829,7 @@ class _BrowserActions:
     def open_table_context_menu(self, point) -> None:
         records = self.get_selected_records()
         menu = QMenu(self.window)
+        pin_action = menu.addAction("Pin📌 (Ctrl+P)")
         make_note_action = menu.addAction("Make 🏷️Note... (Ctrl+N)")
         rename_action = menu.addAction("Rename Title... (F2)")
         change_id_action = menu.addAction("Change ID... (F3)")
@@ -686,12 +854,16 @@ class _BrowserActions:
             toggle_trash_action.setEnabled(False)
             send_to_recycle_action.setEnabled(False)
             open_explorer.setEnabled(False)
+            pin_action.setEnabled(False)
             export_action.setEnabled(False)
         else:
             rename_action.setEnabled(len(records) == 1)
             change_id_action.setEnabled(len(records) == 1)
             toggle_star_action.setChecked(all(record.star > 0 for record in records))
             toggle_trash_action.setChecked(all(record.trash for record in records))
+            pin_action.setEnabled(
+                records[0].path.name not in self.window._pinned_record_names
+            )
         chosen = menu.exec(self.window.log_table.viewport().mapToGlobal(point))
         if chosen is None:
             return
@@ -711,6 +883,8 @@ class _BrowserActions:
             self.send_records_to_recycle_bin(records)
         elif chosen == open_explorer and records:
             self.open_path_in_explorer(records[0].path, len(records) != 1)
+        elif chosen == pin_action and records:
+            self.window._pin_record(records[0])
         elif chosen == merge_new_action and can_merge:
             self.merge_into_new_logfolder(records)
         elif chosen == append_action and append_target is not None:
@@ -892,6 +1066,7 @@ class _BrowserActions:
             if detail_window.detail_view.current_record is not None
             and detail_window.detail_view.current_record.path == old_path
         ]
+        self.window._rename_pinned_record(old_path, target_path)
         self.window.refresh_logs(preferred_path=target_path)
         renamed_record = self.window._selected_record
         if renamed_record is not None and renamed_record.path == target_path:
@@ -1058,3 +1233,8 @@ class _BrowserActions:
 
     def shortcut_make_note(self) -> None:
         self.make_note()
+
+    def shortcut_pin_record(self) -> None:
+        records = self.get_selected_records()
+        if records:
+            self.window._pin_record(records[0])
