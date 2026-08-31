@@ -1,10 +1,14 @@
 [project]
 name = "logqbit"
 dynamic = ["version"]
-description = "A lightweight, directory-based toolkit for logging and organizing lab experiment data."
+description = "A lightweight, directory-based toolkit for logging and browsing lab experiment data."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Qiujv", email = "qiujv@outlook.com" }]
+classifiers = [
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+]
 dependencies = [
     "numpy>=2.3.3",
     "pandas>=2.3.3",

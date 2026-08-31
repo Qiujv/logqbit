@@ -406,7 +406,7 @@ class TestBrowserWindow:
             window._actions.show_about_dialog()
 
             assert shown and shown[0].parent() is window
-            assert shown[0].windowTitle() == "About LogQbit"
+            # QMessageBox suppresses the configured window title on macOS.
             assert "https://github.com/Qiujv/logqbit" in shown[0].text()
             assert "https://qiujv.github.io/logqbit/" in shown[0].text()
             assert shown[0].textInteractionFlags() & Qt.TextSelectableByMouse
