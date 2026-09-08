@@ -284,6 +284,7 @@ class LogBrowserWindow(QMainWindow):
         self.directory_label.setWordWrap(True)
         self.directory_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.directory_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.directory_label.setFocusPolicy(Qt.NoFocus)
         self.directory_label.setContextMenuPolicy(Qt.CustomContextMenu)
         self.directory_label.customContextMenuRequested.connect(
             self._actions.show_top_bar_context_menu
@@ -650,6 +651,12 @@ class LogBrowserWindow(QMainWindow):
             )
             self._rebuild_pin_bar(self._all_records)
 
+    def _toggle_pin_record(self, record: LogRecord) -> None:
+        if record.path.name in self._pinned_record_names:
+            self._unpin_record(record)
+        else:
+            self._pin_record(record)
+
     def _rename_pinned_record(self, old_path: Path, new_path: Path) -> None:
         if old_path.parent != self._base_dir:
             return
@@ -830,7 +837,7 @@ class _BrowserActions:
     def open_table_context_menu(self, point) -> None:
         records = self.get_selected_records()
         menu = QMenu(self.window)
-        pin_action = menu.addAction("Pin📌 (Ctrl+P)")
+        pin_action = menu.addAction("Toggle 📌Pin (Ctrl+P)")
         make_note_action = menu.addAction("Make 🏷️Note... (Ctrl+N)")
         rename_action = menu.addAction("Rename Title... (F2)")
         change_id_action = menu.addAction("Change ID... (F3)")
@@ -862,9 +869,6 @@ class _BrowserActions:
             change_id_action.setEnabled(len(records) == 1)
             toggle_star_action.setChecked(all(record.star > 0 for record in records))
             toggle_trash_action.setChecked(all(record.trash for record in records))
-            pin_action.setEnabled(
-                records[0].path.name not in self.window._pinned_record_names
-            )
         chosen = menu.exec(self.window.log_table.viewport().mapToGlobal(point))
         if chosen is None:
             return
@@ -885,7 +889,7 @@ class _BrowserActions:
         elif chosen == open_explorer and records:
             self.open_path_in_explorer(records[0].path, len(records) != 1)
         elif chosen == pin_action and records:
-            self.window._pin_record(records[0])
+            self.window._toggle_pin_record(records[0])
         elif chosen == merge_new_action and can_merge:
             self.merge_into_new_logfolder(records)
         elif chosen == append_action and append_target is not None:
@@ -1238,4 +1242,4 @@ class _BrowserActions:
     def shortcut_pin_record(self) -> None:
         records = self.get_selected_records()
         if records:
-            self.window._pin_record(records[0])
+            self.window._toggle_pin_record(records[0])

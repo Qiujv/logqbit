@@ -102,7 +102,7 @@ class MergeDialog(QDialog):
         self._write_button = QPushButton("Write File", self)
         self._write_button.setEnabled(False)
         self._cancel_button = QPushButton("Cancel", self)
-        self._cancel_button.setDefault(True)
+        self._write_button.setDefault(True)
         button_layout.addWidget(self._write_button)
         button_layout.addWidget(self._cancel_button)
         layout.addLayout(button_layout)
@@ -163,7 +163,10 @@ class MergeDialog(QDialog):
                 self._show_ready("Ready to merge.", self._prepared_message())
                 self._write_button.setEnabled(True)
             succeeded = True
-        self._cancel_button.setDefault(True)
+        if self._write_button.isEnabled():
+            self._write_button.setDefault(True)
+        else:
+            self._cancel_button.setDefault(True)
         self.analysis_finished.emit(succeeded)
 
     @Slot()

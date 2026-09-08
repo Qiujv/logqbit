@@ -253,7 +253,7 @@ class TestBrowserWindow:
             assert window.detail_view.current_record is not None
             assert window.detail_view.current_record.path == target.path
 
-            window._unpin_record(target)
+            window._actions.shortcut_pin_record()
             assert window._pinned_record_names == []
         finally:
             window.close()
@@ -469,20 +469,43 @@ class TestBrowserWindow:
     def test_merge_dialog_summary_lists_folders_and_write_button_up_front(
         self,
         sample_records: list[LogRecord],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         window = LogBrowserWindow(sample_records[0].path.parent)
+        prepared = SimpleNamespace(
+            is_noop=False,
+            target=sample_records[0],
+            row_count=2,
+            appended_records=1,
+            skipped_records=0,
+            staging_path=None,
+            discard=lambda: None,
+        )
+        monkeypatch.setattr(
+            merge_module.PreparedMerge,
+            "for_append",
+            classmethod(lambda _cls, _records: prepared),
+        )
+        analysis_loop = QEventLoop()
         dialog = MergeDialog(
             window,
             sample_records[:2],
             sample_records[0].path.parent,
             target=sample_records[0],
         )
+        dialog.analysis_finished.connect(lambda _succeeded: analysis_loop.quit())
+        QTimer.singleShot(3000, analysis_loop.quit)
         try:
             assert dialog._summary_label.text() == (
                 "Appending 1 folder into #0:\n#0: a, b, 1 rows\n#1: x, y, 1 rows"
             )
             assert dialog._write_button.text() == "Write File"
             assert not dialog._write_button.isEnabled()
+
+            analysis_loop.exec()
+
+            assert dialog._write_button.isEnabled()
+            assert dialog._write_button.isDefault()
         finally:
             dialog.close()
             window.close()
@@ -561,6 +584,7 @@ class TestBrowserWindow:
             assert analyzed == [True]
             assert published == []
             assert dialog._write_button.isEnabled()
+            assert dialog._write_button.isDefault()
             assert dialog._status_label.text() == "Ready to merge."
 
             dialog._write_button.click()
@@ -920,6 +944,37 @@ class TestBrowserWindow:
             QTest.keyClick(window.log_table, Qt.Key_Right)
             app.processEvents()
             assert window.detail_view.current_tab_index() == 1
+
+            QTest.keyClick(window.log_table, Qt.Key_Left)
+            app.processEvents()
+            assert window.detail_view.current_tab_index() == 0
+        finally:
+            window.close()
+
+    def test_path_labels_do_not_take_focus_from_direction_key_navigation(
+        self, sample_records: list[LogRecord]
+    ) -> None:
+        app = _create_application()
+        window = LogBrowserWindow(sample_records[0].path.parent)
+        window.show()
+        app.processEvents()
+        try:
+            window.log_table.setFocus()
+            QTest.mouseClick(window.directory_label, Qt.LeftButton)
+            app.processEvents()
+            assert app.focusWidget() is window.log_table
+
+            QTest.keyClick(window.log_table, Qt.Key_Down)
+            app.processEvents()
+            assert window.log_table.currentIndex().row() == 1
+
+            QTest.keyClick(window.log_table, Qt.Key_Right)
+            app.processEvents()
+            assert window.detail_view.current_tab_index() == 1
+
+            QTest.mouseClick(window.detail_view.detail_label, Qt.LeftButton)
+            app.processEvents()
+            assert app.focusWidget() is window.log_table
 
             QTest.keyClick(window.log_table, Qt.Key_Left)
             app.processEvents()
