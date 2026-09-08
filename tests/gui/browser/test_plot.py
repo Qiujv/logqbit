@@ -753,6 +753,29 @@ class TestPlotManagerFitAndColorBar:
         assert manager.plot_layout.rowStretch(1) == 0
         manager.widget.deleteLater()
 
+    def test_replacing_2d_mesh_disconnects_old_color_bar_signal(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {
+                "x": [0.0, 0.0, 1.0, 1.0],
+                "y": [0.0, 1.0, 0.0, 1.0],
+                "z": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+        manager._refresh_plot_2d("x", "y", "z")
+        old_mesh = manager._mesh_item
+        color_bar = manager._color_bar
+
+        manager._refresh_plot_2d("x", "y", "z")
+
+        assert old_mesh is not None
+        assert color_bar is manager._color_bar
+        levels = color_bar.levels()
+        old_mesh.setLevels((10.0, 20.0))
+        assert color_bar.levels() == levels
+        manager.widget.deleteLater()
+
 
 class TestPlotMeshSections:
     def test_sections_use_logical_columns_with_descending_and_ragged_y(self) -> None:

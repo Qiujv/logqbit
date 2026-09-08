@@ -386,6 +386,7 @@ class PlotManager:
         self._suppress_updates = False
         self._needs_refresh = False
         self._color_bar: pg.ColorBarItem | None = None
+        self._color_bar_mesh: pg.PColorMeshItem | None = None
         self._legend: pg.LegendItem | None = None
         self._mesh_item: pg.PColorMeshItem | None = None
         self._mesh_items: list[pg.PColorMeshItem] = []
@@ -765,9 +766,9 @@ class PlotManager:
         self.fit_controller.disable("Fit is available for a single 1D field.")
         if hide_fit_buttons:
             self.fit_controller.set_visible(False)
+        self._hide_color_bar()
         self.plot_widget.clear()
         self._clear_legend()
-        self._hide_color_bar()
         if message is not None:
             self.plot_status_label.setText(message)
 
@@ -799,12 +800,26 @@ class PlotManager:
         if self._color_bar is None:
             return
         plot_item = self.plot_widget.getPlotItem()
-        if plot_item is not None and self._color_bar is not None:
+        self._disconnect_color_bar_mesh()
+        if plot_item is not None:
             plot_item.layout.removeItem(self._color_bar)
-        if self._color_bar is not None:
-            self._color_bar.setParentItem(None)
-            self._color_bar.deleteLater()
-            self._color_bar = None
+        self._color_bar.setParentItem(None)
+        self._color_bar.deleteLater()
+        self._color_bar = None
+
+    def _disconnect_color_bar_mesh(self) -> None:
+        """Detach the color bar before its mesh leaves the graphics scene."""
+        if self._color_bar is None:
+            return
+        if self._color_bar_mesh is not None:
+            try:
+                self._color_bar_mesh.sigLevelsChanged.disconnect(
+                    self._color_bar._levelsChangedHandler
+                )
+            except RuntimeError:
+                pass
+        self._color_bar.setImageItem([])
+        self._color_bar_mesh = None
 
     def _show_color_bar(
         self,
@@ -833,9 +848,11 @@ class PlotManager:
             plot_item.layout.setColumnFixedWidth(4, 2)
             plot_item.layout.setColumnSpacing(4, 0)
         else:
+            self._disconnect_color_bar_mesh()
             self._color_bar.setLevels(levels)
             self._color_bar.setImageItem(mesh)
             self._color_bar.getAxis("left").setLabel(z_column)
+        self._color_bar_mesh = mesh
         self._resize_color_bar(plot_item)
 
     def _resize_color_bar(self, plot_item: pg.PlotItem) -> None:
@@ -1007,6 +1024,7 @@ class PlotManager:
         self._mesh_z_column = None
         self.cursor_controller.clear()
         self.fit_controller.disable("Fit is only available for 1D plots.")
+        self._disconnect_color_bar_mesh()
         self.plot_widget.clear()
         self._clear_legend()
         if groupby:
