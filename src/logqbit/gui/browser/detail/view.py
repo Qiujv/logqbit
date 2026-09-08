@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pandas as pd
+from send2trash import send2trash
 from PySide6.QtCore import (
     QFileSystemWatcher,
     Signal,
@@ -258,6 +259,10 @@ class RecordDetailView(QWidget):
         self.tab_widget.setCornerWidget(self.files_button, Qt.TopRightCorner)
 
         self.yaml_view = YamlView()
+        self.yaml_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.yaml_view.customContextMenuRequested.connect(
+            self._open_const_context_menu
+        )
         self.tab_widget.addTab(self.yaml_view, "Const.")
 
         self.data_view_manager = DataViewManager(
@@ -298,6 +303,61 @@ class RecordDetailView(QWidget):
                 self._record,
                 self._data_cache.dataframe,
             )
+
+    def _open_const_context_menu(self, position) -> None:
+        menu = self._create_const_context_menu()
+        menu.exec(self.yaml_view.mapToGlobal(position))
+
+    def _create_const_context_menu(self) -> QMenu:
+        menu = self.yaml_view.createStandardContextMenu()
+        if menu.actions():
+            menu.addSeparator()
+        edit_action = menu.addAction("Edit...")
+        delete_action = menu.addAction("Delete const.yaml")
+        record = self._record
+        edit_action.setEnabled(record is not None)
+        delete_action.setEnabled(record is not None and record.const_path.exists())
+        edit_action.triggered.connect(self._edit_const_file)
+        delete_action.triggered.connect(self._delete_const_file)
+        return menu
+
+    def _edit_const_file(self) -> None:
+        record = self._record
+        if record is None:
+            return
+        path = record.const_path
+        created = False
+        try:
+            if not path.exists():
+                path.touch(exist_ok=False)
+                created = True
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Edit const.yaml",
+                f"Could not create const.yaml:\n{exc}",
+            )
+            return
+        if created:
+            self.yaml_view.set_yaml_text(read_yaml_text(path))
+            self._sync_detail_watcher()
+        self._open_file(path)
+
+    def _delete_const_file(self) -> None:
+        record = self._record
+        if record is None or not record.const_path.exists():
+            return
+        try:
+            send2trash(str(record.const_path))
+        except Exception as exc:  # pragma: no cover - platform integration
+            QMessageBox.warning(
+                self,
+                "Delete const.yaml",
+                f"Could not move const.yaml to the Recycle Bin:\n{exc}",
+            )
+            return
+        self.yaml_view.set_yaml_text(read_yaml_text(record.const_path))
+        self._sync_detail_watcher()
 
     def _on_watch_toggled(self, enabled: bool) -> None:
         if enabled:

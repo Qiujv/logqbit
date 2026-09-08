@@ -359,6 +359,56 @@ class TestRecordDetailWidgets:
         view.files_menu.actions()[-1].trigger()
         assert opened_paths == [record.path]
 
+    def test_const_context_menu_edits_existing_or_new_file(
+        self, sample_logfolder: Path
+    ) -> None:
+        record = scan_catalog(sample_logfolder)[0]
+        opened_paths: list[Path] = []
+        view = RecordDetailView(file_open_callback=opened_paths.append)
+        view.load_record(record)
+
+        menu = view._create_const_context_menu()
+        actions = {action.text(): action for action in menu.actions()}
+        assert actions["Edit..."].isEnabled()
+        assert not actions["Delete const.yaml"].isEnabled()
+
+        actions["Edit..."].trigger()
+
+        assert record.const_path.exists()
+        assert opened_paths == [record.const_path]
+        assert view.yaml_view.toPlainText() == "(const.yaml is empty)"
+
+        view._edit_const_file()
+        assert opened_paths == [record.const_path, record.const_path]
+
+    def test_const_context_menu_deletes_file_to_recycle_bin(
+        self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        record = scan_catalog(sample_logfolder)[0]
+        record.const_path.write_text("sample: device-a\n", encoding="utf-8")
+        moved_paths: list[Path] = []
+
+        def move_to_trash(path: str) -> None:
+            target = Path(path)
+            moved_paths.append(target)
+            target.unlink()
+
+        monkeypatch.setattr(
+            "logqbit.gui.browser.detail.view.send2trash", move_to_trash
+        )
+        view = RecordDetailView()
+        view.load_record(record)
+
+        menu = view._create_const_context_menu()
+        actions = {action.text(): action for action in menu.actions()}
+        assert actions["Delete const.yaml"].isEnabled()
+
+        actions["Delete const.yaml"].trigger()
+
+        assert moved_paths == [record.const_path]
+        assert not record.const_path.exists()
+        assert view.yaml_view.toPlainText() == "const.yaml not found."
+
     def test_switching_to_record_without_images_removes_image_tabs(
         self, sample_logfolder: Path
     ) -> None:
