@@ -237,9 +237,11 @@ class FitController:
         color: str,
         *,
         x_is_datetime: bool = False,
+        preserve_overlays: bool = False,
     ) -> None:
-        self.clear_overlays()
-        self.cancel_selection()
+        if not preserve_overlays:
+            self.clear_overlays()
+            self.cancel_selection()
         self._x = np.asarray(x, dtype=float)
         self._y = np.asarray(y, dtype=float)
         self._field = field

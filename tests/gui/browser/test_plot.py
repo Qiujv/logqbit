@@ -262,6 +262,33 @@ class TestCursorClickHandling:
         assert manager.cursor_controller._vertical_line.value() == pytest.approx(2.0)
         manager.widget.deleteLater()
 
+    def test_data_refresh_keeps_a_user_cursor_and_view_range(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {"x": [0.0, 1.0, 2.0], "y": [1.0, 2.0, 3.0]}
+        )
+        manager._refresh_plot_1d("x", ["y"])
+        manager.cursor_button.click()
+        cursor_line = manager.cursor_controller._vertical_line
+        assert cursor_line is not None
+        manager.fit_view_box.setRange(xRange=(0.25, 0.75), yRange=(1.25, 1.75))
+        original_x_range = manager.fit_view_box.viewRange()[0]
+        manager._user_controls_view = True
+
+        manager._plot_frame = pd.DataFrame(
+            {"x": [0.0, 1.0, 2.0], "y": [10.0, 20.0, 30.0]}
+        )
+        manager._refresh_plot_1d("x", ["y"])
+
+        assert manager.cursor_controller._vertical_line is cursor_line
+        assert manager.fit_view_box.viewRange()[0] == pytest.approx(original_x_range)
+        np.testing.assert_allclose(
+            manager.plot_widget.getPlotItem().listDataItems()[0].getData()[1],
+            [10.0, 20.0, 30.0],
+        )
+        manager.widget.deleteLater()
+
     def test_preview_coordinates_use_a_tenth_of_the_minor_tick_spacing(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -477,6 +504,26 @@ class TestPlotManagerFitAndColorBar:
         manager.quadratic_fit_button.click()
         assert not manager.quadratic_fit_button.isChecked()
         assert manager.fit_view_box._fit_kind is None
+        manager.widget.deleteLater()
+
+    def test_data_refresh_keeps_completed_fit_overlays(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {"x": [0.0, 1.0, 2.0, 3.0], "y": [9.0, 4.0, 1.0, 0.0]}
+        )
+        manager._refresh_plot_1d("x", ["y"])
+        manager.fit_controller._fit_selection("quadratic", QRectF(-1, -1, 5, 11))
+        overlays = tuple(manager.fit_controller._overlays)
+        assert overlays
+        manager._user_controls_view = True
+
+        manager._plot_frame = pd.DataFrame(
+            {"x": [0.0, 1.0, 2.0, 3.0], "y": [0.0, 1.0, 4.0, 9.0]}
+        )
+        manager._refresh_plot_1d("x", ["y"])
+
+        assert tuple(manager.fit_controller._overlays) == overlays
         manager.widget.deleteLater()
 
     def test_fit_buttons_use_first_plotted_1d_field(self) -> None:

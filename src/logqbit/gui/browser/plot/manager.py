@@ -415,6 +415,8 @@ class PlotManager:
         self._plot_frame: pd.DataFrame | None = None
         self._suppress_updates = False
         self._needs_refresh = False
+        self._user_controls_view = False
+        self._data_items: list[object] = []
         self._color_bar: pg.ColorBarItem | None = None
         self._color_bar_mesh: pg.PColorMeshItem | None = None
         self._legend: pg.LegendItem | None = None
@@ -433,7 +435,7 @@ class PlotManager:
 
         # Tag bar
         self.tag_bar = TagBar()
-        self.tag_bar.changed.connect(self.refresh_plot)
+        self.tag_bar.changed.connect(self._on_plot_roles_changed)
         self.tag_bar.save_clicked.connect(self._save_tag_bar)
         layout.addWidget(self.tag_bar)
 
@@ -446,6 +448,9 @@ class PlotManager:
         self.plot_widget.setMinimumHeight(220)
         self._setup_plot_context_menu(plot_item)
         self.fit_view_box.zoom_fit_requested.connect(self.zoom_fit_all)
+        self.fit_view_box.sigRangeChangedManually.connect(
+            lambda _mask: self._mark_user_controls_view()
+        )
 
         # plot_item.setDownsampling(auto=True, mode="subsample")
         plot_item.setContextMenuActionVisible("Points", False)
@@ -583,16 +588,26 @@ class PlotManager:
 
     def zoom_fit_all(self) -> None:
         """Resize the plot view to include all plotted data."""
+        self._mark_user_controls_view()
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.autoRange(padding=PLOT_AUTO_RANGE_PADDING)
 
     def _cursor_activated(self) -> None:
+        self._mark_user_controls_view()
         self.fit_controller.cancel_selection()
 
     def _fit_activated(self, checked: bool) -> None:
         if checked:
+            self._mark_user_controls_view()
             self.cursor_controller.disable()
+
+    def _mark_user_controls_view(self) -> None:
+        self._user_controls_view = True
+
+    def _on_plot_roles_changed(self) -> None:
+        self._user_controls_view = False
+        self.refresh_plot()
 
     def _cursor_visibility_changed(self, active: bool) -> None:
         self._set_section_layout_active(active and self._mesh_item is not None)
@@ -713,6 +728,7 @@ class PlotManager:
     def reset_plot_state(self, message: str = "No data to plot.") -> None:
         self._plot_record = None
         self._plot_frame = None
+        self._user_controls_view = False
         self.tag_bar.set_columns([], [], [], [])
         self._clear_plot(message)
         self._needs_refresh = False
@@ -730,6 +746,7 @@ class PlotManager:
         record: LogRecord,
         frame: pd.DataFrame | None,
     ) -> None:
+        self._user_controls_view = False
         if frame is None or frame.empty or not len(frame.columns):
             self.tag_bar.set_columns([], [], [], [])
             return
@@ -753,6 +770,8 @@ class PlotManager:
         *,
         defer: bool = False,
     ) -> None:
+        if self._plot_record is None or self._plot_record.path != record.path:
+            self._user_controls_view = False
         self._plot_record = record
         self._plot_frame = frame
 
@@ -786,21 +805,59 @@ class PlotManager:
         message: str | None = None,
         *,
         hide_fit_buttons: bool = True,
+        preserve_interactions: bool = False,
+        preserve_color_bar: bool = False,
     ) -> None:
         self._mesh_item = None
         self._mesh_items = []
         self._mesh_levels = None
         self._mesh_z_column = None
         self.marker_size_menu.menuAction().setVisible(False)
-        self.cursor_controller.clear()
-        self.fit_controller.disable("Fit is available for a single 1D field.")
+        if not preserve_interactions:
+            self.cursor_controller.clear()
+            self.fit_controller.disable("Fit is available for a single 1D field.")
         if hide_fit_buttons:
             self.fit_controller.set_visible(False)
-        self._hide_color_bar()
-        self.plot_widget.clear()
-        self._clear_legend()
+        self._clear_data_layer(preserve_color_bar=preserve_color_bar)
         if message is not None:
             self.plot_status_label.setText(message)
+
+    def _clear_data_layer(self, *, preserve_color_bar: bool = False) -> None:
+        """Remove plot data while retaining user-owned interaction overlays."""
+        if preserve_color_bar:
+            self._disconnect_color_bar_mesh()
+        else:
+            self._hide_color_bar()
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is not None:
+            for item in self._data_items:
+                plot_item.removeItem(item)
+        self._data_items.clear()
+        self._clear_legend()
+
+    def _view_range_if_preserved(self) -> tuple[list[float], list[float]] | None:
+        if not self._user_controls_view:
+            return None
+        x_range, y_range = self.fit_view_box.viewRange()
+        return list(x_range), list(y_range)
+
+    def _restore_or_autorange(
+        self,
+        view_range: tuple[list[float], list[float]] | None,
+    ) -> None:
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is None:
+            return
+        if view_range is None:
+            plot_item.enableAutoRange(enable=True)
+            plot_item.autoRange(padding=PLOT_AUTO_RANGE_PADDING)
+            return
+        plot_item.enableAutoRange(enable=False)
+        self.fit_view_box.setRange(
+            xRange=view_range[0],
+            yRange=view_range[1],
+            padding=0,
+        )
 
     def _set_datetime_axes(self, x_is_datetime: bool, y_is_datetime: bool) -> None:
         """Install date axes for datetime coordinates and normal axes otherwise."""
@@ -944,7 +1001,11 @@ class PlotManager:
                 self._clear_plot(f"Column '{col}' not in data.")
                 return
 
-        self._clear_plot(hide_fit_buttons=False)
+        view_range = self._view_range_if_preserved()
+        self._clear_plot(
+            hide_fit_buttons=False,
+            preserve_interactions=view_range is not None,
+        )
         self.fit_controller.set_visible(True)
         x_values, x_is_datetime = _plot_values(frame[x_col])
         y_datetime_columns = [
@@ -986,7 +1047,7 @@ class PlotManager:
                 show_markers = len(df) <= 2001
                 pen = pg.mkPen(color=color, width=2)
                 if show_markers:
-                    self.plot_widget.plot(
+                    item = self.plot_widget.plot(
                         df["x"].values,
                         df["y"].values,
                         pen=pen,
@@ -997,12 +1058,13 @@ class PlotManager:
                         symbolBrush=pg.mkBrush("#FFFFFF"),
                     )
                 else:
-                    self.plot_widget.plot(
+                    item = self.plot_widget.plot(
                         df["x"].values,
                         df["y"].values,
                         pen=pen,
                         name=legend_name,
                     )
+                self._data_items.append(item)
                 if fit_series is None:
                     fit_series = (
                         df["x"].to_numpy(dtype=float),
@@ -1026,10 +1088,7 @@ class PlotManager:
 
         self.marker_size_menu.menuAction().setVisible(True)
 
-        plot_item = self.plot_widget.getPlotItem()
-        if plot_item is not None:
-            plot_item.enableAutoRange(enable=True)
-            plot_item.autoRange(padding=PLOT_AUTO_RANGE_PADDING)
+        self._restore_or_autorange(view_range)
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", ", ".join(y_cols))
         status = f"1D plot: {x_col} vs {', '.join(y_cols[:3])}"
@@ -1038,11 +1097,15 @@ class PlotManager:
             if total_group_count > MAX_PLOT_GROUPS:
                 status += f"; showing latest {MAX_PLOT_GROUPS} of {total_group_count}"
         self.plot_status_label.setText(status)
-        self.cursor_controller.configure_1d(cursor_series)
+        self.cursor_controller.configure_1d(
+            cursor_series,
+            preserve_overlay=view_range is not None,
+        )
         if fit_series is not None and not y_is_datetime:
             self.fit_controller.set_series(
                 *fit_series,
                 x_is_datetime=x_is_datetime,
+                preserve_overlays=view_range is not None,
             )
         else:
             self.fit_controller.disable("Fit is unavailable for datetime fields.")
@@ -1073,6 +1136,7 @@ class PlotManager:
 
         x_is_datetime = pd.api.types.is_datetime64_any_dtype(frame[x_col])
         y_is_datetime = pd.api.types.is_datetime64_any_dtype(frame[y_col])
+        view_range = self._view_range_if_preserved()
 
         mesh_groups = []
         plot_groups, total_group_count = _groups_for_plot(frame, groupby)
@@ -1098,15 +1162,12 @@ class PlotManager:
             max(mesh.levels[1] for _, mesh in mesh_groups),
         )
 
-        self._mesh_item = None
-        self._mesh_items = []
-        self._mesh_levels = None
-        self._mesh_z_column = None
-        self.cursor_controller.clear()
-        self.fit_controller.disable("Fit is only available for 1D plots.")
-        self._disconnect_color_bar_mesh()
-        self.plot_widget.clear()
-        self._clear_legend()
+        self._clear_plot(
+            hide_fit_buttons=False,
+            preserve_interactions=view_range is not None,
+            preserve_color_bar=True,
+        )
+        self.fit_controller.set_visible(False)
         self._set_datetime_axes(x_is_datetime, y_is_datetime)
         if groupby:
             self._show_legend()
@@ -1121,6 +1182,7 @@ class PlotManager:
                 levels=levels,
             )
             self.plot_widget.addItem(pcm)
+            self._data_items.append(pcm)
             self._mesh_items.append(pcm)
             rendered_groups.append((label, mesh, pcm))
 
@@ -1142,10 +1204,7 @@ class PlotManager:
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", y_col)
 
-        plot_item = self.plot_widget.getPlotItem()
-        if plot_item is not None:
-            plot_item.enableAutoRange(enable=True)
-            plot_item.autoRange(padding=PLOT_AUTO_RANGE_PADDING)
+        self._restore_or_autorange(view_range)
 
         total_points = sum(mesh.point_count for _, mesh, _ in rendered_groups)
         if groupby:
@@ -1167,6 +1226,7 @@ class PlotManager:
             y_col,
             z_col,
             group_label=cursor_label,
+            preserve_overlay=view_range is not None,
         )
 
     @functools.cached_property

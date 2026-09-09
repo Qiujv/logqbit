@@ -77,7 +77,17 @@ class CursorController:
     def active(self) -> bool:
         return self._button.isChecked()
 
-    def configure_1d(self, series: Sequence[CursorSeries]) -> None:
+    def configure_1d(
+        self,
+        series: Sequence[CursorSeries],
+        *,
+        preserve_overlay: bool = False,
+    ) -> None:
+        if preserve_overlay and self.active and self._mode == "1d":
+            self._series = tuple(series)
+            self._mesh = None
+            self._group_label = ""
+            return
         self.disable()
         self._mode = "1d"
         self._series = tuple(series)
@@ -94,7 +104,14 @@ class CursorController:
         z_name: str,
         *,
         group_label: str = "",
+        preserve_overlay: bool = False,
     ) -> None:
+        if preserve_overlay and self.active and self._mode == "2d":
+            self._series = ()
+            self._mesh = mesh
+            self._axis_names = (x_name, y_name, z_name)
+            self._group_label = group_label
+            return
         self.disable()
         self._mode = "2d"
         self._series = ()
