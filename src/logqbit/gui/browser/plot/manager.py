@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import html
+from collections import deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime
@@ -49,11 +50,12 @@ if TYPE_CHECKING:
 from logqbit.catalog import resolve_plot_columns
 from logqbit.gui.browser.plot.cursor import CursorController, CursorSeries
 from logqbit.gui.browser.plot.fitting import FitController, FitViewBox
-from logqbit.gui.browser.plot.grouping import iter_plot_groups
+from logqbit.gui.browser.plot.grouping import PlotGroup, iter_plot_groups
 from logqbit.gui.browser.plot.mesh import build_plot_mesh
 
 PLOT_EXPORT_SCALE = 2
 PLOT_AUTO_RANGE_PADDING = 0.01
+MAX_PLOT_GROUPS = 50
 COLOR_BAR_HEIGHT_FACTOR = 0.9
 MARKER_SIZES = {"Small": 4, "Medium": 6, "Large": 8}
 PLOT_COLORS = (
@@ -81,6 +83,18 @@ def _plot_values(values: pd.Series) -> tuple[pd.Series, bool]:
         values = values.dt.tz_localize(datetime.now().astimezone().tzinfo)
     timestamps = values.astype("int64").astype(float).div(1_000_000_000)
     return timestamps.where(values.notna()), True
+
+
+def _groups_for_plot(
+    frame: pd.DataFrame,
+    groupby: Sequence[str],
+) -> tuple[list[PlotGroup], int]:
+    """Return at most the latest observed plot groups and their total count."""
+    groups: deque[PlotGroup] = deque(maxlen=MAX_PLOT_GROUPS)
+    total_count = 0
+    for total_count, group in enumerate(iter_plot_groups(frame, groupby), start=1):
+        groups.append(group)
+    return list(groups), total_count
 
 
 class _CompactTagDelegate(QStyledItemDelegate):
@@ -950,7 +964,8 @@ class PlotManager:
         plotted_groups: set[str] = set()
         fit_series: tuple[np.ndarray, np.ndarray, str, str] | None = None
         cursor_series: list[CursorSeries] = []
-        for plot_group in iter_plot_groups(frame, groupby):
+        plot_groups, total_group_count = _groups_for_plot(frame, groupby)
+        for plot_group in plot_groups:
             x_values, _ = _plot_values(plot_group.frame[x_col])
             for y_col in y_cols:
                 if y_col not in plot_group.frame.columns:
@@ -1020,6 +1035,8 @@ class PlotManager:
         status = f"1D plot: {x_col} vs {', '.join(y_cols[:3])}"
         if groupby:
             status += f" ({len(plotted_groups)} groups, {plotted} curves)"
+            if total_group_count > MAX_PLOT_GROUPS:
+                status += f"; showing latest {MAX_PLOT_GROUPS} of {total_group_count}"
         self.plot_status_label.setText(status)
         self.cursor_controller.configure_1d(cursor_series)
         if fit_series is not None and not y_is_datetime:
@@ -1058,7 +1075,8 @@ class PlotManager:
         y_is_datetime = pd.api.types.is_datetime64_any_dtype(frame[y_col])
 
         mesh_groups = []
-        for plot_group in iter_plot_groups(frame, groupby):
+        plot_groups, total_group_count = _groups_for_plot(frame, groupby)
+        for plot_group in plot_groups:
             sub = plot_group.frame[[x_col, y_col, z_col]]
             arr = np.column_stack(
                 [_plot_values(sub[column])[0] for column in sub.columns]
@@ -1135,6 +1153,8 @@ class PlotManager:
                 f"2D plot: {total_points} points in {len(rendered_groups)} group(s); "
                 f"cursor uses {cursor_label} ({cursor_mesh.point_count} points)"
             )
+            if total_group_count > MAX_PLOT_GROUPS:
+                status += f"; showing latest {MAX_PLOT_GROUPS} of {total_group_count}"
         else:
             status = (
                 f"2D plot: {cursor_mesh.point_count} points → "

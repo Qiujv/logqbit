@@ -22,6 +22,7 @@ from logqbit.gui.browser.plot.mesh import (
     warmup_plotter_jit,
 )
 from logqbit.gui.browser.plot.manager import (
+    MAX_PLOT_GROUPS,
     PLOT_AUTO_RANGE_PADDING,
     PlotManager,
     TagBar,
@@ -394,6 +395,26 @@ class TestPlotManagerFitAndColorBar:
         assert manager._legend.layout.verticalSpacing() == 0
         assert manager._legend.layout.getContentsMargins() == (2.0, 2.0, 2.0, 2.0)
         assert "2 groups, 2 curves" in manager.plot_status_label.text()
+        manager.widget.deleteLater()
+
+    def test_grouped_1d_plots_only_the_latest_fifty_groups(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        devices = np.repeat(np.arange(MAX_PLOT_GROUPS + 2), 2)
+        manager._plot_frame = pd.DataFrame(
+            {
+                "device": devices,
+                "x": np.tile([0.0, 1.0], len(devices) // 2),
+                "signal": np.arange(len(devices), dtype=float),
+            }
+        )
+
+        manager._refresh_plot_1d("x", ["signal"], ["device"])
+
+        assert len(manager.cursor_controller._series) == MAX_PLOT_GROUPS
+        assert manager.cursor_controller._series[0].name == "signal | device=2"
+        assert manager.cursor_controller._series[-1].name == "signal | device=51"
+        assert "showing latest 50 of 52" in manager.plot_status_label.text()
         manager.widget.deleteLater()
 
     def test_grouped_2d_cursor_uses_first_largest_group(self) -> None:
