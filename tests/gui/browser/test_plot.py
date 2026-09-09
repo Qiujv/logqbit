@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtWidgets import QSizePolicy, QStyleOptionViewItem
+import pyqtgraph as pg
 
 from logqbit.catalog import PlotColumns, resolve_plot_columns
 from logqbit.gui.browser.plot.fitting import FitViewBox, fit_exponential, fit_quadratic
@@ -477,6 +478,90 @@ class TestPlotManagerFitAndColorBar:
         assert manager.exponential_fit_button.isEnabled()
         assert manager.quadratic_fit_button.isEnabled()
         assert manager.fit_controller._field == "a"
+        manager.widget.deleteLater()
+
+    def test_datetime_columns_use_date_axes_and_seconds_since_epoch(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {
+                "time": pd.to_datetime(["2026-09-09 12:00", "2026-09-09 12:01"]),
+                "value": [1.0, 2.0],
+            }
+        )
+
+        manager._refresh_plot_1d("time", ["value"])
+
+        plot_item = manager.plot_widget.getPlotItem()
+        assert isinstance(plot_item.getAxis("bottom"), pg.DateAxisItem)
+        assert not isinstance(plot_item.getAxis("left"), pg.DateAxisItem)
+        timestamps = plot_item.listDataItems()[0].getData()[0]
+        assert timestamps[1] - timestamps[0] == pytest.approx(60.0)
+        assert 1_000_000_000 < timestamps[0] < 2_000_000_000
+        assert not manager.log_x_action.isEnabled()
+        assert manager.exponential_fit_button.isEnabled()
+
+        manager._plot_frame = pd.DataFrame({"x": [0.0, 1.0], "y": [1.0, 2.0]})
+        manager._refresh_plot_1d("x", ["y"])
+        assert not isinstance(plot_item.getAxis("bottom"), pg.DateAxisItem)
+        assert manager.log_x_action.isEnabled()
+        manager.widget.deleteLater()
+
+    def test_quadratic_datetime_fit_reports_a_readable_extremum(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        timestamps = pd.date_range("2026-09-09 12:00", periods=5, freq="min")
+        manager._plot_frame = pd.DataFrame(
+            {
+                "time": timestamps,
+                "value": [4.0, 1.0, 0.0, 1.0, 4.0],
+            }
+        )
+
+        manager._refresh_plot_1d("time", ["value"])
+        x_values = manager.fit_controller._x
+        assert x_values is not None
+        manager.fit_controller._fit_selection(
+            "quadratic",
+            QRectF(x_values[0] - 1, -1, x_values[-1] - x_values[0] + 2, 6),
+        )
+
+        assert "x = 2026-09-09 12:02:00" in manager.plot_status_label.text()
+        manager.widget.deleteLater()
+
+    def test_datetime_field_uses_a_date_y_axis(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {
+                "x": [0.0, 1.0],
+                "time": pd.to_datetime(["2026-09-09 12:00", "2026-09-09 12:01"]),
+            }
+        )
+
+        manager._refresh_plot_1d("x", ["time"])
+
+        assert isinstance(manager.plot_widget.getAxis("left"), pg.DateAxisItem)
+        assert not manager.log_y_action.isEnabled()
+        manager.widget.deleteLater()
+
+    def test_datetime_and_numeric_fields_do_not_share_a_y_axis(self) -> None:
+        manager = PlotManager()
+        manager._plot_record = object()
+        manager._plot_frame = pd.DataFrame(
+            {
+                "x": [0.0, 1.0],
+                "value": [1.0, 2.0],
+                "time": pd.to_datetime(["2026-09-09 12:00", "2026-09-09 12:01"]),
+            }
+        )
+
+        manager._refresh_plot_1d("x", ["value", "time"])
+
+        assert manager.plot_status_label.text() == (
+            "Datetime and numeric fields cannot share a y axis."
+        )
+        assert manager.plot_widget.getPlotItem().listDataItems() == []
         manager.widget.deleteLater()
 
     def test_view_context_menu_mirrors_log_mode_controls(self) -> None:

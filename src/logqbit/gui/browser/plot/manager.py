@@ -6,6 +6,7 @@ import functools
 import html
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -65,6 +66,21 @@ PLOT_COLORS = (
     "#FF1493",
     "#8B4513",
 )
+
+
+def _plot_values(values: pd.Series) -> tuple[pd.Series, bool]:
+    """Convert a plot column to numeric coordinates and report datetime input."""
+    if not pd.api.types.is_datetime64_any_dtype(values):
+        return pd.to_numeric(values, errors="coerce"), False
+
+    # DateAxisItem displays Unix timestamps in the local time zone, whereas
+    # pandas stores datetime64 values as nanoseconds. Treat naive datetimes as
+    # local too, preserving their displayed clock time. Keep missing values as
+    # NaN so the normal per-series dropna() handling removes them.
+    if values.dt.tz is None:
+        values = values.dt.tz_localize(datetime.now().astimezone().tzinfo)
+    timestamps = values.astype("int64").astype(float).div(1_000_000_000)
+    return timestamps.where(values.notna()), True
 
 
 class _CompactTagDelegate(QStyledItemDelegate):
@@ -772,6 +788,36 @@ class PlotManager:
         if message is not None:
             self.plot_status_label.setText(message)
 
+    def _set_datetime_axes(self, x_is_datetime: bool, y_is_datetime: bool) -> None:
+        """Install date axes for datetime coordinates and normal axes otherwise."""
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is None:
+            return
+
+        axis_items = {
+            "bottom": (
+                pg.DateAxisItem(orientation="bottom")
+                if x_is_datetime
+                else pg.AxisItem(orientation="bottom")
+            ),
+            "left": (
+                pg.DateAxisItem(orientation="left")
+                if y_is_datetime
+                else pg.AxisItem(orientation="left")
+            ),
+        }
+        for axis in axis_items.values():
+            axis.setTextPen("k")
+            axis.enableAutoSIPrefix(False)
+        plot_item.setAxisItems(axis_items)
+
+        self.log_x_action.setEnabled(not x_is_datetime)
+        self.log_y_action.setEnabled(not y_is_datetime)
+        if x_is_datetime:
+            plot_item.ctrl.logXCheck.setChecked(False)
+        if y_is_datetime:
+            plot_item.ctrl.logYCheck.setChecked(False)
+
     def _clear_legend(self) -> None:
         if self._legend is None:
             return
@@ -886,6 +932,17 @@ class PlotManager:
 
         self._clear_plot(hide_fit_buttons=False)
         self.fit_controller.set_visible(True)
+        x_values, x_is_datetime = _plot_values(frame[x_col])
+        y_datetime_columns = [
+            pd.api.types.is_datetime64_any_dtype(frame[y_col])
+            for y_col in y_cols
+            if y_col in frame.columns
+        ]
+        if any(y_datetime_columns) and not all(y_datetime_columns):
+            self._clear_plot("Datetime and numeric fields cannot share a y axis.")
+            return
+        y_is_datetime = bool(y_datetime_columns) and all(y_datetime_columns)
+        self._set_datetime_axes(x_is_datetime, y_is_datetime)
         if groupby:
             self._show_legend()
 
@@ -894,11 +951,11 @@ class PlotManager:
         fit_series: tuple[np.ndarray, np.ndarray, str, str] | None = None
         cursor_series: list[CursorSeries] = []
         for plot_group in iter_plot_groups(frame, groupby):
-            x_values = pd.to_numeric(plot_group.frame[x_col], errors="coerce")
+            x_values, _ = _plot_values(plot_group.frame[x_col])
             for y_col in y_cols:
                 if y_col not in plot_group.frame.columns:
                     continue
-                y_values = pd.to_numeric(plot_group.frame[y_col], errors="coerce")
+                y_values, _ = _plot_values(plot_group.frame[y_col])
                 df = pd.DataFrame({"x": x_values, "y": y_values}).dropna()
                 if df.empty:
                     continue
@@ -965,10 +1022,13 @@ class PlotManager:
             status += f" ({len(plotted_groups)} groups, {plotted} curves)"
         self.plot_status_label.setText(status)
         self.cursor_controller.configure_1d(cursor_series)
-        if fit_series is not None:
-            self.fit_controller.set_series(*fit_series)
+        if fit_series is not None and not y_is_datetime:
+            self.fit_controller.set_series(
+                *fit_series,
+                x_is_datetime=x_is_datetime,
+            )
         else:
-            self.fit_controller.disable("No numeric field is available for fitting.")
+            self.fit_controller.disable("Fit is unavailable for datetime fields.")
 
     def _refresh_plot_2d(
         self,
@@ -994,13 +1054,15 @@ class PlotManager:
                 self._clear_plot(f"Column '{col}' not in data.")
                 return
 
+        x_is_datetime = pd.api.types.is_datetime64_any_dtype(frame[x_col])
+        y_is_datetime = pd.api.types.is_datetime64_any_dtype(frame[y_col])
+
         mesh_groups = []
         for plot_group in iter_plot_groups(frame, groupby):
             sub = plot_group.frame[[x_col, y_col, z_col]]
-            if all(np.issubdtype(t, np.number) for t in sub.dtypes):
-                arr = sub.to_numpy(dtype=float, copy=False)
-            else:
-                arr = sub.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+            arr = np.column_stack(
+                [_plot_values(sub[column])[0] for column in sub.columns]
+            ).astype(float, copy=False)
 
             mask = ~np.isnan(arr).any(axis=1)
             if not mask.any():
@@ -1027,6 +1089,7 @@ class PlotManager:
         self._disconnect_color_bar_mesh()
         self.plot_widget.clear()
         self._clear_legend()
+        self._set_datetime_axes(x_is_datetime, y_is_datetime)
         if groupby:
             self._show_legend()
 

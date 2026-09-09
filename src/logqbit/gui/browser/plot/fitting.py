@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 import numpy as np
@@ -210,6 +211,7 @@ class FitController:
         self._y: np.ndarray | None = None
         self._field = ""
         self._color = "#1E90FF"
+        self._x_is_datetime = False
         self._overlays: list[object] = []
 
         exponential_button.clicked.connect(
@@ -233,6 +235,8 @@ class FitController:
         y: np.ndarray,
         field: str,
         color: str,
+        *,
+        x_is_datetime: bool = False,
     ) -> None:
         self.clear_overlays()
         self.cancel_selection()
@@ -240,6 +244,7 @@ class FitController:
         self._y = np.asarray(y, dtype=float)
         self._field = field
         self._color = color
+        self._x_is_datetime = x_is_datetime
         for button in self._buttons.values():
             button.setEnabled(True)
             button.setToolTip(
@@ -252,6 +257,7 @@ class FitController:
         self._x = None
         self._y = None
         self._field = ""
+        self._x_is_datetime = False
         for button in self._buttons.values():
             button.setEnabled(False)
             button.setToolTip(reason)
@@ -318,13 +324,20 @@ class FitController:
             self._status_label.setText(f"{kind.capitalize()} fit failed: {exc}.")
             return
 
+        label = result.label
+        if kind == "quadratic" and self._x_is_datetime:
+            try:
+                label = f"x = {datetime.fromtimestamp(result.value):%Y-%m-%d %H:%M:%S}"
+            except (OverflowError, OSError, ValueError):
+                pass
+
         fit_curve = pg.PlotDataItem(
             result.x,
             result.y,
             pen=pg.mkPen("#111111", width=2.5, style=Qt.DashLine),
         )
         result_text = pg.TextItem(
-            result.label,
+            label,
             color="#111111",
             fill=pg.mkBrush(255, 255, 255, 220),
             border=pg.mkPen("#555555"),
@@ -345,7 +358,7 @@ class FitController:
             plot_item.addItem(result_text, ignoreBounds=True)
             self._overlays.extend((fit_curve, result_text))
         self._status_label.setText(
-            f"{kind.capitalize()} fit using {len(x)} points: {result.label}"
+            f"{kind.capitalize()} fit using {len(x)} points: {label}"
         )
 
     def _add_selection_overlays(

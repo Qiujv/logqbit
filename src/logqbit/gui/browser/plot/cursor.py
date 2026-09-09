@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 import numpy as np
@@ -305,7 +306,10 @@ class CursorController:
         if self._preview_horizontal_line is not None:
             self._preview_horizontal_line.setValue(y)
             self._preview_horizontal_line.show()
-        self._preview_readout.setText(f"x = {x:.6g}\ny = {y:.6g}")
+        self._preview_readout.setText(
+            f"x = {self._format_axis_value(x, 'bottom')}\n"
+            f"y = {self._format_axis_value(y, 'left')}"
+        )
         self._preview_readout.setPos(x, y)
         self._preview_readout.show()
 
@@ -347,15 +351,27 @@ class CursorController:
         reference = self._series[0]
         reference_index = int(np.argmin(np.abs(reference.x - x)))
         snapped_x = float(reference.x[reference_index])
-        lines = [f"x = {snapped_x:.6g}"]
+        lines = [f"x = {self._format_axis_value(snapped_x, 'bottom')}"]
         first_y = float(reference.y[reference_index])
         for series in self._series:
             index = int(np.argmin(np.abs(series.x - snapped_x)))
-            lines.append(f"{series.name} = {series.y[index]:.6g}")
+            lines.append(
+                f"{series.name} = {self._format_axis_value(series.y[index], 'left')}"
+            )
         self._vertical_line.setValue(snapped_x)
         self._readout.setText("\n".join(lines))
         self._readout.setPos(snapped_x, first_y)
         self._readout.show()
+
+    def _format_axis_value(self, value: float, axis_name: str) -> str:
+        """Format DateAxis coordinates like their visible tick labels."""
+        axis = self._plot_widget.getPlotItem().getAxis(axis_name)
+        if isinstance(axis, pg.DateAxisItem):
+            try:
+                return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
+            except (OverflowError, OSError, ValueError):
+                pass
+        return f"{value:.6g}"
 
     def _update_2d(self, x: float, y: float) -> None:
         mesh = self._mesh
@@ -378,7 +394,11 @@ class CursorController:
             self._vertical_curve.setData(vertical_z, section_y)
             self._vertical_curve.show()
         x_name, y_name, z_name = self._axis_names
-        lines = [f"{x_name} = {x:.6g}", f"{y_name} = {y:.6g}", f"{z_name} = {z:.6g}"]
+        lines = [
+            f"{x_name} = {self._format_axis_value(x, 'bottom')}",
+            f"{y_name} = {self._format_axis_value(y, 'left')}",
+            f"{z_name} = {z:.6g}",
+        ]
         if self._group_label:
             lines.insert(0, self._group_label)
         text = "\n".join(lines)
