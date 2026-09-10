@@ -16,7 +16,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QPalette, QWheelEvent
+from PySide6.QtGui import QBrush, QColor, QFont, QPalette, QWheelEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -180,6 +180,9 @@ class LogListTableModel(QAbstractTableModel):
 class LogListItemDelegate(QItemDelegate):
     """Draw selected log-list text consistently across native platform styles."""
 
+    _EMPTY_RECORD_LIGHT_BACKGROUND = QColor("#dddddd")
+    _EMPTY_RECORD_DARK_BACKGROUND = QColor("#404040")
+
     @staticmethod
     def _display_option(option: QStyleOptionViewItem) -> QStyleOptionViewItem:
         display_option = QStyleOptionViewItem(option)
@@ -189,8 +192,25 @@ class LogListItemDelegate(QItemDelegate):
             display_option.palette = palette
         return display_option
 
-    def drawDisplay(self, painter, option, rect, text) -> None:  # noqa: N802
-        super().drawDisplay(painter, self._display_option(option), rect, text)
+    @classmethod
+    def _empty_record_background(cls, palette: QPalette) -> QBrush:
+        base = palette.color(QPalette.Base)
+        return QBrush(
+            cls._EMPTY_RECORD_LIGHT_BACKGROUND
+            if base.lightness() >= 128
+            else cls._EMPTY_RECORD_DARK_BACKGROUND
+        )
+
+    def paint(self, painter, option, index) -> None:
+        record = index.siblingAtColumn(COL_ID).data(Qt.UserRole)
+        is_selected = bool(option.state & QStyle.State_Selected)
+        if record is not None and record.row_count == 0 and not is_selected:
+            painter.fillRect(option.rect, self._empty_record_background(option.palette))
+        super().paint(
+            painter,
+            self._display_option(option),
+            index,
+        )
 
 
 class PinScrollArea(QScrollArea):

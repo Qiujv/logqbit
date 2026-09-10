@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QStandardItemModel
+from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
 from logqbit.catalog import LogCatalog, LogRecord
 from logqbit.logfolder import LogFolder
@@ -14,6 +17,7 @@ from logqbit.gui.browser.window.navigation import (
     COL_TITLE,
     SORT_ROLE,
     LogListTableModel,
+    LogListItemDelegate,
     LogListSortFilterProxyModel,
 )
 
@@ -97,6 +101,45 @@ class TestLogListTableModel:
 
         assert data == "1,234"
         assert model.data(index, SORT_ROLE) == 1_234
+
+    def test_empty_record_uses_explicit_light_gray_background(self) -> None:
+        option = QStyleOptionViewItem()
+        option.palette.setColor(QPalette.Base, QColor("white"))
+
+        assert LogListItemDelegate._empty_record_background(option.palette).color() == (
+            QColor("#dddddd")
+        )
+
+    def test_empty_record_uses_explicit_dark_gray_background(self) -> None:
+        option = QStyleOptionViewItem()
+        option.palette.setColor(QPalette.Base, QColor("black"))
+
+        assert LogListItemDelegate._empty_record_background(option.palette).color() == (
+            QColor("#404040")
+        )
+
+    def test_selected_empty_record_preserves_highlight_background(self) -> None:
+        option = QStyleOptionViewItem()
+        option.state |= QStyle.State_Selected
+
+        display_option = LogListItemDelegate._display_option(option)
+
+        assert display_option.backgroundBrush == option.backgroundBrush
+
+    def test_empty_record_paints_gray_background(self) -> None:
+        model = QStandardItemModel(1, 1)
+        index = model.index(0, 0)
+        model.setData(index, SimpleNamespace(row_count=0), Qt.UserRole)
+        option = QStyleOptionViewItem()
+        option.rect = QRect(0, 0, 20, 20)
+        option.palette.setColor(QPalette.Base, QColor("white"))
+        image = QImage(20, 20, QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        LogListItemDelegate().paint(painter, option, index)
+        painter.end()
+
+        assert image.pixelColor(1, 1) == QColor("#dddddd")
 
     def test_proxy_sorts_numeric_ids_before_named_ids(self, tmp_path: Path) -> None:
         for name in ("beta", "10", "1.5", "2", "Alpha"):
