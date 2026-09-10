@@ -137,6 +137,32 @@ class TestTagBar:
         assert tag_bar.groupby == []
         assert tag_bar.groupby_button.text() == "group by"
 
+    def test_dragging_tag_clears_selection(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(["x", "signal", "reference"], ["x"], ["signal"], [])
+        signal_item = tag_bar._list.item(2)
+        tag_bar._list.setCurrentItem(signal_item)
+        signal_item.setSelected(True)
+
+        tag_bar._loading = True
+        moved_item = tag_bar._list.takeItem(2)
+        tag_bar._list.insertItem(3, moved_item)
+        tag_bar._loading = False
+        tag_bar._on_model_changed()
+
+        assert not tag_bar._list.selectedItems()
+
+    def test_canceling_tag_drag_clears_selection(self) -> None:
+        tag_bar = TagBar()
+        tag_bar.set_columns(["x", "signal"], ["x"], ["signal"], [])
+        signal_item = tag_bar._list.item(2)
+        tag_bar._list.setCurrentItem(signal_item)
+        signal_item.setSelected(True)
+
+        tag_bar._list.startDrag(Qt.MoveAction)
+
+        assert not tag_bar._list.selectedItems()
+
     def test_clicking_field_moves_it_to_start_of_ignored_columns(self) -> None:
         tag_bar = TagBar()
         tag_bar.set_columns(

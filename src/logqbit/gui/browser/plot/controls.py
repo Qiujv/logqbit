@@ -95,6 +95,16 @@ class _CompactTagDelegate(QStyledItemDelegate):
 # remain responsive to light and dark theme changes.
 
 
+class _TagListWidget(QListWidget):
+    """Clear the transient drag selection after every completed drag."""
+
+    def startDrag(self, supported_actions) -> None:  # noqa: N802
+        try:
+            super().startDrag(supported_actions)
+        finally:
+            self.clearSelection()
+
+
 class TagBar(QWidget):
     """Assign columns to plot roles by dragging between sections."""
 
@@ -113,7 +123,7 @@ class TagBar(QWidget):
         layout.setSpacing(self._ITEM_SPACING)
         layout.addWidget(QLabel("axes | fields:"))
 
-        self._list = QListWidget()
+        self._list = _TagListWidget()
         self._list.setFlow(QListView.LeftToRight)
         self._list.setWrapping(False)
         self._list.setSpacing(self._ITEM_SPACING)
@@ -161,6 +171,7 @@ class TagBar(QWidget):
     def _on_model_changed(self) -> None:
         if self._loading:
             return
+        self._list.clearSelection()
         axes, fields, _ = self._split()
         conflicts = set(axes + fields).intersection(self.groupby)
         if conflicts:
