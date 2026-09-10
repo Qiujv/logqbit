@@ -1,4 +1,0 @@
-description: Datetime x-axis with an exponential decay and a centered quadratic for fit testing.
-time_step_seconds: 1
-exponential_tau_seconds: 22.0
-quadratic_minimum_seconds_from_start: 60.0
