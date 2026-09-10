@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import numbers
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -70,6 +72,11 @@ class PandasTableModel(QAbstractTableModel):
     def column_values(self, column: int) -> pd.Series:
         """Return one full column by position, independent of the preview limit."""
         return self._df.iloc[:, column]
+
+    @property
+    def dataframe(self) -> pd.DataFrame:
+        """Return the complete DataFrame, independent of the preview limit."""
+        return self._df
 
     def set_preview_limit(self, limit: int | None) -> None:
         old_count = self.rowCount()
@@ -163,6 +170,7 @@ class DataViewManager:
         load_more_callback: Callable[[], None] | None = None,
     ):
         self._load_more_callback = load_more_callback
+        self._csv_export_path: Path | None = None
         self.widget = self._create_widget(parent)
 
     def _create_widget(self, parent: QWidget | None = None) -> QWidget:
@@ -205,17 +213,69 @@ class DataViewManager:
 
     def _open_context_menu(self, point) -> None:
         index = self.data_table.indexAt(point)
-        if not index.isValid():
+        model = self.data_table.model()
+        if not isinstance(model, PandasTableModel):
             return
-        self.data_table.setCurrentIndex(index)
         menu = QMenu(self.data_table)
-        show_unique_action = menu.addAction("Show Unique Values")
-        show_unique_action.triggered.connect(
-            lambda _checked=False, column=index.column(): self._show_unique_values(
-                column
+        if index.isValid():
+            self.data_table.setCurrentIndex(index)
+            show_unique_action = menu.addAction("Show Unique Values")
+            show_unique_action.triggered.connect(
+                lambda _checked=False, column=index.column(): self._show_unique_values(
+                    column
+                )
             )
-        )
+            menu.addSeparator()
+        copy_csv_action = menu.addAction("Copy CSV to Clipboard")
+        copy_csv_action.triggered.connect(self._copy_csv_to_clipboard)
+        export_csv_action = menu.addAction("Export CSV...")
+        export_csv_action.triggered.connect(self._export_csv)
         menu.exec(self.data_table.viewport().mapToGlobal(point))
+
+    def _dataframe_for_csv(self) -> pd.DataFrame | None:
+        model = self.data_table.model()
+        if not isinstance(model, PandasTableModel):
+            return None
+        return model.dataframe
+
+    def _copy_csv_to_clipboard(self) -> None:
+        dataframe = self._dataframe_for_csv()
+        if dataframe is None:
+            return
+        try:
+            dataframe.to_clipboard(index=False, excel=True, sep=",")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to copy data as CSV: %s", exc)
+            QMessageBox.warning(
+                self.widget,
+                "Copy CSV",
+                f"Failed to copy data as CSV: {exc}",
+            )
+
+    def _export_csv(self) -> None:
+        dataframe = self._dataframe_for_csv()
+        if dataframe is None:
+            return
+        filename, _selected_filter = QFileDialog.getSaveFileName(
+            self.widget,
+            "Export CSV",
+            str(self._csv_export_path or Path("data.csv")),
+            "CSV files (*.csv)",
+        )
+        if not filename:
+            return
+        path = Path(filename)
+        if not path.suffix:
+            path = path.with_suffix(".csv")
+        try:
+            dataframe.to_csv(path, index=False)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to export CSV to %s: %s", path, exc)
+            QMessageBox.warning(
+                self.widget,
+                "Export CSV",
+                f"Failed to export CSV: {exc}",
+            )
 
     def _unique_values_for_column(self, column: int) -> pd.Series | None:
         model = self.data_table.model()
@@ -257,6 +317,7 @@ class DataViewManager:
 
     def set_empty(self, message: str = "No data to display.") -> None:
         self.data_table.setModel(None)
+        self._csv_export_path = None
         self.data_status_label.setText(message)
         self.data_load_button.setEnabled(False)
 
@@ -267,6 +328,7 @@ class DataViewManager:
         preview_only: bool,
     ) -> None:
         if dataframe is None:
+            self._csv_export_path = None
             message = (
                 "Data file not found."
                 if record.data_version is None
@@ -274,6 +336,8 @@ class DataViewManager:
             )
             self.set_empty(message)
             return
+
+        self._csv_export_path = record.data_path.with_name(f"{record.path.name}.csv")
 
         total_rows = len(dataframe)
         preview_limit = None

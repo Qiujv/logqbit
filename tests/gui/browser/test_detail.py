@@ -317,6 +317,46 @@ class TestRecordDetailWidgets:
         assert len(values) == 3
         assert manager.data_table.contextMenuPolicy() == Qt.CustomContextMenu
 
+    def test_data_table_copies_complete_csv_to_clipboard(self) -> None:
+        manager = DataViewManager()
+        frame = pd.DataFrame({"value": [1, 2], "label": ["one", "two"]})
+        manager.data_table.setModel(
+            PandasTableModel(frame, manager.data_table, preview_limit=1)
+        )
+        calls: list[dict[str, object]] = []
+        frame.to_clipboard = lambda **kwargs: calls.append(kwargs)  # type: ignore[method-assign]
+
+        manager._copy_csv_to_clipboard()
+
+        assert calls == [{"index": False, "excel": True, "sep": ","}]
+
+    def test_data_table_exports_complete_csv(
+        self,
+        sample_logfolder: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        manager = DataViewManager()
+        frame = pd.DataFrame({"value": [1, 2]})
+        record = scan_catalog(sample_logfolder)[0]
+        manager.show_data_table(record, frame, preview_only=True)
+        output_path = tmp_path / "export"
+        initial_paths: list[str] = []
+        monkeypatch.setattr(
+            "logqbit.gui.browser.detail.data.QFileDialog.getSaveFileName",
+            lambda *_args: (
+                initial_paths.append(_args[2]) or str(output_path),
+                "CSV files (*.csv)",
+            ),
+        )
+
+        manager._export_csv()
+
+        assert initial_paths == [str(record.path / f"{record.path.name}.csv")]
+        assert output_path.with_suffix(".csv").read_text(encoding="utf-8") == (
+            "value\n1\n2\n"
+        )
+
     def test_files_corner_menu_lists_and_opens_all_record_files(
         self, sample_logfolder: Path
     ) -> None:
