@@ -602,6 +602,36 @@ class TestPlotViewFitAndColorBar:
         assert manager.log_x_action.isEnabled()
         manager.deleteLater()
 
+    def test_numeric_grouped_plots_reuse_existing_axes(self) -> None:
+        manager = PlotView()
+        manager._plot_record = object()
+        plot_item = manager.plot_widget.getPlotItem()
+        bottom_axis = plot_item.getAxis("bottom")
+        left_axis = plot_item.getAxis("left")
+        manager._plot_frame = pd.DataFrame(
+            {
+                "group": ["a", "a", "b", "b"],
+                "x": [0.0, 1.0, 0.0, 1.0],
+                "signal": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+
+        manager._refresh_plot_1d("x", ["signal"], ["group"])
+
+        manager._plot_frame = pd.DataFrame(
+            {
+                "group": ["a", "a", "a", "a", "b", "b", "b", "b"],
+                "x": [0.0, 0.0, 1.0, 1.0] * 2,
+                "y": [0.0, 1.0, 0.0, 1.0] * 2,
+                "signal": list(range(8)),
+            }
+        )
+        manager._refresh_plot_2d("x", "y", "signal", ["group"])
+
+        assert plot_item.getAxis("bottom") is bottom_axis
+        assert plot_item.getAxis("left") is left_axis
+        manager.deleteLater()
+
     def test_quadratic_datetime_fit_reports_a_readable_extremum(self) -> None:
         manager = PlotView()
         manager._plot_record = object()

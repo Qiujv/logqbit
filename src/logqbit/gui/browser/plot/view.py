@@ -536,16 +536,19 @@ class PlotView(QWidget):
         if not preserve:
             self.cursor_controller.clear()
             self.fit_controller.disable("Fit is available for a single 1D field.")
-        if len(axes) == 1:
-            result = self.renderer.render_1d(self._plot_frame, axes[0], fields, groupby)
-        else:
-            result = self.renderer.render_2d(
-                self._plot_frame, axes[0], axes[1], fields[0], groupby
-            )
-        if result.mode == "empty":
-            self._clear_plot(result.status)
-            return
-        self._restore_or_autorange(view_range)
+        with self.renderer.scene_update_transaction():
+            if len(axes) == 1:
+                result = self.renderer.render_1d(
+                    self._plot_frame, axes[0], fields, groupby
+                )
+            else:
+                result = self.renderer.render_2d(
+                    self._plot_frame, axes[0], axes[1], fields[0], groupby
+                )
+            if result.mode == "empty":
+                self._clear_plot(result.status)
+                return
+            self._restore_or_autorange(view_range)
         self.log_x_action.setEnabled(not result.x_is_datetime)
         self.log_y_action.setEnabled(not result.y_is_datetime)
         self.plot_status_label.setText(result.status)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 from collections import deque
 from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -132,6 +133,7 @@ class PlotRenderer:
         self._mesh_items: list[pg.PColorMeshItem] = []
         self._mesh_levels: tuple[float, float] | None = None
         self._mesh_z_column: str | None = None
+        self._axis_datetime_modes = (False, False)
         self.marker_size = 6
 
     @property
@@ -174,27 +176,48 @@ class PlotRenderer:
         if plot_item is None:
             return
 
-        axis_items = {
-            "bottom": (
-                pg.DateAxisItem(orientation="bottom")
-                if x_is_datetime
-                else pg.AxisItem(orientation="bottom")
-            ),
-            "left": (
-                pg.DateAxisItem(orientation="left")
-                if y_is_datetime
-                else pg.AxisItem(orientation="left")
-            ),
-        }
+        modes = (x_is_datetime, y_is_datetime)
+        if modes == self._axis_datetime_modes:
+            return
+
+        axis_items = {}
+        for name, orientation, is_datetime, previous in (
+            ("bottom", "bottom", x_is_datetime, self._axis_datetime_modes[0]),
+            ("left", "left", y_is_datetime, self._axis_datetime_modes[1]),
+        ):
+            if is_datetime == previous:
+                continue
+            axis_items[name] = (
+                pg.DateAxisItem(orientation=orientation)
+                if is_datetime
+                else pg.AxisItem(orientation=orientation)
+            )
         for axis in axis_items.values():
             axis.setTextPen("k")
             axis.enableAutoSIPrefix(False)
         plot_item.setAxisItems(axis_items)
+        self._axis_datetime_modes = modes
 
         if x_is_datetime:
             plot_item.ctrl.logXCheck.setChecked(False)
         if y_is_datetime:
             plot_item.ctrl.logYCheck.setChecked(False)
+
+    @contextmanager
+    def scene_update_transaction(self) -> Iterator[None]:
+        """Publish a fully replaced graphics scene in one viewport repaint."""
+        viewport = self.plot_widget.viewport()
+        widget_updates_enabled = self.plot_widget.updatesEnabled()
+        viewport_updates_enabled = viewport.updatesEnabled()
+        self.plot_widget.setUpdatesEnabled(False)
+        viewport.setUpdatesEnabled(False)
+        try:
+            yield
+        finally:
+            self.plot_widget.setUpdatesEnabled(widget_updates_enabled)
+            viewport.setUpdatesEnabled(viewport_updates_enabled)
+            if widget_updates_enabled and viewport_updates_enabled:
+                viewport.update()
 
     def _clear_legend(self) -> None:
         if self._legend is None:
