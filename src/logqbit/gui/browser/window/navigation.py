@@ -374,7 +374,7 @@ class RecordNavigation(QWidget):
                 lambda checked=False, target=column: self.toggle_column(target, checked)
             )
         menu.addSeparator()
-        menu.addAction("About", self.about_requested)
+        menu.addAction("About", self.about_requested.emit)
         return menu
 
     def toggle_column(self, column: int, visible: bool) -> None:

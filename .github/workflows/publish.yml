@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version-file: ".python-version"
+      - name: Build offline documentation
+        run: uv run python scripts/build_offline_docs.py
       - name: Build
         run: uv build
       - name: Publish

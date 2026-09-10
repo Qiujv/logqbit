@@ -319,8 +319,12 @@ class TestBrowserWindow:
         menu = window.navigation.create_header_context_menu()
         actions = {action.text(): action for action in menu.actions()}
         assert "About" in actions
+        about_requests: list[None] = []
+        window.navigation.about_requested.disconnect()
+        window.navigation.about_requested.connect(lambda: about_requests.append(None))
         actions["Show Trashed Items"].trigger()
         actions["Show Starred Items Only"].trigger()
+        actions["About"].trigger()
         change_id_shortcut = next(
             action
             for action in window._shortcuts
@@ -338,6 +342,7 @@ class TestBrowserWindow:
         assert window.navigation._show_trash is False
         assert window.navigation._show_starred_only is True
         assert refreshed == [None, None]
+        assert about_requests == [None]
         assert [record.path for record in changed_ids] == [sample_records[0].path]
         assert made_notes == [None]
         window.close()
@@ -394,6 +399,9 @@ class TestBrowserWindow:
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         window = LogBrowserWindow(sample_logfolder)
+        from logqbit.gui.browser.startup import _browser_window_icon
+
+        window.setWindowIcon(_browser_window_icon())
         shown: list[QMessageBox] = []
         monkeypatch.setattr(
             QMessageBox,
@@ -414,6 +422,7 @@ class TestBrowserWindow:
             window.show_about_dialog()
 
             assert shown and shown[0].parent() is window
+            assert not shown[0].iconPixmap().isNull()
             # QMessageBox suppresses the configured window title on macOS.
             assert "https://github.com/Qiujv/logqbit" in shown[0].text()
             assert "https://qiujv.github.io/logqbit/" in shown[0].text()

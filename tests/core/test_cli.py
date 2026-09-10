@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import unquote, urlparse
 
 import pandas as pd
 
@@ -23,6 +25,22 @@ def test_browser_demo_dispatch(monkeypatch) -> None:
     monkeypatch.setattr("logqbit.cli.demo.create_example_data", lambda: 17)
 
     assert cli.main(["browser-demo"]) == 17
+
+
+def test_docs_opens_bundled_html(monkeypatch, tmp_path: Path) -> None:
+    opened: list[str] = []
+    cli_main_module = importlib.import_module("logqbit.cli.main")
+    offline_docs_module = importlib.import_module("logqbit._offline_docs")
+    docs_path = tmp_path / "_docs" / "index.html"
+    docs_path.parent.mkdir()
+    docs_path.write_text("<title>LogQbit</title>", encoding="utf-8")
+    monkeypatch.setattr(offline_docs_module, "files", lambda _package: tmp_path)
+    monkeypatch.setattr(cli_main_module.webbrowser, "open", opened.append)
+
+    assert cli.main(["docs"]) == 0
+    assert len(opened) == 1
+    opened_path = Path(unquote(urlparse(opened[0]).path))
+    assert opened_path == docs_path
 
 
 def test_browser_demo_preserves_existing_directory(

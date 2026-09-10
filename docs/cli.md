@@ -2,6 +2,14 @@
 
 运行 `logqbit --help` 可查看当前可用命令。
 
+## 打开离线文档
+
+```bash
+logqbit docs
+```
+
+该命令会在默认浏览器中打开随 LogQbit 安装的离线文档，无需联网或安装 MkDocs。
+
 ## 打开 LogBrowser
 
 ```bash

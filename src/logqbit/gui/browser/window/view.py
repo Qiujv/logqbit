@@ -188,7 +188,11 @@ class LogBrowserWindow(QMainWindow):
 
         dialog = QMessageBox(self)
         dialog.setWindowTitle("About LogQbit")
-        dialog.setIcon(QMessageBox.Information)
+        browser_icon = self.windowIcon()
+        if browser_icon.isNull():
+            dialog.setIcon(QMessageBox.Information)
+        else:
+            dialog.setIconPixmap(browser_icon.pixmap(64, 64))
         dialog.setText(about_message())
         dialog.setTextInteractionFlags(
             Qt.TextSelectableByMouse

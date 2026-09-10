@@ -29,8 +29,12 @@ test-core-isolated python="3.11":
 # Test the core package against the supported Python endpoints.
 test-core-matrix: (test-core-isolated "3.11") (test-core-isolated "3.14")
 
+# Build the compact offline HTML documentation included in the wheel.
+offline-docs:
+    uv run python scripts/build_offline_docs.py
+
 # Build the wheel and source distribution.
-build:
+build: offline-docs
     uv build
 
 # Build the documentation and treat warnings as errors.

@@ -7,6 +7,20 @@ import sys
 from collections.abc import Sequence
 from importlib.resources import files
 from pathlib import Path
+import webbrowser
+
+from logqbit._offline_docs import offline_docs_path
+
+
+def open_offline_docs() -> int:
+    """Open the bundled offline documentation in the default browser."""
+    docs_path = offline_docs_path()
+    if docs_path is None:
+        print("Error: Offline documentation is not installed.", file=sys.stderr)
+        return 1
+    if not webbrowser.open(docs_path.resolve().as_uri()):
+        print(f"Open this file in a browser: {docs_path}")
+    return 0
 
 
 def copy_template(template_name: str, output_path: Path | None = None) -> int:
@@ -86,6 +100,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "browser-demo",
         help="Create example data and launch browser",
     )
+    subparsers.add_parser(
+        "docs",
+        help="Open the bundled offline documentation",
+    )
 
     shortcuts_parser = subparsers.add_parser(
         "shortcuts",
@@ -122,6 +140,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         from logqbit.cli.demo import create_example_data
 
         return create_example_data()
+    if args.command == "docs":
+        return open_offline_docs()
     if args.command == "shortcuts":
         from logqbit.cli.shortcuts import create_shortcuts
 
