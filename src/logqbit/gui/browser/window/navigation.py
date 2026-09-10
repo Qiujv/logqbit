@@ -16,7 +16,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QFont, QPalette, QWheelEvent
+from PySide6.QtGui import QColor, QFont, QPalette, QWheelEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -76,13 +76,19 @@ class LogListTableModel(QAbstractTableModel):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._records: list[LogRecord] = []
-        self._bold_font = QFont()
-        self._bold_font.setBold(True)
-        self._strikeout_font = QFont()
-        self._strikeout_font.setStrikeOut(True)
-        self._bold_strikeout_font = QFont()
-        self._bold_strikeout_font.setBold(True)
-        self._bold_strikeout_font.setStrikeOut(True)
+        self._record_fonts: dict[tuple[bool, bool, bool], QFont] = {}
+        for is_bold in (False, True):
+            for is_struck_out in (False, True):
+                for is_underlined in (False, True):
+                    if not (is_bold or is_struck_out or is_underlined):
+                        continue
+                    font = QFont()
+                    font.setBold(is_bold)
+                    font.setStrikeOut(is_struck_out)
+                    font.setUnderline(is_underlined)
+                    self._record_fonts[
+                        (is_bold, is_struck_out, is_underlined)
+                    ] = font
 
     def set_records(self, records: list[LogRecord]) -> None:
         self.beginResetModel()
@@ -146,14 +152,14 @@ class LogListTableModel(QAbstractTableModel):
                         [str(len(plot_axes))] + [axis[:3] for axis in plot_axes]
                     )
                 return ""
-        if role == Qt.FontRole and column == COL_TITLE:
-            is_bold = max(record.star, 0) > 0
-            if is_bold and record.trash:
-                return self._bold_strikeout_font
-            if is_bold:
-                return self._bold_font
-            if record.trash:
-                return self._strikeout_font
+        if role == Qt.FontRole:
+            return self._record_fonts.get(
+                (
+                    max(record.star, 0) > 0,
+                    record.trash,
+                    record.row_count == 0,
+                )
+            )
         if role == Qt.ToolTipRole:
             if column == COL_TITLE:
                 return record.title or "(untitled)"
@@ -180,9 +186,6 @@ class LogListTableModel(QAbstractTableModel):
 class LogListItemDelegate(QItemDelegate):
     """Draw selected log-list text consistently across native platform styles."""
 
-    _EMPTY_RECORD_LIGHT_BACKGROUND = QColor("#dddddd")
-    _EMPTY_RECORD_DARK_BACKGROUND = QColor("#404040")
-
     @staticmethod
     def _display_option(option: QStyleOptionViewItem) -> QStyleOptionViewItem:
         display_option = QStyleOptionViewItem(option)
@@ -192,25 +195,8 @@ class LogListItemDelegate(QItemDelegate):
             display_option.palette = palette
         return display_option
 
-    @classmethod
-    def _empty_record_background(cls, palette: QPalette) -> QBrush:
-        base = palette.color(QPalette.Base)
-        return QBrush(
-            cls._EMPTY_RECORD_LIGHT_BACKGROUND
-            if base.lightness() >= 128
-            else cls._EMPTY_RECORD_DARK_BACKGROUND
-        )
-
-    def paint(self, painter, option, index) -> None:
-        record = index.siblingAtColumn(COL_ID).data(Qt.UserRole)
-        is_selected = bool(option.state & QStyle.State_Selected)
-        if record is not None and record.row_count == 0 and not is_selected:
-            painter.fillRect(option.rect, self._empty_record_background(option.palette))
-        super().paint(
-            painter,
-            self._display_option(option),
-            index,
-        )
+    def drawDisplay(self, painter, option, rect, text) -> None:  # noqa: N802
+        super().drawDisplay(painter, self._display_option(option), rect, text)
 
 
 class PinScrollArea(QScrollArea):

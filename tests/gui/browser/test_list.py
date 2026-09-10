@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pandas as pd
-from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QStandardItemModel
-from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+from PySide6.QtCore import Qt
 
 from logqbit.catalog import LogCatalog, LogRecord
 from logqbit.logfolder import LogFolder
@@ -17,7 +14,6 @@ from logqbit.gui.browser.window.navigation import (
     COL_TITLE,
     SORT_ROLE,
     LogListTableModel,
-    LogListItemDelegate,
     LogListSortFilterProxyModel,
 )
 
@@ -102,44 +98,19 @@ class TestLogListTableModel:
         assert data == "1,234"
         assert model.data(index, SORT_ROLE) == 1_234
 
-    def test_empty_record_uses_explicit_light_gray_background(self) -> None:
-        option = QStyleOptionViewItem()
-        option.palette.setColor(QPalette.Base, QColor("white"))
+    def test_empty_record_underlines_every_column(self, tmp_path: Path) -> None:
+        empty_log = LogFolder(tmp_path / "empty")
+        empty_log.meta.update(star=1, trash=True)
+        record = scan_catalog(tmp_path)[0]
+        model = LogListTableModel()
+        model.set_records([record])
 
-        assert LogListItemDelegate._empty_record_background(option.palette).color() == (
-            QColor("#dddddd")
-        )
-
-    def test_empty_record_uses_explicit_dark_gray_background(self) -> None:
-        option = QStyleOptionViewItem()
-        option.palette.setColor(QPalette.Base, QColor("black"))
-
-        assert LogListItemDelegate._empty_record_background(option.palette).color() == (
-            QColor("#404040")
-        )
-
-    def test_selected_empty_record_preserves_highlight_background(self) -> None:
-        option = QStyleOptionViewItem()
-        option.state |= QStyle.State_Selected
-
-        display_option = LogListItemDelegate._display_option(option)
-
-        assert display_option.backgroundBrush == option.backgroundBrush
-
-    def test_empty_record_paints_gray_background(self) -> None:
-        model = QStandardItemModel(1, 1)
-        index = model.index(0, 0)
-        model.setData(index, SimpleNamespace(row_count=0), Qt.UserRole)
-        option = QStyleOptionViewItem()
-        option.rect = QRect(0, 0, 20, 20)
-        option.palette.setColor(QPalette.Base, QColor("white"))
-        image = QImage(20, 20, QImage.Format_ARGB32)
-        image.fill(Qt.transparent)
-        painter = QPainter(image)
-        LogListItemDelegate().paint(painter, option, index)
-        painter.end()
-
-        assert image.pixelColor(1, 1) == QColor("#dddddd")
+        for column in range(model.columnCount()):
+            font = model.data(model.index(0, column), Qt.FontRole)
+            assert font is not None
+            assert font.bold()
+            assert font.strikeOut()
+            assert font.underline()
 
     def test_proxy_sorts_numeric_ids_before_named_ids(self, tmp_path: Path) -> None:
         for name in ("beta", "10", "1.5", "2", "Alpha"):
@@ -201,26 +172,24 @@ class TestLogListTableModel:
         assert model.data(index, Qt.ToolTipRole) == "y"
 
     def test_data_font_role_starred(self, sample_records: list[LogRecord]) -> None:
-        """Test font styling for starred items."""
+        """Starred records are bold across every list column."""
         model = LogListTableModel()
         model.set_records(sample_records)
 
-        # Starred item should be bold
-        index1 = model.index(1, COL_TITLE)
-        font = model.data(index1, Qt.FontRole)
-        assert font is not None
-        assert font.bold()
+        for column in range(model.columnCount()):
+            font = model.data(model.index(1, column), Qt.FontRole)
+            assert font is not None
+            assert font.bold()
 
     def test_data_font_role_trashed(self, sample_records: list[LogRecord]) -> None:
-        """Test font styling for trashed items."""
+        """Trashed records are struck out across every list column."""
         model = LogListTableModel()
         model.set_records(sample_records)
 
-        # Trashed item should be strikeout
-        index2 = model.index(2, COL_TITLE)
-        font = model.data(index2, Qt.FontRole)
-        assert font is not None
-        assert font.strikeOut()
+        for column in range(model.columnCount()):
+            font = model.data(model.index(2, column), Qt.FontRole)
+            assert font is not None
+            assert font.strikeOut()
 
     def test_notify_record_changed(self, sample_records: list[LogRecord]) -> None:
         """Test notifying views after a record has been refreshed."""
