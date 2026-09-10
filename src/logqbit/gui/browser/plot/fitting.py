@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from logqbit.gui.browser.plot.view import PlotViewBox
 
 import numpy as np
 import pyqtgraph as pg
 from scipy.optimize import curve_fit
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QAbstractButton, QGraphicsRectItem, QLabel
+from PySide6.QtWidgets import QAbstractButton, QGraphicsRectItem, QLabel
 
 FitKind = Literal["exponential", "quadratic"]
 
@@ -119,83 +122,13 @@ def fit_quadratic(x: np.ndarray, y: np.ndarray) -> FitResult:
     )
 
 
-class FitViewBox(pg.ViewBox):
-    """ViewBox that draws a fit-selection rectangle only while armed."""
-
-    selection_finished = Signal(str, object)
-    selection_canceled = Signal()
-    zoom_fit_requested = Signal()
-    cursor_click_requested = Signal(object)
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._fit_kind: FitKind | None = None
-        self._pending_cursor_click = None
-        self._cursor_click_timer = QTimer(self)
-        self._cursor_click_timer.setSingleShot(True)
-        self._cursor_click_timer.timeout.connect(self._emit_cursor_click)
-
-    def _emit_cursor_click(self) -> None:
-        if self._pending_cursor_click is not None:
-            self.cursor_click_requested.emit(self._pending_cursor_click)
-            self._pending_cursor_click = None
-
-    def cancel_pending_cursor_click(self) -> None:
-        self._cursor_click_timer.stop()
-        self._pending_cursor_click = None
-
-    def arm(self, kind: FitKind) -> None:
-        self._fit_kind = kind
-        self.setCursor(Qt.CrossCursor)
-
-    def cancel_fit_selection(self, *, notify: bool = False) -> None:
-        was_armed = self._fit_kind is not None
-        self._fit_kind = None
-        self.rbScaleBox.hide()
-        self.unsetCursor()
-        if notify and was_armed:
-            self.selection_canceled.emit()
-
-    def mouseDragEvent(self, event, axis=None) -> None:
-        if self._fit_kind is None or event.button() != Qt.LeftButton:
-            super().mouseDragEvent(event, axis=axis)
-            return
-
-        event.accept()
-        if event.isFinish():
-            self.rbScaleBox.hide()
-            local_rect = QRectF(event.buttonDownPos(), event.pos()).normalized()
-            data_rect = self.childGroup.mapRectFromParent(local_rect).normalized()
-            kind = self._fit_kind
-            self.selection_finished.emit(kind, data_rect)
-        else:
-            self.updateScaleBox(event.buttonDownPos(), event.pos())
-
-    def mouseClickEvent(self, event) -> None:
-        if event.double() and event.button() == Qt.LeftButton:
-            self.cancel_pending_cursor_click()
-            event.accept()
-            self.zoom_fit_requested.emit()
-            return
-        if event.button() == Qt.LeftButton:
-            self._pending_cursor_click = event.pos()
-            self._cursor_click_timer.start(QApplication.doubleClickInterval())
-            event.accept()
-            return
-        if self._fit_kind is not None and event.button() == Qt.RightButton:
-            event.accept()
-            self.cancel_fit_selection(notify=True)
-            return
-        super().mouseClickEvent(event)
-
-
 class FitController:
     """Own the 1D fit controls, selection state, and plot overlays."""
 
     def __init__(
         self,
         plot_widget: pg.PlotWidget,
-        view_box: FitViewBox,
+        view_box: PlotViewBox,
         status_label: QLabel,
         exponential_button: QAbstractButton,
         quadratic_button: QAbstractButton,

@@ -221,12 +221,12 @@ class TestRecordDetailWidgets:
         view.resize(600, 400)
         view.load_record(record)
         view.set_current_tab(TAB_PLOT)
-        assert view.plot_manager.copy_plot_button.text() == "copy"
+        assert view.plot_view.copy_plot_button.text() == "copy"
         view.show()
         app.processEvents()
         try:
             app.clipboard().clear()
-            view.plot_manager.copy_plot_button.click()
+            view.plot_view.copy_plot_button.click()
             copied = app.clipboard().image()
             assert not copied.isNull()
             first_pixel = copied.pixel(0, 0)
@@ -291,16 +291,16 @@ class TestRecordDetailWidgets:
         view = RecordDetailView()
         view.load_record(record)
         view.set_current_tab(TAB_PLOT)
-        plot_item = view.plot_manager.plot_widget.getPlotItem()
+        plot_item = view.plot_view.plot_widget.getPlotItem()
         plot_item.getViewBox().setXRange(1.0, 2.0, padding=0)
-        view.plot_manager.exponential_fit_button.click()
+        view.plot_view.exponential_fit_button.click()
         expected_range = plot_item.getViewBox().viewRange()[0]
 
         (record.path / "notes.txt").write_text("updated", encoding="utf-8")
         view.refresh_current_record()
 
         assert plot_item.getViewBox().viewRange()[0] == pytest.approx(expected_range)
-        assert view.plot_manager.exponential_fit_button.isChecked()
+        assert view.plot_view.exponential_fit_button.isChecked()
 
     def test_data_table_unique_values_use_full_column(self) -> None:
         manager = DataViewManager()
@@ -327,7 +327,7 @@ class TestRecordDetailWidgets:
 
         view = RecordDetailView(file_open_callback=opened_paths.append)
         view.load_record(record)
-        view._rebuild_files_menu()
+        view.files_menu._rebuild_files_menu()
 
         assert view.tab_widget.cornerWidget(Qt.TopRightCorner) is view.files_button
         action_names = [action.text() for action in view.files_menu.actions()]
@@ -349,15 +349,19 @@ class TestRecordDetailWidgets:
         record = scan_catalog(sample_logfolder)[0]
         opened_paths: list[Path] = []
         monkeypatch.setattr(
-            "logqbit.gui.browser.detail.view.open_in_file_manager",
+            "logqbit.gui.browser.detail.files.open_in_file_manager",
             lambda path, parent=None: opened_paths.append(path),
         )
         view = RecordDetailView()
         view.load_record(record)
-        view._rebuild_files_menu()
+        view.files_menu._rebuild_files_menu()
 
         view.files_menu.actions()[-1].trigger()
         assert opened_paths == [record.path]
+
+        view.clear()
+        view.files_menu._rebuild_files_menu()
+        assert view.files_menu.actions() == []
 
     def test_const_context_menu_edits_existing_or_new_file(
         self, sample_logfolder: Path
@@ -367,7 +371,7 @@ class TestRecordDetailWidgets:
         view = RecordDetailView(file_open_callback=opened_paths.append)
         view.load_record(record)
 
-        menu = view._create_const_context_menu()
+        menu = view.const_tab._create_const_context_menu()
         actions = {action.text(): action for action in menu.actions()}
         assert actions["Edit..."].isEnabled()
         assert not actions["Delete const.yaml"].isEnabled()
@@ -376,9 +380,9 @@ class TestRecordDetailWidgets:
 
         assert record.const_path.exists()
         assert opened_paths == [record.const_path]
-        assert view.yaml_view.toPlainText() == "(const.yaml is empty)"
+        assert view.const_tab.yaml_view.toPlainText() == "(const.yaml is empty)"
 
-        view._edit_const_file()
+        view.const_tab._edit_const_file()
         assert opened_paths == [record.const_path, record.const_path]
 
     def test_const_context_menu_deletes_file_to_recycle_bin(
@@ -394,12 +398,12 @@ class TestRecordDetailWidgets:
             target.unlink()
 
         monkeypatch.setattr(
-            "logqbit.gui.browser.detail.view.send2trash", move_to_trash
+            "logqbit.gui.browser.detail.const.send2trash", move_to_trash
         )
         view = RecordDetailView()
         view.load_record(record)
 
-        menu = view._create_const_context_menu()
+        menu = view.const_tab._create_const_context_menu()
         actions = {action.text(): action for action in menu.actions()}
         assert actions["Delete const.yaml"].isEnabled()
 
@@ -407,7 +411,7 @@ class TestRecordDetailWidgets:
 
         assert moved_paths == [record.const_path]
         assert not record.const_path.exists()
-        assert view.yaml_view.toPlainText() == "const.yaml not found."
+        assert view.const_tab.yaml_view.toPlainText() == "const.yaml not found."
 
     def test_switching_to_record_without_images_removes_image_tabs(
         self, sample_logfolder: Path
@@ -531,8 +535,8 @@ class TestRecordDetailWidgets:
             assert str(record.meta_path) in watched_files
             assert str(extra_file) not in watched_files
 
-            window.detail_view.yaml_view.setFocus()
-            QTest.keyClick(window.detail_view.yaml_view, Qt.Key_Right)
+            window.detail_view.const_tab.yaml_view.setFocus()
+            QTest.keyClick(window.detail_view.const_tab.yaml_view, Qt.Key_Right)
             app.processEvents()
             assert window.detail_view.current_tab_index() == 1
 

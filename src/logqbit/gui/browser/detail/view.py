@@ -9,17 +9,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pandas as pd
-from send2trash import send2trash
 from PySide6.QtCore import (
     QFileSystemWatcher,
     Signal,
     Qt,
     QTimer,
-    QUrl,
 )
 from PySide6.QtGui import (
     QAction,
-    QDesktopServices,
     QKeySequence,
 )
 from PySide6.QtWidgets import (
@@ -27,8 +24,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QMenu,
-    QMessageBox,
     QSizePolicy,
     QTabWidget,
     QToolButton,
@@ -38,13 +33,13 @@ from PySide6.QtWidgets import (
 
 from logqbit.gui.browser.detail.data import DataViewManager
 from logqbit.gui.browser.detail.files import (
+    FilesMenu,
     ImageTab,
     list_image_files,
-    open_in_file_manager,
-    read_yaml_text,
+    open_file,
 )
-from logqbit.gui.browser.detail.yaml import YamlView
-from logqbit.gui.browser.plot.manager import PlotManager
+from logqbit.gui.browser.detail.const import ConstTab
+from logqbit.gui.browser.plot.view import PlotView
 from logqbit.file_version import FileVersion
 
 if TYPE_CHECKING:
@@ -183,7 +178,8 @@ class RecordDetailView(QWidget):
         self._record = record
         self.detail_id_label.setText(f"#{record.log_id}")
         self.detail_label.setText(record.path.as_posix())
-        self.yaml_view.set_yaml_text(read_yaml_text(record.const_path))
+        self.files_menu.set_record_path(record.path)
+        self.const_tab.load_record(record)
         if metadata_changed or data_changed:
             self.data_view_manager.show_data_table(
                 record,
@@ -194,9 +190,9 @@ class RecordDetailView(QWidget):
         self.files_button.setEnabled(True)
         defer_plot = self.tab_widget.currentIndex() != TAB_PLOT
         if metadata_changed:
-            self.plot_manager.update_controls(record, dataframe)
+            self.plot_view.update_controls(record, dataframe)
         if metadata_changed or data_changed:
-            self.plot_manager.update_plot(record, dataframe, defer=defer_plot)
+            self.plot_view.update_plot(record, dataframe, defer=defer_plot)
         self._sync_detail_watcher()
 
     def refresh_current_record(self, *, force: bool = False) -> None:
@@ -216,12 +212,12 @@ class RecordDetailView(QWidget):
         self._metadata_cache.clear()
         self.detail_id_label.setText("")
         self.detail_label.setText(message)
-        self.yaml_view.set_yaml_text("")
+        self.const_tab.clear("")
         self.data_view_manager.set_empty("")
         self._clear_dynamic_tabs()
         self.files_button.setEnabled(False)
-        self.files_menu.clear()
-        self.plot_manager.reset_plot_state("")
+        self.files_menu.set_record_path(None)
+        self.plot_view.reset_plot_state("")
 
     def _build_ui(self) -> None:
         detail_layout = QVBoxLayout(self)
@@ -253,17 +249,19 @@ class RecordDetailView(QWidget):
         self.files_button.setText("Files...")
         self.files_button.setPopupMode(QToolButton.InstantPopup)
         self.files_button.setEnabled(False)
-        self.files_menu = QMenu(self.files_button)
-        self.files_menu.aboutToShow.connect(self._rebuild_files_menu)
+        self.files_menu = FilesMenu(
+            file_open_callback=self._open_file,
+            parent=self.files_button,
+        )
         self.files_button.setMenu(self.files_menu)
         self.tab_widget.setCornerWidget(self.files_button, Qt.TopRightCorner)
 
-        self.yaml_view = YamlView()
-        self.yaml_view.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.yaml_view.customContextMenuRequested.connect(
-            self._open_const_context_menu
+        self.const_tab = ConstTab(
+            file_open_callback=self._open_file,
+            parent=self,
         )
-        self.tab_widget.addTab(self.yaml_view, "Const.")
+        self.const_tab.file_changed.connect(self._sync_detail_watcher)
+        self.tab_widget.addTab(self.const_tab, "Const.")
 
         self.data_view_manager = DataViewManager(
             parent=self,
@@ -271,8 +269,8 @@ class RecordDetailView(QWidget):
         )
         self.tab_widget.addTab(self.data_view_manager.widget, "Data")
 
-        self.plot_manager = PlotManager(parent=self)
-        self.tab_widget.addTab(self.plot_manager.widget, "Plot")
+        self.plot_view = PlotView(parent=self)
+        self.tab_widget.addTab(self.plot_view, "Plot")
 
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         detail_layout.addWidget(self.tab_widget)
@@ -295,7 +293,7 @@ class RecordDetailView(QWidget):
 
     def _on_tab_changed(self, index: int) -> None:
         if index == TAB_PLOT:
-            self.plot_manager.refresh_if_needed()
+            self.plot_view.refresh_if_needed()
 
     def _on_load_more(self) -> None:
         if self._record:
@@ -303,61 +301,6 @@ class RecordDetailView(QWidget):
                 self._record,
                 self._data_cache.dataframe,
             )
-
-    def _open_const_context_menu(self, position) -> None:
-        menu = self._create_const_context_menu()
-        menu.exec(self.yaml_view.mapToGlobal(position))
-
-    def _create_const_context_menu(self) -> QMenu:
-        menu = self.yaml_view.createStandardContextMenu()
-        if menu.actions():
-            menu.addSeparator()
-        edit_action = menu.addAction("Edit...")
-        delete_action = menu.addAction("Delete const.yaml")
-        record = self._record
-        edit_action.setEnabled(record is not None)
-        delete_action.setEnabled(record is not None and record.const_path.exists())
-        edit_action.triggered.connect(self._edit_const_file)
-        delete_action.triggered.connect(self._delete_const_file)
-        return menu
-
-    def _edit_const_file(self) -> None:
-        record = self._record
-        if record is None:
-            return
-        path = record.const_path
-        created = False
-        try:
-            if not path.exists():
-                path.touch(exist_ok=False)
-                created = True
-        except OSError as exc:
-            QMessageBox.warning(
-                self,
-                "Edit const.yaml",
-                f"Could not create const.yaml:\n{exc}",
-            )
-            return
-        if created:
-            self.yaml_view.set_yaml_text(read_yaml_text(path))
-            self._sync_detail_watcher()
-        self._open_file(path)
-
-    def _delete_const_file(self) -> None:
-        record = self._record
-        if record is None or not record.const_path.exists():
-            return
-        try:
-            send2trash(str(record.const_path))
-        except Exception as exc:  # pragma: no cover - platform integration
-            QMessageBox.warning(
-                self,
-                "Delete const.yaml",
-                f"Could not move const.yaml to the Recycle Bin:\n{exc}",
-            )
-            return
-        self.yaml_view.set_yaml_text(read_yaml_text(record.const_path))
-        self._sync_detail_watcher()
 
     def _on_watch_toggled(self, enabled: bool) -> None:
         if enabled:
@@ -431,49 +374,8 @@ class RecordDetailView(QWidget):
         finally:
             self.tab_widget.blockSignals(was_blocked)
 
-    def _rebuild_files_menu(self) -> None:
-        self.files_menu.clear()
-        record = self._record
-        if record is None:
-            return
-
-        try:
-            file_paths = sorted(
-                (path for path in record.path.iterdir() if path.is_file()),
-                key=lambda path: path.name.casefold(),
-            )
-        except OSError:
-            file_paths = []
-
-        if not file_paths:
-            empty_action = self.files_menu.addAction("(No files)")
-            empty_action.setEnabled(False)
-
-        for path in file_paths:
-            action = self.files_menu.addAction(path.name)
-            action.setToolTip(str(path))
-            action.triggered.connect(
-                lambda _checked=False, file_path=path: self._open_file(file_path)
-            )
-
-        self.files_menu.addSeparator()
-        show_action = self.files_menu.addAction("Show in Explorer")
-        show_action.triggered.connect(self._show_record_in_explorer)
-
     def _open_file(self, path: Path) -> None:
-        if self._file_open_callback:
-            self._file_open_callback(path)
-            return
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
-            QMessageBox.warning(
-                self,
-                "Open File",
-                f"No application is available to open {path.name}.",
-            )
-
-    def _show_record_in_explorer(self) -> None:
-        if self._record is not None:
-            open_in_file_manager(self._record.path, parent=self)
+        open_file(path, callback=self._file_open_callback, parent=self)
 
 
 class RecordDetailWindow(QMainWindow):

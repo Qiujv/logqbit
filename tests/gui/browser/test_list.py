@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 
 from logqbit.catalog import LogCatalog, LogRecord
 from logqbit.logfolder import LogFolder
-from logqbit.gui.browser.window.model import (
+from logqbit.gui.browser.window.navigation import (
     COL_ID,
     COL_PLOT_AXES,
     COL_ROWS,

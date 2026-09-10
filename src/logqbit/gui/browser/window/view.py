@@ -1,137 +1,45 @@
-"""Interactive browser window for log folders."""
+"""Interactive Browser window and cross-component coordination."""
 
 from __future__ import annotations
 
 import logging
 import os
 import threading
-from collections import OrderedDict
-from collections.abc import Iterable
 from pathlib import Path
 
-from PySide6.QtCore import (
-    QFileSystemWatcher,
-    QSignalBlocker,
-    Qt,
-    QTimer,
-)
-from PySide6.QtGui import (
-    QAction,
-    QColor,
-    QKeySequence,
-    QPalette,
-    QShortcut,
-    QWheelEvent,
-)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
-    QDialog,
-    QDialogButtonBox,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
-    QHeaderView,
-    QInputDialog,
-    QItemDelegate,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
     QSplitter,
-    QScrollArea,
-    QStyle,
-    QStyleOptionViewItem,
-    QTableView,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
-from send2trash import send2trash
 
-from logqbit.catalog import LogCatalog, LogRecord, PreparedMerge, export_records
-from logqbit.metadata import LogMetadata
-from logqbit.gui.browser.detail.files import open_in_file_manager
+from logqbit.catalog import LogRecord
 from logqbit.gui.browser.detail.view import RecordDetailView, RecordDetailWindow
 from logqbit.gui.browser.plot.mesh import warmup_plotter_jit
-from logqbit.gui.browser.window.model import (
-    COL_CREATE_MACHINE,
-    COL_CREATE_TIME,
-    COL_ID,
-    COL_PLOT_AXES,
-    COL_ROWS,
-    COL_TITLE,
-    SORT_ROLE,
-    LogListTableModel,
-    LogListSortFilterProxyModel,
-)
-from logqbit.gui.browser.window.merge import MergeDialog
+from logqbit.gui.browser.window.navigation import RecordNavigation
 from logqbit.gui.browser.window.preferences import SettingsManager, ThemeManager
+from logqbit.gui.browser.window.records import RecordActions
 
 logger = logging.getLogger(__name__)
-
-# Constants
-REFRESH_DEBOUNCE_MS = 250
-DETAIL_LOAD_DEBOUNCE_MS = 100
-CATALOG_CACHE_SIZE = 3
 DISABLE_JIT_WARMUP_ENV = "LOGQBIT_BROWSER_DISABLE_JIT_WARMUP"
-
 _plotter_jit_warmup_started = False
-
-_WINDOWS_RESERVED_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    *(f"COM{index}" for index in range(1, 10)),
-    *(f"LPT{index}" for index in range(1, 10)),
-}
-
-
-def _validated_log_id(value: str) -> str:
-    log_id = value.strip()
-    if not log_id:
-        raise ValueError("ID cannot be empty.")
-    if log_id in {".", ".."}:
-        raise ValueError("ID must be a directory name, not '.' or '..'.")
-    if any(character in log_id for character in '/\\<>:"|?*'):
-        raise ValueError("ID contains a character that is invalid in a directory name.")
-    if any(ord(character) < 32 for character in log_id):
-        raise ValueError("ID cannot contain control characters.")
-    if log_id.endswith((" ", ".")):
-        raise ValueError("ID cannot end with a space or period.")
-    if log_id.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
-        raise ValueError("ID is a reserved directory name on Windows.")
-    return log_id
-
-
-class _MakeNoteDialog(QDialog):
-    def __init__(self, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Make Note")
-        layout = QFormLayout(self)
-        self.id_edit = QLineEdit(self)
-        self.title_edit = QLineEdit(self)
-        layout.addRow('ID (e.g. 5.1, "foobar"):', self.id_edit)
-        layout.addRow("Title:", self.title_edit)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
-            parent=self,
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
-        self.resize(max(self.sizeHint().width(), 500), self.sizeHint().height())
 
 
 def _start_plotter_jit_warmup() -> None:
     global _plotter_jit_warmup_started
-    if _plotter_jit_warmup_started:
-        return
-    if os.environ.get(DISABLE_JIT_WARMUP_ENV):
+    if _plotter_jit_warmup_started or os.environ.get(DISABLE_JIT_WARMUP_ENV):
         return
     _plotter_jit_warmup_started = True
 
@@ -141,153 +49,82 @@ def _start_plotter_jit_warmup() -> None:
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("Failed to warm up plotter JIT: %s", exc)
 
-    thread = threading.Thread(
-        target=run_warmup,
-        name="logqbit-plotter-jit-warmup",
-        daemon=True,
-    )
-    thread.start()
-
-
-class LogListItemDelegate(QItemDelegate):
-    """Draw selected log-list text consistently across native platform styles."""
-
-    @staticmethod
-    def _display_option(option: QStyleOptionViewItem) -> QStyleOptionViewItem:
-        display_option = QStyleOptionViewItem(option)
-        if display_option.state & QStyle.State_Selected:
-            palette = display_option.palette
-            palette.setColor(QPalette.HighlightedText, QColor("white"))
-            display_option.palette = palette
-        return display_option
-
-    def drawDisplay(self, painter, option, rect, text) -> None:  # noqa: N802
-        super().drawDisplay(
-            painter,
-            self._display_option(option),
-            rect,
-            text,
-        )
-
-
-class PinScrollArea(QScrollArea):
-    """A compact pin strip that scrolls only along its horizontal axis."""
-
-    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        delta = event.pixelDelta().x() or event.pixelDelta().y()
-        if not delta:
-            delta = event.angleDelta().x() or event.angleDelta().y()
-        if delta:
-            scrollbar = self.horizontalScrollBar()
-            scrollbar.setValue(scrollbar.value() - delta)
-        event.accept()
+    threading.Thread(
+        target=run_warmup, name="logqbit-plotter-jit-warmup", daemon=True
+    ).start()
 
 
 class LogBrowserWindow(QMainWindow):
+    """Assemble Browser components and coordinate detail windows."""
+
     def __init__(
         self, directory: Path | None = None, parent: QWidget | None = None
     ) -> None:
         super().__init__(parent)
         self.resize(1200, 700)
-
         self.settings_manager = SettingsManager()
-
-        # State
-        self._base_dir = Path(directory) if directory else Path.cwd()
-        self._selected_record: LogRecord | None = None
-        self._all_records: list[LogRecord] = []
-        self._show_trash = True
-        self._show_starred_only = False
-        self._shortcuts: list[QAction] = []
-        self._list_refresh_pending = False
-        self._detail_load_timer = QTimer(self)
-        self._detail_load_timer.setSingleShot(True)
-        self._detail_load_timer.setInterval(DETAIL_LOAD_DEBOUNCE_MS)
-        self._detail_load_timer.timeout.connect(self._load_selected_log)
-        self._detail_windows: list[RecordDetailWindow] = []
-        self._catalog = LogCatalog()
-        self._catalog_cache: OrderedDict[Path, LogCatalog] = OrderedDict()
-        self._actions = _BrowserActions(self)
-
-        # Theme management
+        recent = self.settings_manager.load_recent_directories()
+        initial_directory = (
+            Path(directory) if directory else (recent[0] if recent else Path.cwd())
+        )
+        if directory:
+            self.settings_manager.update_recent_directories(initial_directory)
+        self._theme_mode = self.settings_manager.load_theme_mode()
         app = QApplication.instance()
         self.theme_manager = ThemeManager(app) if app else None
-        self._theme_mode = self.settings_manager.load_theme_mode()
+        self._detail_windows: list[RecordDetailWindow] = []
+        self._shortcuts: list[QAction] = []
 
-        # Recent directories
-        recent = self.settings_manager.load_recent_directories()
-        if directory:
-            self._base_dir = Path(directory)
-            self.settings_manager.update_recent_directories(self._base_dir)
-        elif recent:
-            self._base_dir = recent[0]
-        self._pinned_record_names = self.settings_manager.load_pinned_records(
-            self._base_dir
+        self._build_ui(initial_directory)
+        self._actions = RecordActions(self.navigation, self)
+        self._actions.records_changed.connect(self.navigation.refresh_logs)
+        self._actions.files_written.connect(self.navigation.schedule_list_refresh)
+        self._actions.path_renamed.connect(self._on_path_renamed)
+        self.navigation.log_table.customContextMenuRequested.connect(
+            self._actions.open_table_context_menu
         )
-
-        # File watchers
-        self._dir_watcher = QFileSystemWatcher(self)
-        self._dir_watcher.directoryChanged.connect(self._schedule_list_refresh)
-        self._dir_watcher.fileChanged.connect(self._schedule_list_refresh)
-
-        # Build UI
-        self._build_ui()
+        self._setup_shortcuts()
+        self._rebuild_directory_menu()
         if self.theme_manager:
             self.theme_manager.apply_theme(self._theme_mode)
         self._update_theme_button()
         self._update_window_title()
-        self._sync_directory_watcher()
-        self.refresh_logs()
+        self.navigation.refresh_logs()
         QTimer.singleShot(500, _start_plotter_jit_warmup)
 
-    def _build_ui(self) -> None:
+    def _build_ui(self, directory: Path) -> None:
         central = QWidget(self)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
-
-        top_bar = self._create_top_bar()
-        layout.addLayout(top_bar)
-
         splitter = QSplitter(Qt.Horizontal, central)
-
-        # Left: Log table
-        list_panel = QWidget(splitter)
-        list_layout = QVBoxLayout(list_panel)
-        list_layout.setContentsMargins(0, 0, 0, 0)
-        list_layout.setSpacing(2)
-        self.log_table, self.table_model, self.table_proxy = self._create_log_table(
-            list_panel
-        )
-        list_layout.addWidget(self.log_table, stretch=1)
-        self.pin_bar = self._create_pin_bar(list_panel)
-        list_layout.addWidget(self.pin_bar)
-
-        # Right: Detail panel
-        detail_widget = self._create_detail_panel(splitter)
-
-        splitter.addWidget(list_panel)
-        splitter.addWidget(detail_widget)
+        self.navigation = RecordNavigation(directory, self.settings_manager, splitter)
+        layout.addLayout(self._create_top_bar())
+        self.detail_view = RecordDetailView(parent=splitter, enable_tab_shortcuts=False)
+        splitter.addWidget(self.navigation)
+        splitter.addWidget(self.detail_view)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([600, 600])
-
         layout.addWidget(splitter)
         self.setCentralWidget(central)
-
-        self._setup_shortcuts()
-        self._rebuild_directory_menu()
+        self.navigation.display_record.connect(self.detail_view.load_record)
+        self.navigation.open_record.connect(self._open_record_window)
+        self.navigation.empty_selection.connect(self.detail_view.clear)
+        self.navigation.directory_changed.connect(self._directory_changed)
+        self.navigation.about_requested.connect(self.show_about_dialog)
+        self.detail_view.record_refreshed.connect(self.navigation.notify_record_changed)
 
     def _create_top_bar(self) -> QHBoxLayout:
         top_bar = QHBoxLayout()
-        self.directory_label = QLabel(self._base_dir.as_posix())
+        self.directory_label = QLabel(self.navigation.base_dir.as_posix())
         self.directory_label.setWordWrap(True)
         self.directory_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.directory_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.directory_label.setFocusPolicy(Qt.NoFocus)
         self.directory_label.setContextMenuPolicy(Qt.CustomContextMenu)
         self.directory_label.customContextMenuRequested.connect(
-            self._actions.show_top_bar_context_menu
+            self._show_top_bar_context_menu
         )
         self.directory_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.directory_button = QToolButton()
@@ -309,94 +146,7 @@ class LogBrowserWindow(QMainWindow):
         top_bar.addWidget(self.theme_button)
         return top_bar
 
-    def _create_log_table(
-        self, parent: QWidget
-    ) -> tuple[QTableView, LogListTableModel, LogListSortFilterProxyModel]:
-        model = LogListTableModel(parent)
-
-        proxy = LogListSortFilterProxyModel(parent)
-        proxy.setSourceModel(model)
-        proxy.setSortRole(SORT_ROLE)
-
-        table = QTableView(parent)
-        table.setModel(proxy)
-        table.setItemDelegate(LogListItemDelegate(table))
-        table.setSelectionBehavior(QTableView.SelectRows)
-        table.setSelectionMode(QTableView.ExtendedSelection)
-        table.verticalHeader().setVisible(False)
-        table.setAlternatingRowColors(False)
-        table.setSortingEnabled(True)
-
-        font_height = table.fontMetrics().height()
-        table.verticalHeader().setDefaultSectionSize(font_height)
-
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(COL_ID, QHeaderView.Interactive)
-        header.setSectionResizeMode(COL_TITLE, QHeaderView.Stretch)
-        header.setSectionResizeMode(COL_ROWS, QHeaderView.Interactive)
-        header.setSectionResizeMode(COL_PLOT_AXES, QHeaderView.Interactive)
-        header.setSectionResizeMode(COL_CREATE_TIME, QHeaderView.Interactive)
-        header.setSectionResizeMode(COL_CREATE_MACHINE, QHeaderView.Interactive)
-        # The Qt default samples only 1,000 rows for ResizeToContents.  Scan the
-        # full list so IDs such as 1000 are not clipped in larger directories.
-        header.setResizeContentsPrecision(-1)
-        header.setSectionsClickable(True)
-        header.setSortIndicatorShown(False)  # For compact view.
-        header.setContextMenuPolicy(Qt.CustomContextMenu)
-        header.customContextMenuRequested.connect(
-            self._actions.open_header_context_menu
-        )
-
-        table.setColumnHidden(COL_CREATE_TIME, True)
-        table.setColumnHidden(COL_CREATE_MACHINE, True)
-
-        table.selectionModel().selectionChanged.connect(self._on_log_selection_changed)
-        table.doubleClicked.connect(self._on_log_double_clicked)
-        table.setContextMenuPolicy(Qt.CustomContextMenu)
-        table.customContextMenuRequested.connect(self._actions.open_table_context_menu)
-
-        table.sortByColumn(COL_ID, Qt.AscendingOrder)
-
-        return table, model, proxy
-
-    def _create_detail_panel(self, parent: QWidget) -> QWidget:
-        self.detail_view = RecordDetailView(
-            parent=parent,
-            enable_tab_shortcuts=False,
-        )
-        self.detail_view.record_refreshed.connect(self._on_detail_record_refreshed)
-        return self.detail_view
-
-    def _create_pin_bar(self, parent: QWidget) -> QWidget:
-        pin_bar = QWidget(parent)
-        pin_height = pin_bar.fontMetrics().height() + 4
-        pin_bar.setFixedHeight(pin_height)
-        pin_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        pin_layout = QHBoxLayout(pin_bar)
-        pin_layout.setContentsMargins(4, 0, 4, 0)
-        pin_layout.setSpacing(4)
-        pin_layout.addWidget(QLabel("📌Pins:"))
-
-        self.pin_scroll_area = PinScrollArea(pin_bar)
-        self.pin_scroll_area.setWidgetResizable(True)
-        self.pin_scroll_area.setFrameShape(QScrollArea.NoFrame)
-        self.pin_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.pin_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.pin_scroll_area.setFixedHeight(pin_height)
-        self._pin_button_container = QWidget(self.pin_scroll_area)
-        self._pin_button_layout = QHBoxLayout(self._pin_button_container)
-        self._pin_button_layout.setContentsMargins(0, 0, 0, 0)
-        self._pin_button_layout.setSpacing(2)
-        self._pin_button_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.pin_scroll_area.setWidget(self._pin_button_container)
-        pin_layout.addWidget(self.pin_scroll_area, stretch=1)
-        return pin_bar
-
     def _setup_shortcuts(self) -> None:
-        for action in self._shortcuts:
-            self.removeAction(action)
-        self._shortcuts.clear()
-
         def add_shortcut(key: int | QKeySequence.StandardKey, callback) -> None:
             action = QAction(self)
             action.setShortcut(QKeySequence(key))
@@ -405,412 +155,38 @@ class LogBrowserWindow(QMainWindow):
             self.addAction(action)
             self._shortcuts.append(action)
 
-        add_shortcut(Qt.Key_Delete, self._actions.shortcut_send_to_recycle_bin)
-        add_shortcut(Qt.Key_T, self._actions.shortcut_toggle_trash)
-        add_shortcut(Qt.Key_S, self._actions.shortcut_toggle_star)
-        add_shortcut(Qt.Key_F2, self._actions.shortcut_rename_title)
-        add_shortcut(Qt.Key_F3, self._actions.shortcut_change_id)
+        actions = self._actions
+        add_shortcut(Qt.Key_Delete, actions.shortcut_send_to_recycle_bin)
+        add_shortcut(Qt.Key_T, actions.shortcut_toggle_trash)
+        add_shortcut(Qt.Key_S, actions.shortcut_toggle_star)
+        add_shortcut(Qt.Key_F2, actions.shortcut_rename_title)
+        add_shortcut(Qt.Key_F3, actions.shortcut_change_id)
         add_shortcut(Qt.Key_F5, self._on_refresh_clicked)
-        add_shortcut(QKeySequence("Ctrl+P"), self._actions.shortcut_pin_record)
-        add_shortcut(QKeySequence.New, self._actions.shortcut_make_note)
-        add_shortcut(Qt.Key_0, lambda: self._actions.shortcut_set_star(0))
-        add_shortcut(Qt.Key_1, lambda: self._actions.shortcut_set_star(1))
-        add_shortcut(Qt.Key_2, lambda: self._actions.shortcut_set_star(2))
-        add_shortcut(Qt.Key_3, lambda: self._actions.shortcut_set_star(3))
+        add_shortcut(QKeySequence("Ctrl+P"), actions.shortcut_pin_record)
+        add_shortcut(QKeySequence.New, actions.shortcut_make_note)
+        add_shortcut(Qt.Key_0, lambda: actions.shortcut_set_star(0))
+        add_shortcut(Qt.Key_1, lambda: actions.shortcut_set_star(1))
+        add_shortcut(Qt.Key_2, lambda: actions.shortcut_set_star(2))
+        add_shortcut(Qt.Key_3, lambda: actions.shortcut_set_star(3))
         add_shortcut(Qt.Key_Left, lambda: self.detail_view.switch_tab(-1))
         add_shortcut(Qt.Key_Right, lambda: self.detail_view.switch_tab(1))
-
         self.open_explorer_shortcut = QShortcut(
-            QKeySequence("Ctrl+Return"),
-            self.log_table,
+            QKeySequence("Ctrl+Return"), self.navigation.log_table
         )
         self.open_explorer_shortcut.setKeys(
             [QKeySequence("Ctrl+Return"), QKeySequence("Ctrl+Enter")]
         )
         self.open_explorer_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self.open_explorer_shortcut.activated.connect(
-            self._actions.shortcut_open_in_explorer
-        )
+        self.open_explorer_shortcut.activated.connect(actions.shortcut_open_in_explorer)
 
-    def _rebuild_directory_menu(self) -> None:
-        if self._directory_menu is None:
-            return
-        self._directory_menu.clear()
-        recent = self.settings_manager._recent_directories
-        # Filter out current directory
-        menu_items = [path for path in recent if path != self._base_dir]
-        for path in menu_items:
-            action = self._directory_menu.addAction(str(path))
-            action.triggered.connect(
-                lambda _checked=False, target=path: self.set_directory(target)
-            )
-        clear_action = self._directory_menu.addAction("Cleanup")
-        if menu_items:
-            self._directory_menu.addSeparator()
-
-        open_action = self._directory_menu.addAction("Open Other...")
-        open_action.triggered.connect(self._open_directory_dialog)
-        clear_action.setEnabled(bool(menu_items))
-        clear_action.triggered.connect(self._clear_recent_directories)
-        new_window_action = self._directory_menu.addAction("New Window")
-        new_window_action.triggered.connect(
-            lambda: self._open_new_window(self._base_dir)
-        )
-
-    def _clear_recent_directories(self) -> None:
-        existing_directories = [
-            path for path in self.settings_manager._recent_directories if path.exists()
-        ]
-        self.settings_manager.save_recent_directories(existing_directories)
-        self._rebuild_directory_menu()
-
-    def _update_theme_button(self) -> None:
-        if not self.theme_manager:
-            return
-        emoji = self.theme_manager.get_theme_button_emoji(self._theme_mode)
-        tooltip = self.theme_manager.get_theme_tooltip(self._theme_mode)
-        if hasattr(self, "theme_button"):
-            self.theme_button.setText(emoji)
-            self.theme_button.setToolTip(tooltip)
-
-    def _update_window_title(self) -> None:
-        self.setWindowTitle(
-            f"{self._base_dir.parent.name} / {self._base_dir.name} - LogQbit Browser"
-        )
-
-    def _sync_directory_watcher(self) -> None:
-        try:
-            if self._dir_watcher.directories():
-                self._dir_watcher.removePaths(self._dir_watcher.directories())
-        except Exception:  # pragma: no cover - defensive
-            pass
-        if self._base_dir.exists():
-            self._dir_watcher.addPath(str(self._base_dir))
-
-    def _schedule_list_refresh(self) -> None:
-        if self._list_refresh_pending:
-            return
-        self._list_refresh_pending = True
-        QTimer.singleShot(REFRESH_DEBOUNCE_MS, self._run_list_refresh)
-
-    def _run_list_refresh(self) -> None:
-        self._list_refresh_pending = False
-        self.refresh_logs()
-
-    def set_directory(self, directory: Path) -> None:
-        path = Path(directory)
-        if path != self._base_dir:
-            self._base_dir = path
-            self.directory_label.setText(self._base_dir.as_posix())
-            self._update_window_title()
-            self._sync_directory_watcher()
-            catalog = self._catalog_cache.get(self._base_dir)
-            self._catalog = catalog if catalog is not None else LogCatalog()
-            self._pinned_record_names = self.settings_manager.load_pinned_records(
-                self._base_dir
-            )
-            self.refresh_logs()
-        else:
-            self.directory_label.setText(self._base_dir.as_posix())
-        self.settings_manager.update_recent_directories(path)
-        self._rebuild_directory_menu()
-
-    def refresh_logs(self, *, preferred_path: Path | None = None) -> None:
-        previous_record = self._selected_record
-        previous_path = (
-            Path(preferred_path)
-            if preferred_path is not None
-            else previous_record.path
-            if previous_record
-            else None
-        )
-        all_records = self._catalog.refresh(self._base_dir)
-        self._all_records = all_records
-        self._cache_catalog(self._base_dir, self._catalog)
-
-        # Filter out trash if needed
-        if self._show_trash:
-            records = all_records
-        else:
-            records = [record for record in all_records if not record.trash]
-        if self._show_starred_only:
-            records = [record for record in records if record.star > 0]
-
-        self.table_model.set_records(records)
-        self._resize_content_columns()
-        self._rebuild_pin_bar(all_records)
-
-        row_count = self.table_proxy.rowCount()
-        if row_count:
-            selected_record = next(
-                (record for record in records if record.path == previous_path),
-                None,
-            )
-            if selected_record is None:
-                source_row = 0
-                selected_record = records[source_row]
-            else:
-                source_row = records.index(selected_record)
-
-            source_index = self.table_model.index(source_row, 0)
-            proxy_index = self.table_proxy.mapFromSource(source_index)
-            selection_blocker = QSignalBlocker(self.log_table.selectionModel())
-            try:
-                self.log_table.selectRow(proxy_index.row())
-            finally:
-                selection_blocker.unblock()
-
-            self._selected_record = selected_record
-            if selected_record is not previous_record:
-                self._load_log(selected_record)
-        else:
-            self._detail_load_timer.stop()
-            if all_records:
-                self.detail_view.clear("No logs to display.")
-            else:
-                self.detail_view.clear("No logs found.")
-            self._selected_record = None
-            self.log_table.clearSelection()
-
-    def _cache_catalog(self, directory: Path, catalog: LogCatalog) -> None:
-        directory = Path(directory)
-        self._catalog_cache.pop(directory, None)
-        self._catalog_cache[directory] = catalog
-        while len(self._catalog_cache) > CATALOG_CACHE_SIZE:
-            self._catalog_cache.popitem(last=False)
-
-    def _resize_content_columns(self) -> None:
-        for column in (
-            COL_ID,
-            COL_ROWS,
-            COL_PLOT_AXES,
-            COL_CREATE_TIME,
-            COL_CREATE_MACHINE,
-        ):
-            self.log_table.resizeColumnToContents(column)
-
-    def _rebuild_pin_bar(self, all_records: list[LogRecord]) -> None:
-        for index in range(self._pin_button_layout.count() - 1, -1, -1):
-            layout_item = self._pin_button_layout.takeAt(index)
-            if widget := layout_item.widget():
-                widget.deleteLater()
-
-        records_by_name = {record.path.name: record for record in all_records}
-        visible_paths = {
-            record.path
-            for row in range(self.table_model.rowCount())
-            if (record := self.table_model.get_record(row)) is not None
-        }
-        names = [
-            name for name in self._pinned_record_names if name in records_by_name
-        ]
-        if names != self._pinned_record_names:
-            self._pinned_record_names = names
-            self.settings_manager.save_pinned_records(self._base_dir, names)
-        if not names:
-            self._pin_button_layout.addWidget(QLabel("(none)"))
-        for name in names:
-            record = records_by_name[name]
-            button = QToolButton(self._pin_button_container)
-            button.setText(f"#{record.log_id}")
-            button.setAutoRaise(True)
-            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            button.setToolTip(f"{record.title or '(untitled)'}\n{record.path}")
-            button.setEnabled(record.path in visible_paths)
-            if not button.isEnabled():
-                button.setToolTip(f"Hidden by current filters.\n{button.toolTip()}")
-            button.clicked.connect(
-                lambda _checked=False, target=record: self._jump_to_pinned_record(target)
-            )
-            button.setContextMenuPolicy(Qt.CustomContextMenu)
-            button.customContextMenuRequested.connect(
-                lambda point, target=record, source=button: self._open_pin_context_menu(
-                    source, point, target
-                )
-            )
-            self._pin_button_layout.addWidget(button)
-        self._pin_button_layout.activate()
-        content_size = self._pin_button_layout.sizeHint()
-        self._pin_button_container.setMinimumSize(content_size)
-
-    def _pin_record(self, record: LogRecord) -> None:
-        name = record.path.name
-        if name not in self._pinned_record_names:
-            self._pinned_record_names.append(name)
-            self.settings_manager.save_pinned_records(
-                self._base_dir, self._pinned_record_names
-            )
-            self._rebuild_pin_bar(self._all_records)
-
-    def _unpin_record(self, record: LogRecord) -> None:
-        name = record.path.name
-        if name in self._pinned_record_names:
-            self._pinned_record_names.remove(name)
-            self.settings_manager.save_pinned_records(
-                self._base_dir, self._pinned_record_names
-            )
-            self._rebuild_pin_bar(self._all_records)
-
-    def _toggle_pin_record(self, record: LogRecord) -> None:
-        if record.path.name in self._pinned_record_names:
-            self._unpin_record(record)
-        else:
-            self._pin_record(record)
-
-    def _rename_pinned_record(self, old_path: Path, new_path: Path) -> None:
-        if old_path.parent != self._base_dir:
-            return
-        try:
-            index = self._pinned_record_names.index(old_path.name)
-        except ValueError:
-            return
-        self._pinned_record_names[index] = new_path.name
-        self.settings_manager.save_pinned_records(
-            self._base_dir, self._pinned_record_names
-        )
-
-    def _jump_to_pinned_record(self, record: LogRecord) -> None:
-        source_row = next(
-            (
-                row
-                for row in range(self.table_model.rowCount())
-                if (current := self.table_model.get_record(row))
-                and current.path == record.path
-            ),
-            None,
-        )
-        if source_row is None:
-            return
-        proxy_index = self.table_proxy.mapFromSource(
-            self.table_model.index(source_row, 0)
-        )
-        if not proxy_index.isValid():
-            return
-        selection_blocker = QSignalBlocker(self.log_table.selectionModel())
-        try:
-            self.log_table.selectRow(proxy_index.row())
-        finally:
-            selection_blocker.unblock()
-        self.log_table.scrollTo(proxy_index, QAbstractItemView.PositionAtCenter)
-        self._selected_record = record
-        self._detail_load_timer.stop()
-        self._load_log(record)
-
-    def _open_pin_context_menu(
-        self, button: QToolButton, point, record: LogRecord
-    ) -> None:
-        menu = QMenu(button)
-        unpin_action = menu.addAction(f"Unpin #{record.log_id}")
-        if menu.exec(button.mapToGlobal(point)) == unpin_action:
-            self._unpin_record(record)
-
-    def refresh_current_log(self, *, force: bool = False) -> None:
-        if not self._selected_record:
-            return
-        self.detail_view.refresh_current_record(force=force)
-
-    def _on_log_double_clicked(self, proxy_index) -> None:
-        """Open a standalone detail window for the double-clicked log record."""
-        source_index = self.table_proxy.mapToSource(proxy_index)
-        record = self.table_model.get_record(source_index.row())
-        if record is None:
-            return
-        initial_tab = self.detail_view.current_tab_index()
-        window = RecordDetailWindow(record, initial_tab=initial_tab, parent=None)
-        window.setAttribute(Qt.WA_DeleteOnClose, True)
-        self._detail_windows.append(window)
-        window.destroyed.connect(
-            lambda: (
-                self._detail_windows.remove(window)
-                if window in self._detail_windows
-                else None
-            )
-        )
-        window.show()
-
-    def _on_log_selection_changed(self) -> None:
-        selected = self.log_table.selectionModel().selectedRows()
-        if not selected:
-            return
-        proxy_index = selected[0]
-        source_index = self.table_proxy.mapToSource(proxy_index)
-        record = self.table_model.get_record(source_index.row())
-        if record is None:
-            return
-        self._selected_record = record
-        self._detail_load_timer.start()
-
-    def _load_selected_log(self) -> None:
-        if self._selected_record is not None:
-            self._load_log(self._selected_record)
-
-    def _load_log(self, record: LogRecord) -> None:
-        self.detail_view.load_record(record)
-
-    def _on_detail_record_refreshed(self, record: LogRecord) -> None:
-        if (
-            self._selected_record is not None
-            and self._selected_record.path == record.path
-        ):
-            self._selected_record = record
-            self.table_model.notify_record_changed(record)
-            self._resize_content_columns()
-
-    def _on_refresh_clicked(self) -> None:
-        previous_record = self._selected_record
-        self.refresh_logs()
-        self.refresh_current_log(force=self._selected_record is previous_record)
-
-    def _on_theme_button_clicked(self) -> None:
-        current_index = ThemeManager.THEME_MODES.index(self._theme_mode)
-        next_index = (current_index + 1) % len(ThemeManager.THEME_MODES)
-        self._theme_mode = ThemeManager.THEME_MODES[next_index]
-        if self.theme_manager:
-            self.theme_manager.apply_theme(self._theme_mode)
-        self.settings_manager.save_theme_mode(self._theme_mode)
-        self._update_theme_button()
-
-    def _open_directory_dialog(self) -> None:
-        current = str(self._base_dir.parent)
-        chosen = QFileDialog.getExistingDirectory(self, "Select log directory", current)
-        if chosen:
-            self.set_directory(Path(chosen))
-
-    def _open_new_window(self, directory: Path) -> None:
-        """Launch a new browser window in a separate process."""
-        try:
-            from logqbit.gui.browser.startup import launch_browser
-
-            launch_browser(directory)
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                "Launch Error",
-                f"Failed to launch new window:\n{exc}",
-            )
-
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override naming
-        self.settings_manager.save_recent_directories(
-            self.settings_manager._recent_directories
-        )
-        self.settings_manager.save_theme_mode(self._theme_mode)
-        super().closeEvent(event)
-
-
-class _BrowserActions:
-    """Group menus and record mutations initiated from the main window."""
-
-    def __init__(self, window: LogBrowserWindow) -> None:
-        self.window = window
-
-    def show_top_bar_context_menu(self, position) -> None:
-        menu = self.create_header_context_menu()
-        menu.exec(self.window.directory_label.mapToGlobal(position))
+    def _show_top_bar_context_menu(self, position) -> None:
+        menu = self.navigation.create_header_context_menu()
+        menu.exec(self.directory_label.mapToGlobal(position))
 
     def show_about_dialog(self) -> None:
         from logqbit.gui.browser.about import about_message
 
-        dialog = QMessageBox(self.window)
+        dialog = QMessageBox(self)
         dialog.setWindowTitle("About LogQbit")
         dialog.setIcon(QMessageBox.Information)
         dialog.setText(about_message())
@@ -822,424 +198,125 @@ class _BrowserActions:
         dialog.setStandardButtons(QMessageBox.Ok)
         dialog.exec()
 
-    def get_selected_records(self) -> list[LogRecord]:
-        selection_model = self.window.log_table.selectionModel()
-        if selection_model is None:
-            return []
-        records: list[LogRecord] = []
-        for proxy_index in selection_model.selectedRows():
-            source_index = self.window.table_proxy.mapToSource(proxy_index)
-            record = self.window.table_model.get_record(source_index.row())
-            if record is not None:
-                records.append(record)
-        return records
-
-    def open_table_context_menu(self, point) -> None:
-        records = self.get_selected_records()
-        menu = QMenu(self.window)
-        pin_action = menu.addAction("Toggle 📌Pin (Ctrl+P)")
-        make_note_action = menu.addAction("Make 🏷️Note... (Ctrl+N)")
-        rename_action = menu.addAction("Rename Title... (F2)")
-        change_id_action = menu.addAction("Change ID... (F3)")
-        toggle_star_action = menu.addAction("Toggle ⭐Star (S)")
-        toggle_star_action.setCheckable(True)
-        toggle_trash_action = menu.addAction("Toggle 🗑️Trash (T)")
-        toggle_trash_action.setCheckable(True)
-        send_to_recycle_action = menu.addAction("Send to Recycle Bin (Del)")
-        open_explorer = menu.addAction("Open in Explorer (Ctrl+Enter)")
-        menu.addSeparator()
-        merge_new_action = menu.addAction("Merge into New LogFolder...")
-        append_action = menu.addAction("Append into Existing LogFolder...")
-        export_action = menu.addAction("Export Items...")
-        can_merge = len(records) >= 2
-        append_target = PreparedMerge.find_append_target(records)
-        merge_new_action.setEnabled(can_merge)
-        append_action.setEnabled(append_target is not None)
-        if not records:
-            rename_action.setEnabled(False)
-            change_id_action.setEnabled(False)
-            toggle_star_action.setEnabled(False)
-            toggle_trash_action.setEnabled(False)
-            send_to_recycle_action.setEnabled(False)
-            open_explorer.setEnabled(False)
-            pin_action.setEnabled(False)
-            export_action.setEnabled(False)
-        else:
-            rename_action.setEnabled(len(records) == 1)
-            change_id_action.setEnabled(len(records) == 1)
-            toggle_star_action.setChecked(all(record.star > 0 for record in records))
-            toggle_trash_action.setChecked(all(record.trash for record in records))
-        chosen = menu.exec(self.window.log_table.viewport().mapToGlobal(point))
-        if chosen is None:
-            return
-        if chosen == make_note_action:
-            self.make_note()
-        elif chosen == rename_action and len(records) == 1:
-            self.rename_record_title(records[0])
-        elif chosen == change_id_action and len(records) == 1:
-            self.change_record_id(records[0])
-        elif chosen == toggle_star_action and records:
-            self.set_records_star_count(
-                records, 1 if toggle_star_action.isChecked() else 0
-            )
-        elif chosen == toggle_trash_action and records:
-            self.set_records_trash(records, toggle_trash_action.isChecked())
-        elif chosen == send_to_recycle_action and records:
-            self.send_records_to_recycle_bin(records)
-        elif chosen == open_explorer and records:
-            self.open_path_in_explorer(records[0].path, len(records) != 1)
-        elif chosen == pin_action and records:
-            self.window._toggle_pin_record(records[0])
-        elif chosen == merge_new_action and can_merge:
-            self.merge_into_new_logfolder(records)
-        elif chosen == append_action and append_target is not None:
-            self.append_into_existing_record(records)
-        elif chosen == export_action and records:
-            self.export_records(records)
-
-    def merge_into_new_logfolder(self, records: Iterable[LogRecord]) -> None:
-        self._show_merge_dialog(list(records))
-
-    def append_into_existing_record(
-        self,
-        records: Iterable[LogRecord],
-    ) -> None:
-        records = list(records)
-        target = PreparedMerge.find_append_target(records)
-        if target is not None:
-            self._show_merge_dialog(records, target)
-
-    def _show_merge_dialog(
-        self,
-        records: list[LogRecord],
-        target: LogRecord | None = None,
-    ) -> None:
-        dialog = MergeDialog(
-            self.window,
-            records,
-            self.window._base_dir,
-            target=target,
-        )
-        dialog.files_written.connect(self.window._schedule_list_refresh)
-        dialog.exec()
-
-    def open_header_context_menu(self, point) -> None:
-        menu = self.create_header_context_menu()
-        header = self.window.log_table.horizontalHeader()
-        menu.exec(header.mapToGlobal(point))
-
-    def create_header_context_menu(self) -> QMenu:
-        menu = QMenu(self.window)
-        show_trash_action = menu.addAction("Show Trashed Items")
-        show_trash_action.setCheckable(True)
-        show_trash_action.setChecked(self.window._show_trash)
-        show_trash_action.triggered.connect(self.toggle_show_trash)
-        show_starred_action = menu.addAction("Show Starred Items Only")
-        show_starred_action.setCheckable(True)
-        show_starred_action.setChecked(self.window._show_starred_only)
-        show_starred_action.triggered.connect(self.toggle_show_starred_only)
-        menu.addSeparator()
-        for label, column in (
-            ("Show Plot Axes Column", COL_PLOT_AXES),
-            ("Show Create Time Column", COL_CREATE_TIME),
-            ("Show Create Machine Column", COL_CREATE_MACHINE),
-        ):
-            action = menu.addAction(label)
-            action.setCheckable(True)
-            action.setChecked(not self.window.log_table.isColumnHidden(column))
+    def _rebuild_directory_menu(self) -> None:
+        self._directory_menu.clear()
+        recent = self.settings_manager._recent_directories
+        menu_items = [path for path in recent if path != self.navigation.base_dir]
+        for path in menu_items:
+            action = self._directory_menu.addAction(str(path))
             action.triggered.connect(
-                lambda checked=False, target=column: self.toggle_column(target, checked)
+                lambda _checked=False, target=path: self.navigation.set_directory(
+                    target
+                )
             )
-        menu.addSeparator()
-        menu.addAction("About", self.show_about_dialog)
-        return menu
-
-    def toggle_column(self, column: int, visible: bool) -> None:
-        self.window.log_table.setColumnHidden(column, not visible)
-
-    def toggle_show_trash(self) -> None:
-        self.window._show_trash = not self.window._show_trash
-        self.window.refresh_logs()
-
-    def toggle_show_starred_only(self) -> None:
-        self.window._show_starred_only = not self.window._show_starred_only
-        self.window.refresh_logs()
-
-    def rename_record_title(self, record: LogRecord) -> None:
-        current_title = record.title
-        dialog = QInputDialog(self.window)
-        dialog.setWindowTitle("Rename Log")
-        dialog.setLabelText("Enter new title:")
-        dialog.setTextValue(current_title)
-        dialog.setInputMode(QInputDialog.TextInput)
-        dialog.resize(max(dialog.sizeHint().width(), 600), dialog.sizeHint().height())
-        if dialog.exec() != QDialog.Accepted:
-            return
-        new_title = dialog.textValue().strip()
-        if new_title == current_title:
-            return
-        record.meta.update(title=new_title)
-        self.window.refresh_logs()
-
-    def make_note(self) -> None:
-        dialog = _MakeNoteDialog(self.window)
-        if dialog.exec() != QDialog.Accepted:
-            return
-        self.create_note(dialog.id_edit.text(), dialog.title_edit.text().strip())
-
-    def create_note(self, log_id: str, title: str) -> bool:
-        try:
-            log_id = _validated_log_id(log_id)
-        except ValueError as exc:
-            QMessageBox.warning(self.window, "Invalid ID", str(exc))
-            return False
-
-        target_path = self.window._base_dir / log_id
-        created = False
-        try:
-            target_path.mkdir(exist_ok=False)
-            created = True
-            LogMetadata(target_path / "metadata.json", title=title, create=True)
-        except FileExistsError:
-            QMessageBox.warning(
-                self.window,
-                "ID Already Exists",
-                f"A directory with ID {log_id!r} already exists.",
-            )
-            return False
-        except OSError as exc:
-            if created:
-                try:
-                    (target_path / "metadata.json").unlink(missing_ok=True)
-                    target_path.rmdir()
-                except OSError:
-                    pass
-            QMessageBox.warning(
-                self.window,
-                "Could Not Make Note",
-                f"Failed to create log folder:\n{exc}",
-            )
-            return False
-
-        self.window.refresh_logs(preferred_path=target_path)
-        return True
-
-    def change_record_id(self, record: LogRecord) -> None:
-        dialog = QInputDialog(self.window)
-        dialog.setWindowTitle("Change Log ID")
-        dialog.setLabelText('Enter new ID (e.g. 5.1, "foobar"):')
-        dialog.setTextValue(record.path.name)
-        dialog.setInputMode(QInputDialog.TextInput)
-        dialog.resize(max(dialog.sizeHint().width(), 600), dialog.sizeHint().height())
-        if dialog.exec() != QDialog.Accepted:
-            return
-        self.rename_record_id(record, dialog.textValue())
-
-    def rename_record_id(self, record: LogRecord, new_id: str) -> bool:
-        try:
-            new_id = _validated_log_id(new_id)
-        except ValueError as exc:
-            QMessageBox.warning(self.window, "Invalid ID", str(exc))
-            return False
-
-        old_path = record.path
-        if new_id == old_path.name:
-            return False
-        target_path = old_path.parent / new_id
-        if target_path.exists():
-            QMessageBox.warning(
-                self.window,
-                "ID Already Exists",
-                f"A directory with ID {new_id!r} already exists.",
-            )
-            return False
-
-        try:
-            old_path.rename(target_path)
-        except OSError as exc:
-            QMessageBox.warning(
-                self.window,
-                "Could Not Change ID",
-                f"Failed to rename log folder:\n{exc}",
-            )
-            self.window.refresh_logs()
-            return False
-
-        matching_detail_windows = [
-            detail_window
-            for detail_window in self.window._detail_windows
-            if detail_window.detail_view.current_record is not None
-            and detail_window.detail_view.current_record.path == old_path
-        ]
-        self.window._rename_pinned_record(old_path, target_path)
-        self.window.refresh_logs(preferred_path=target_path)
-        renamed_record = self.window._selected_record
-        if renamed_record is not None and renamed_record.path == target_path:
-            for detail_window in matching_detail_windows:
-                detail_window.load_record(renamed_record)
-        return True
-
-    def set_record_star_count(
-        self, record: LogRecord, count: int, refresh: bool = True
-    ) -> bool:
-        count = max(int(count), 0)
-        if record.star == count:
-            return False
-        record.meta.update(star=count)
-        if refresh:
-            self.window.refresh_logs()
-        return True
-
-    def set_record_trash(
-        self, record: LogRecord, value: bool, refresh: bool = True
-    ) -> bool:
-        value = bool(value)
-        if record.trash == value:
-            return False
-        record.meta.update(trash=value)
-        if refresh:
-            self.window.refresh_logs()
-        return True
-
-    def set_records_star_count(self, records: Iterable[LogRecord], count: int) -> None:
-        changed = False
-        for record in records:
-            changed |= self.set_record_star_count(record, count, refresh=False)
-        if changed:
-            self.window.refresh_logs()
-
-    def set_records_trash(self, records: Iterable[LogRecord], value: bool) -> None:
-        changed = False
-        for record in records:
-            changed |= self.set_record_trash(record, value, refresh=False)
-        if changed:
-            self.window.refresh_logs()
-
-    def open_path_in_explorer(self, path: Path, select: bool = False) -> None:
-        open_in_file_manager(path, select=select, parent=self.window)
-
-    def export_records(self, records: Iterable[LogRecord]) -> None:
-        records_list = list(records)
-        if not records_list:
-            return
-
-        chosen = QFileDialog.getExistingDirectory(
-            self.window,
-            "Select new parent folder for export",
-            str(
-                self.window._base_dir.parent
-                if self.window._base_dir.parent.exists()
-                else self.window._base_dir
-            ),
+        clear_action = self._directory_menu.addAction("Cleanup")
+        if menu_items:
+            self._directory_menu.addSeparator()
+        open_action = self._directory_menu.addAction("Open Other...")
+        open_action.triggered.connect(self._open_directory_dialog)
+        clear_action.setEnabled(bool(menu_items))
+        clear_action.triggered.connect(self._clear_recent_directories)
+        new_window_action = self._directory_menu.addAction("New Window")
+        new_window_action.triggered.connect(
+            lambda: self._open_new_window(self.navigation.base_dir)
         )
-        if not chosen:
-            return
 
-        destination_parent = Path(chosen)
+    def _clear_recent_directories(self) -> None:
+        existing = [
+            path for path in self.settings_manager._recent_directories if path.exists()
+        ]
+        self.settings_manager.save_recent_directories(existing)
+        self._rebuild_directory_menu()
+
+    def _directory_changed(self, directory: Path) -> None:
+        self.directory_label.setText(self.navigation.base_dir.as_posix())
+        self._update_window_title()
+        self._rebuild_directory_menu()
+
+    def _update_theme_button(self) -> None:
+        if self.theme_manager:
+            self.theme_button.setText(
+                self.theme_manager.get_theme_button_emoji(self._theme_mode)
+            )
+            self.theme_button.setToolTip(
+                self.theme_manager.get_theme_tooltip(self._theme_mode)
+            )
+
+    def _update_window_title(self) -> None:
+        self.setWindowTitle(
+            f"{self.navigation.base_dir.parent.name} / {self.navigation.base_dir.name} - LogQbit Browser"
+        )
+
+    def _open_record_window(self, record: LogRecord) -> None:
+        window = RecordDetailWindow(
+            record, initial_tab=self.detail_view.current_tab_index(), parent=None
+        )
+        window.setAttribute(Qt.WA_DeleteOnClose, True)
+        self._detail_windows.append(window)
+        window.destroyed.connect(
+            lambda: (
+                self._detail_windows.remove(window)
+                if window in self._detail_windows
+                else None
+            )
+        )
+        window.show()
+
+    def _on_path_renamed(self, old_path: Path, new_path: Path) -> None:
+        self.navigation.rename_pinned_record(old_path, new_path)
+        self.navigation.refresh_logs(preferred_path=new_path)
+        renamed_record = next(
+            (
+                record
+                for record in self.navigation.all_records
+                if record.path == new_path
+            ),
+            None,
+        )
+        if renamed_record is None:
+            return
+        for window in list(self._detail_windows):
+            current = window.detail_view.current_record
+            if current is not None and current.path == old_path:
+                window.load_record(renamed_record)
+
+    def _on_refresh_clicked(self) -> None:
+        previous_record = self.navigation.selected_record
+        self.navigation.refresh_logs()
+        current = self.navigation.selected_record
+        if current is not None:
+            self.detail_view.refresh_current_record(force=current is previous_record)
+
+    def _on_theme_button_clicked(self) -> None:
+        current_index = ThemeManager.THEME_MODES.index(self._theme_mode)
+        self._theme_mode = ThemeManager.THEME_MODES[
+            (current_index + 1) % len(ThemeManager.THEME_MODES)
+        ]
+        if self.theme_manager:
+            self.theme_manager.apply_theme(self._theme_mode)
+        self.settings_manager.save_theme_mode(self._theme_mode)
+        self._update_theme_button()
+
+    def _open_directory_dialog(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Select log directory", str(self.navigation.base_dir.parent)
+        )
+        if chosen:
+            self.navigation.set_directory(Path(chosen))
+
+    def _open_new_window(self, directory: Path) -> None:
         try:
-            exported_paths = export_records(records_list, destination_parent)
+            from logqbit.gui.browser.startup import launch_browser
+
+            launch_browser(directory)
         except Exception as exc:
             QMessageBox.warning(
-                self.window,
-                "Export Failed",
-                f"Failed to export selected log folders:\n{exc}",
+                self, "Launch Error", f"Failed to launch new window:\n{exc}"
             )
-            return
 
-        if len(exported_paths) == 1:
-            message = f"Exported 1 log folder to:\n{exported_paths[0]}"
-        else:
-            message = (
-                f"Exported {len(exported_paths)} log folders to parent folder:\n"
-                f"{destination_parent}"
-            )
-        QMessageBox.information(self.window, "Export Complete", message)
-
-    def send_records_to_recycle_bin(self, records: Iterable[LogRecord]) -> None:
-        records_list = list(records)
-        if not records_list:
-            return
-
-        if len(records_list) == 1:
-            message = f"Send log folder #{records_list[0].log_id} to Recycle Bin?\n\n"
-            message += f"Path: {records_list[0].path}\n\n"
-            message += "This operation can be undone from the Recycle Bin."
-        else:
-            message = f"Send {len(records_list)} log folders to Recycle Bin?\n\n"
-            message += "IDs: " + ", ".join(f"#{r.log_id}" for r in records_list[:10])
-            if len(records_list) > 10:
-                message += f", ... (+{len(records_list) - 10} more)"
-            message += "\n\nThis operation can be undone from the Recycle Bin."
-
-        reply = QMessageBox.question(
-            self.window,
-            "Confirm Send to Recycle Bin",
-            message,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.settings_manager.save_recent_directories(
+            self.settings_manager._recent_directories
         )
-        if reply != QMessageBox.Yes:
-            return
-
-        failed_paths = []
-        for record in records_list:
-            try:
-                send2trash(str(record.path))
-            except Exception as exc:
-                failed_paths.append(f"{record.path} ({exc})")
-
-        if failed_paths:
-            error_msg = "Failed to send some folders to Recycle Bin:\n\n"
-            error_msg += "\n".join(failed_paths[:5])
-            if len(failed_paths) > 5:
-                error_msg += f"\n... and {len(failed_paths) - 5} more"
-            QMessageBox.warning(self.window, "Error", error_msg)
-
-        self.window.refresh_logs()
-
-    def shortcut_set_star(self, count: int) -> None:
-        records = self.get_selected_records()
-        if records:
-            self.set_records_star_count(records, count)
-
-    def shortcut_toggle_star(self) -> None:
-        records = self.get_selected_records()
-        if not records:
-            return
-        all_starred = all(record.star > 0 for record in records)
-        self.set_records_star_count(records, 0 if all_starred else 1)
-
-    def shortcut_send_to_recycle_bin(self) -> None:
-        records = self.get_selected_records()
-        if records:
-            self.send_records_to_recycle_bin(records)
-
-    def shortcut_toggle_trash(self) -> None:
-        records = self.get_selected_records()
-        if not records:
-            return
-        all_trashed = all(record.trash for record in records)
-        self.set_records_trash(records, not all_trashed)
-
-    def shortcut_open_in_explorer(self) -> None:
-        records = self.get_selected_records()
-        if records:
-            self.open_path_in_explorer(records[0].path, len(records) != 1)
-
-    def shortcut_rename_title(self) -> None:
-        records = self.get_selected_records()
-        if len(records) == 1:
-            self.rename_record_title(records[0])
-
-    def shortcut_change_id(self) -> None:
-        records = self.get_selected_records()
-        if len(records) == 1:
-            self.change_record_id(records[0])
-
-    def shortcut_make_note(self) -> None:
-        self.make_note()
-
-    def shortcut_pin_record(self) -> None:
-        records = self.get_selected_records()
-        if records:
-            self.window._toggle_pin_record(records[0])
+        self.settings_manager.save_theme_mode(self._theme_mode)
+        super().closeEvent(event)

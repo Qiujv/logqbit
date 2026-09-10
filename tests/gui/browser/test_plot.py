@@ -13,19 +13,19 @@ from PySide6.QtWidgets import QSizePolicy, QStyleOptionViewItem
 import pyqtgraph as pg
 
 from logqbit.catalog import PlotColumns, resolve_plot_columns
-from logqbit.gui.browser.plot.fitting import FitViewBox, fit_exponential, fit_quadratic
-from logqbit.gui.browser.plot.grouping import iter_plot_groups
+from logqbit.gui.browser.plot.fitting import fit_exponential, fit_quadratic
+from logqbit.gui.browser.plot.view import PlotViewBox
+from logqbit.gui.browser.plot.controls import TagBar
+from logqbit.gui.browser.plot.rendering import iter_plot_groups, MAX_PLOT_GROUPS
 from logqbit.gui.browser.plot.mesh import (
     _build_grids_rect,
     _is_lexsorted,
     build_plot_mesh,
     warmup_plotter_jit,
 )
-from logqbit.gui.browser.plot.manager import (
-    MAX_PLOT_GROUPS,
+from logqbit.gui.browser.plot.view import (
     PLOT_AUTO_RANGE_PADDING,
-    PlotManager,
-    TagBar,
+    PlotView,
 )
 
 
@@ -230,7 +230,7 @@ class TestCursorClickHandling:
             def accept(self) -> None:
                 self.accepted = True
 
-        view_box = FitViewBox()
+        view_box = PlotViewBox()
         clicks: list[QPointF] = []
         zooms: list[None] = []
         view_box.cursor_click_requested.connect(clicks.append)
@@ -248,32 +248,28 @@ class TestCursorClickHandling:
         assert zooms == [None]
 
     def test_cursor_click_moves_to_the_nearest_1d_data_point(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
-        manager._plot_frame = pd.DataFrame(
-            {"x": [0.0, 1.0, 2.0], "z": [1.0, 2.0, 3.0]}
-        )
+        manager._plot_frame = pd.DataFrame({"x": [0.0, 1.0, 2.0], "z": [1.0, 2.0, 3.0]})
         manager._refresh_plot_1d("x", ["z"])
         manager.cursor_button.click()
 
-        position = manager.fit_view_box.mapFromView(QPointF(1.8, 2.0))
-        manager.fit_view_box.cursor_click_requested.emit(position)
+        position = manager.view_box.mapFromView(QPointF(1.8, 2.0))
+        manager.view_box.cursor_click_requested.emit(position)
 
         assert manager.cursor_controller._vertical_line.value() == pytest.approx(2.0)
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_data_refresh_keeps_a_user_cursor_and_view_range(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
-        manager._plot_frame = pd.DataFrame(
-            {"x": [0.0, 1.0, 2.0], "y": [1.0, 2.0, 3.0]}
-        )
+        manager._plot_frame = pd.DataFrame({"x": [0.0, 1.0, 2.0], "y": [1.0, 2.0, 3.0]})
         manager._refresh_plot_1d("x", ["y"])
         manager.cursor_button.click()
         cursor_line = manager.cursor_controller._vertical_line
         assert cursor_line is not None
-        manager.fit_view_box.setRange(xRange=(0.25, 0.75), yRange=(1.25, 1.75))
-        original_x_range = manager.fit_view_box.viewRange()[0]
+        manager.view_box.setRange(xRange=(0.25, 0.75), yRange=(1.25, 1.75))
+        original_x_range = manager.view_box.viewRange()[0]
         manager._user_controls_view = True
 
         manager._plot_frame = pd.DataFrame(
@@ -282,18 +278,18 @@ class TestCursorClickHandling:
         manager._refresh_plot_1d("x", ["y"])
 
         assert manager.cursor_controller._vertical_line is cursor_line
-        assert manager.fit_view_box.viewRange()[0] == pytest.approx(original_x_range)
+        assert manager.view_box.viewRange()[0] == pytest.approx(original_x_range)
         np.testing.assert_allclose(
             manager.plot_widget.getPlotItem().listDataItems()[0].getData()[1],
             [10.0, 20.0, 30.0],
         )
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_preview_coordinates_use_a_tenth_of_the_minor_tick_spacing(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         axis = manager.plot_widget.getAxis("bottom")
         monkeypatch.setattr(
             axis,
@@ -305,7 +301,7 @@ class TestCursorClickHandling:
             0.371,
             "bottom",
         ) == pytest.approx(0.38)
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
 
 def test_resolve_plot_columns_fills_axes_before_fields() -> None:
@@ -368,9 +364,9 @@ class TestFits:
             fit_exponential(np.array([0.0, 1.0, 2.0]), np.ones(3))
 
 
-class TestPlotManagerFitAndColorBar:
+class TestPlotViewFitAndColorBar:
     def test_save_tag_bar_persists_groupby_with_other_plot_roles(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         updates: list[dict[str, object]] = []
         manager._plot_record = SimpleNamespace(
             meta=SimpleNamespace(update=lambda **changes: updates.append(changes))
@@ -391,10 +387,10 @@ class TestPlotManagerFitAndColorBar:
                 "plot_groupby": ["device"],
             }
         ]
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_grouped_1d_plots_each_group_and_labels_cursor_series(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
             {
@@ -411,21 +407,26 @@ class TestPlotManagerFitAndColorBar:
             "signal | device=B",
         ]
         assert manager.fit_controller._field == "signal | device=A"
-        assert manager._legend is not None
-        assert [label.text for _, label in manager._legend.items] == [
+        assert manager.renderer._legend is not None
+        assert [label.text for _, label in manager.renderer._legend.items] == [
             "device=A",
             "device=B",
         ]
-        assert manager._legend.brush().color().alpha() == 200
-        assert manager._legend.pen().style() == Qt.NoPen
-        assert manager._legend.layout.horizontalSpacing() == 1
-        assert manager._legend.layout.verticalSpacing() == 0
-        assert manager._legend.layout.getContentsMargins() == (2.0, 2.0, 2.0, 2.0)
+        assert manager.renderer._legend.brush().color().alpha() == 200
+        assert manager.renderer._legend.pen().style() == Qt.NoPen
+        assert manager.renderer._legend.layout.horizontalSpacing() == 1
+        assert manager.renderer._legend.layout.verticalSpacing() == 0
+        assert manager.renderer._legend.layout.getContentsMargins() == (
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+        )
         assert "2 groups, 2 curves" in manager.plot_status_label.text()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_grouped_1d_plots_only_the_latest_fifty_groups(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         devices = np.repeat(np.arange(MAX_PLOT_GROUPS + 2), 2)
         manager._plot_frame = pd.DataFrame(
@@ -442,10 +443,10 @@ class TestPlotManagerFitAndColorBar:
         assert manager.cursor_controller._series[0].name == "signal | device=2"
         assert manager.cursor_controller._series[-1].name == "signal | device=51"
         assert "showing latest 50 of 52" in manager.plot_status_label.text()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_grouped_2d_cursor_uses_first_largest_group(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
             {
@@ -458,26 +459,26 @@ class TestPlotManagerFitAndColorBar:
 
         manager._refresh_plot_2d("x", "y", "z", ["device"])
 
-        assert len(manager._mesh_items) == 3
+        assert len(manager.renderer._mesh_items) == 3
         assert manager.cursor_controller._mesh is not None
         assert manager.cursor_controller._mesh.point_count == 6
         assert manager.cursor_controller._group_label == "device=large"
-        assert manager._legend is not None
+        assert manager.renderer._legend is not None
         assert manager.plot_widget.getPlotItem().listDataItems() == []
-        assert manager._mesh_levels == pytest.approx((0.0, 15.0))
+        assert manager.renderer._mesh_levels == pytest.approx((0.0, 15.0))
         assert "cursor uses device=large (6 points)" in manager.plot_status_label.text()
 
         manager.cursor_button.click()
         assert "device=large" in manager.section_readout.text()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_fit_selection_uses_points_inside_both_rectangle_axes(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         x = np.arange(-2.0, 4.0)
         y = x**2
         manager.fit_controller.set_series(x, y, "signal", "#1E90FF")
         manager.quadratic_fit_button.click()
-        manager.fit_view_box.setXRange(-3.0, 3.0, padding=0)
+        manager.view_box.setXRange(-3.0, 3.0, padding=0)
         selection = QRectF(-1.1, -0.1, 2.2, 1.2)
 
         manager.fit_controller._fit_selection(
@@ -490,7 +491,7 @@ class TestPlotManagerFitAndColorBar:
         assert "minimum" not in manager.plot_status_label.text()
         assert "maximum" not in manager.plot_status_label.text()
         assert manager.quadratic_fit_button.isChecked()
-        assert manager.fit_view_box._fit_kind == "quadratic"
+        assert manager.view_box._fit_kind == "quadratic"
 
         selected_points = manager.fit_controller._overlays[1]
         assert selected_points.opts["size"] == 6
@@ -503,11 +504,11 @@ class TestPlotManagerFitAndColorBar:
 
         manager.quadratic_fit_button.click()
         assert not manager.quadratic_fit_button.isChecked()
-        assert manager.fit_view_box._fit_kind is None
-        manager.widget.deleteLater()
+        assert manager.view_box._fit_kind is None
+        manager.deleteLater()
 
     def test_data_refresh_keeps_completed_fit_overlays(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
             {"x": [0.0, 1.0, 2.0, 3.0], "y": [9.0, 4.0, 1.0, 0.0]}
@@ -524,10 +525,10 @@ class TestPlotManagerFitAndColorBar:
         manager._refresh_plot_1d("x", ["y"])
 
         assert tuple(manager.fit_controller._overlays) == overlays
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_fit_buttons_use_first_plotted_1d_field(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
             {"x": [0.0, 1.0], "a": [1.0, 2.0], "b": [2.0, 3.0]}
@@ -546,10 +547,10 @@ class TestPlotManagerFitAndColorBar:
         assert manager.exponential_fit_button.isEnabled()
         assert manager.quadratic_fit_button.isEnabled()
         assert manager.fit_controller._field == "a"
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_datetime_columns_use_date_axes_and_seconds_since_epoch(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
             {
@@ -573,10 +574,10 @@ class TestPlotManagerFitAndColorBar:
         manager._refresh_plot_1d("x", ["y"])
         assert not isinstance(plot_item.getAxis("bottom"), pg.DateAxisItem)
         assert manager.log_x_action.isEnabled()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_quadratic_datetime_fit_reports_a_readable_extremum(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         timestamps = pd.date_range("2026-09-09 12:00", periods=5, freq="min")
         manager._plot_frame = pd.DataFrame(
@@ -595,10 +596,10 @@ class TestPlotManagerFitAndColorBar:
         )
 
         assert "x = 2026-09-09 12:02:00" in manager.plot_status_label.text()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_datetime_field_uses_a_date_y_axis(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
             {
@@ -611,10 +612,10 @@ class TestPlotManagerFitAndColorBar:
 
         assert isinstance(manager.plot_widget.getAxis("left"), pg.DateAxisItem)
         assert not manager.log_y_action.isEnabled()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_datetime_and_numeric_fields_do_not_share_a_y_axis(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
             {
@@ -630,12 +631,12 @@ class TestPlotManagerFitAndColorBar:
             "Datetime and numeric fields cannot share a y axis."
         )
         assert manager.plot_widget.getPlotItem().listDataItems() == []
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_view_context_menu_mirrors_log_mode_controls(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         plot_item = manager.plot_widget.getPlotItem()
-        menu_actions = manager.fit_view_box.getMenu(None).actions()
+        menu_actions = manager.view_box.getMenu(None).actions()
 
         assert manager.log_x_action in menu_actions
         assert manager.log_y_action in menu_actions
@@ -648,14 +649,12 @@ class TestPlotManagerFitAndColorBar:
         plot_item.ctrl.logYCheck.setChecked(False)
         assert not plot_item.ctrl.logXCheck.isChecked()
         assert not manager.log_y_action.isChecked()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_marker_size_menu_updates_1d_markers_and_hides_for_2d(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
-        manager._plot_frame = pd.DataFrame(
-            {"x": [0.0, 1.0], "y": [2.0, 3.0]}
-        )
+        manager._plot_frame = pd.DataFrame({"x": [0.0, 1.0], "y": [2.0, 3.0]})
 
         manager._refresh_plot_1d("x", ["y"])
 
@@ -678,7 +677,9 @@ class TestPlotManagerFitAndColorBar:
         manager._plot_frame = pd.DataFrame({"x": values, "y": values})
         manager._refresh_plot_1d("x", ["y"])
 
-        assert manager.plot_widget.getPlotItem().listDataItems()[0].opts["symbol"] is None
+        assert (
+            manager.plot_widget.getPlotItem().listDataItems()[0].opts["symbol"] is None
+        )
 
         manager._plot_frame = pd.DataFrame(
             {
@@ -690,25 +691,25 @@ class TestPlotManagerFitAndColorBar:
         manager._refresh_plot_2d("x", "y", "z")
 
         assert not manager.marker_size_menu.menuAction().isVisible()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_double_click_zooms_to_fit_all_data(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         plot_item = manager.plot_widget.getPlotItem()
         calls: list[float] = []
         monkeypatch.setattr(
             plot_item, "autoRange", lambda *, padding: calls.append(padding)
         )
 
-        manager.fit_view_box.zoom_fit_requested.emit()
+        manager.view_box.zoom_fit_requested.emit()
 
         assert calls == [PLOT_AUTO_RANGE_PADDING]
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_1d_cursor_and_fit_modes_are_mutually_exclusive(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame({"x": [0.0, 1.0, 2.0], "z": [1.0, 2.0, 3.0]})
         manager._refresh_plot_1d("x", ["z"])
@@ -724,13 +725,13 @@ class TestPlotManagerFitAndColorBar:
         manager.cursor_button.click()
         assert manager.cursor_button.isChecked()
         assert not manager.exponential_fit_button.isChecked()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_copy_plot_temporarily_adds_record_path_to_title(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         record_path = Path("/logs/example-record")
         manager._plot_record = SimpleNamespace(path=record_path, title="Example title")
         plot_item = manager.plot_widget.getPlotItem()
@@ -752,9 +753,7 @@ class TestPlotManagerFitAndColorBar:
                 observed["size"] = self.plot_item.titleLabel.opts["size"]
                 observed["width"] = self._parameters["width"]
 
-        monkeypatch.setattr(
-            "logqbit.gui.browser.plot.manager.ImageExporter", FakeExporter
-        )
+        monkeypatch.setattr("logqbit.gui.browser.plot.view.ImageExporter", FakeExporter)
 
         manager.copy_plot_to_clipboard()
 
@@ -770,14 +769,14 @@ class TestPlotManagerFitAndColorBar:
         assert not plot_item.titleLabel.isVisible()
         assert plot_item.titleLabel.text == ""
         assert plot_item.layout.minimumWidth() == initial_minimum_width
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_save_plot_writes_png_with_record_path_title(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = SimpleNamespace(path=tmp_path, title="Example title")
         observed: dict[str, object] = {}
 
@@ -802,9 +801,7 @@ class TestPlotManagerFitAndColorBar:
 
                 return FakeImage()
 
-        monkeypatch.setattr(
-            "logqbit.gui.browser.plot.manager.ImageExporter", FakeExporter
-        )
+        monkeypatch.setattr("logqbit.gui.browser.plot.view.ImageExporter", FakeExporter)
 
         manager.save_plot_action.trigger()
 
@@ -819,13 +816,13 @@ class TestPlotManagerFitAndColorBar:
             manager.plot_status_label.text() == f"Saved plot to {tmp_path / 'plot.png'}"
         )
         assert not manager.plot_widget.getPlotItem().titleLabel.isVisible()
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_2d_export_disables_antialiasing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        manager = PlotManager()
-        manager._mesh_item = object()
+        manager = PlotView()
+        manager.renderer._mesh_item = object()
         observed: dict[str, object] = {}
 
         class FakeExporter:
@@ -835,15 +832,13 @@ class TestPlotManagerFitAndColorBar:
             def parameters(self):
                 return self._parameters
 
-        monkeypatch.setattr(
-            "logqbit.gui.browser.plot.manager.ImageExporter", FakeExporter
-        )
+        monkeypatch.setattr("logqbit.gui.browser.plot.view.ImageExporter", FakeExporter)
 
         exporter = manager._create_image_exporter(manager.plot_widget.getPlotItem())
         observed.update(exporter.parameters())
 
         assert observed == {"width": 800, "antialias": False}
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_save_plot_does_not_overwrite_existing_image(
         self,
@@ -852,7 +847,7 @@ class TestPlotManagerFitAndColorBar:
     ) -> None:
         (tmp_path / "plot.png").touch()
         (tmp_path / "plot-1.png").touch()
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = SimpleNamespace(path=tmp_path)
         saved_paths: list[str] = []
 
@@ -866,10 +861,10 @@ class TestPlotManagerFitAndColorBar:
         manager.save_plot()
 
         assert saved_paths == [str(tmp_path / "plot-2.png")]
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_2d_cursor_replaces_color_bar_and_click_moves_both_lines(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
             {
@@ -884,7 +879,7 @@ class TestPlotManagerFitAndColorBar:
 
         manager.cursor_button.click()
         controller = manager.cursor_controller
-        assert manager._color_bar is None
+        assert manager.renderer._color_bar is None
         assert not manager.horizontal_section_widget.isHidden()
         assert not manager.vertical_section_widget.isHidden()
         assert manager.plot_layout.columnStretch(1) == 1
@@ -899,15 +894,15 @@ class TestPlotManagerFitAndColorBar:
         assert "z = 1" in manager.section_readout.text()
 
         manager.cursor_button.click()
-        assert manager._color_bar is not None
+        assert manager.renderer._color_bar is not None
         assert manager.horizontal_section_widget.isHidden()
         assert manager.vertical_section_widget.isHidden()
         assert manager.plot_layout.columnStretch(1) == 0
         assert manager.plot_layout.rowStretch(1) == 0
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
     def test_replacing_2d_mesh_disconnects_old_color_bar_signal(self) -> None:
-        manager = PlotManager()
+        manager = PlotView()
         manager._plot_record = object()
         manager._plot_frame = pd.DataFrame(
             {
@@ -917,17 +912,17 @@ class TestPlotManagerFitAndColorBar:
             }
         )
         manager._refresh_plot_2d("x", "y", "z")
-        old_mesh = manager._mesh_item
-        color_bar = manager._color_bar
+        old_mesh = manager.renderer._mesh_item
+        color_bar = manager.renderer._color_bar
 
         manager._refresh_plot_2d("x", "y", "z")
 
         assert old_mesh is not None
-        assert color_bar is manager._color_bar
+        assert color_bar is manager.renderer._color_bar
         levels = color_bar.levels()
         old_mesh.setLevels((10.0, 20.0))
         assert color_bar.levels() == levels
-        manager.widget.deleteLater()
+        manager.deleteLater()
 
 
 class TestPlotMeshSections:

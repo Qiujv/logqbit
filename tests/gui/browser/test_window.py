@@ -24,11 +24,12 @@ from logqbit.catalog import (
     MergeRecordsError,
     MergeRecordsResult,
 )
-from logqbit.gui.browser.window.model import COL_ID, COL_ROWS
+from logqbit.gui.browser.window.navigation import COL_ID, COL_ROWS
 from logqbit.gui.browser.window import merge as merge_module
 from logqbit.gui.browser.window.merge import MergeDialog
 from logqbit.gui.browser.detail.view import RecordDetailWindow
-from logqbit.gui.browser.window.view import LogBrowserWindow, _validated_log_id
+from logqbit.gui.browser.window.view import LogBrowserWindow
+from logqbit.gui.browser.window.records import _validated_log_id
 from logqbit.logfolder import LogFolder
 from logqbit.metadata import LogMetadata
 
@@ -72,11 +73,11 @@ class TestBrowserWindow:
             QTest.qWait(100)
             app.processEvents()
 
-            header = window.log_table.horizontalHeader()
+            header = window.navigation.log_table.horizontalHeader()
             assert header.resizeContentsPrecision() == -1
             assert header.sectionResizeMode(COL_ID) == QHeaderView.Interactive
-            assert window.log_table.columnWidth(COL_ID) >= (
-                window.log_table.fontMetrics().horizontalAdvance("1000")
+            assert window.navigation.log_table.columnWidth(COL_ID) >= (
+                window.navigation.log_table.fontMetrics().horizontalAdvance("1000")
             )
         finally:
             window.close()
@@ -96,8 +97,8 @@ class TestBrowserWindow:
             assert LogMetadata(note_path / "metadata.json", create=False).title == (
                 "Remember this"
             )
-            assert window._selected_record is not None
-            assert window._selected_record.path == note_path
+            assert window.navigation._selected_record is not None
+            assert window.navigation._selected_record.path == note_path
         finally:
             window.close()
 
@@ -129,7 +130,7 @@ class TestBrowserWindow:
         sample_logfolder: Path,
     ) -> None:
         window = LogBrowserWindow(sample_logfolder)
-        record = window._selected_record
+        record = window.navigation._selected_record
         assert record is not None
         detail_window = RecordDetailWindow(record)
         window._detail_windows.append(detail_window)
@@ -141,8 +142,8 @@ class TestBrowserWindow:
 
             assert not old_path.exists()
             assert new_path.is_dir()
-            assert window._selected_record is not None
-            assert window._selected_record.path == new_path
+            assert window.navigation._selected_record is not None
+            assert window.navigation._selected_record.path == new_path
             assert detail_window.detail_view.current_record is not None
             assert detail_window.detail_view.current_record.path == new_path
         finally:
@@ -162,8 +163,8 @@ class TestBrowserWindow:
         try:
             assert window.detail_view.current_record is not None
 
-            window.detail_view.yaml_view.setFocus()
-            QTest.keyClick(window.detail_view.yaml_view, Qt.Key_Right)
+            window.detail_view.const_tab.yaml_view.setFocus()
+            QTest.keyClick(window.detail_view.const_tab.yaml_view, Qt.Key_Right)
             app.processEvents()
             assert window.detail_view.current_tab_index() == 1
 
@@ -185,17 +186,20 @@ class TestBrowserWindow:
 
         window = LogBrowserWindow(sample_logfolder)
         try:
-            window.set_directory(other_directory)
+            window.navigation.set_directory(other_directory)
 
-            assert window.table_model.rowCount() == 1
-            assert other_directory in window._catalog_cache
-            assert window.table_model.get_record(0).path.parent == other_directory
+            assert window.navigation.table_model.rowCount() == 1
+            assert other_directory in window.navigation._catalog_cache
+            assert (
+                window.navigation.table_model.get_record(0).path.parent
+                == other_directory
+            )
 
-            cached_catalog = window._catalog
-            window.set_directory(sample_logfolder)
-            window.set_directory(other_directory)
+            cached_catalog = window.navigation._catalog
+            window.navigation.set_directory(sample_logfolder)
+            window.navigation.set_directory(other_directory)
 
-            assert window._catalog is cached_catalog
+            assert window.navigation._catalog is cached_catalog
         finally:
             window.close()
 
@@ -207,19 +211,19 @@ class TestBrowserWindow:
         app = _create_application()
         window = LogBrowserWindow(sample_records[0].path.parent)
         loaded_records: list[LogRecord] = []
-        monkeypatch.setattr(window, "_load_log", loaded_records.append)
+        window.navigation.display_record.connect(loaded_records.append)
         try:
-            selection_model = window.log_table.selectionModel()
+            selection_model = window.navigation.log_table.selectionModel()
             for row in (1, 2):
                 selection_model.select(
-                    window.table_proxy.index(row, 0),
+                    window.navigation.table_proxy.index(row, 0),
                     QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
                 )
             app.processEvents()
 
             assert loaded_records == []
 
-            timeout_spy = QSignalSpy(window._detail_load_timer.timeout)
+            timeout_spy = QSignalSpy(window.navigation._detail_load_timer.timeout)
             assert timeout_spy.wait(1000)
 
             assert [record.path for record in loaded_records] == [
@@ -237,24 +241,26 @@ class TestBrowserWindow:
         target = sample_records[1]
         window.show()
         try:
-            window._pin_record(target)
+            window.navigation.pin_record(target)
             app.processEvents()
 
-            assert window._pinned_record_names == [target.path.name]
-            buttons = window._pin_button_container.findChildren(QToolButton)
+            assert window.navigation._pinned_record_names == [target.path.name]
+            buttons = window.navigation._pin_button_container.findChildren(QToolButton)
             pin_button = next(button for button in buttons if button.text() == "#1")
-            assert window.pin_bar.height() == window.fontMetrics().height() + 4
+            assert (
+                window.navigation.pin_bar.height() == window.fontMetrics().height() + 4
+            )
             assert pin_button.isVisible()
             assert pin_button.width() > 0
             pin_button.click()
 
-            assert window._selected_record is not None
-            assert window._selected_record.path == target.path
+            assert window.navigation._selected_record is not None
+            assert window.navigation._selected_record.path == target.path
             assert window.detail_view.current_record is not None
             assert window.detail_view.current_record.path == target.path
 
             window._actions.shortcut_pin_record()
-            assert window._pinned_record_names == []
+            assert window.navigation._pinned_record_names == []
         finally:
             window.close()
 
@@ -266,13 +272,13 @@ class TestBrowserWindow:
         window = LogBrowserWindow(sample_logfolder)
         calls: list[tuple[str, bool | None]] = []
         monkeypatch.setattr(
-            window,
+            window.navigation,
             "refresh_logs",
             lambda: calls.append(("logs", None)),
         )
         monkeypatch.setattr(
-            window,
-            "refresh_current_log",
+            window.detail_view,
+            "refresh_current_record",
             lambda *, force=False: calls.append(("detail", force)),
         )
         refresh_action = next(
@@ -295,7 +301,9 @@ class TestBrowserWindow:
         refreshed: list[None] = []
         changed_ids: list[LogRecord] = []
         made_notes: list[None] = []
-        monkeypatch.setattr(window, "refresh_logs", lambda: refreshed.append(None))
+        monkeypatch.setattr(
+            window.navigation, "refresh_logs", lambda: refreshed.append(None)
+        )
         monkeypatch.setattr(
             window._actions,
             "change_record_id",
@@ -306,9 +314,9 @@ class TestBrowserWindow:
             "make_note",
             lambda: made_notes.append(None),
         )
-        window.log_table.selectRow(0)
+        window.navigation.log_table.selectRow(0)
 
-        menu = window._actions.create_header_context_menu()
+        menu = window.navigation.create_header_context_menu()
         actions = {action.text(): action for action in menu.actions()}
         assert "About" in actions
         actions["Show Trashed Items"].trigger()
@@ -327,8 +335,8 @@ class TestBrowserWindow:
         change_id_shortcut.trigger()
         make_note_shortcut.trigger()
 
-        assert window._show_trash is False
-        assert window._show_starred_only is True
+        assert window.navigation._show_trash is False
+        assert window.navigation._show_starred_only is True
         assert refreshed == [None, None]
         assert [record.path for record in changed_ids] == [sample_records[0].path]
         assert made_notes == [None]
@@ -403,7 +411,7 @@ class TestBrowserWindow:
                 Qt.AlignLeft | Qt.AlignVCenter
             )
 
-            window._actions.show_about_dialog()
+            window.show_about_dialog()
 
             assert shown and shown[0].parent() is window
             # QMessageBox suppresses the configured window title on macOS.
@@ -422,17 +430,17 @@ class TestBrowserWindow:
         window = LogBrowserWindow(sample_records[0].path.parent)
         app.processEvents()
         try:
-            assert window.table_model.rowCount() == 3
+            assert window.navigation.table_model.rowCount() == 3
 
-            window._actions.toggle_show_starred_only()
+            window.navigation.toggle_show_starred_only()
 
-            assert window.table_model.rowCount() == 1
-            record = window.table_model.get_record(0)
+            assert window.navigation.table_model.rowCount() == 1
+            record = window.navigation.table_model.get_record(0)
             assert record is not None
             assert record.star > 0
 
-            window._actions.toggle_show_starred_only()
-            assert window.table_model.rowCount() == 3
+            window.navigation.toggle_show_starred_only()
+            assert window.navigation.table_model.rowCount() == 3
         finally:
             window.close()
 
@@ -517,7 +525,9 @@ class TestBrowserWindow:
     ) -> None:
         window = LogBrowserWindow(sample_logfolder)
         refreshes: list[bool] = []
-        monkeypatch.setattr(window, "refresh_logs", lambda: refreshes.append(True))
+        monkeypatch.setattr(
+            window.navigation, "refresh_logs", lambda: refreshes.append(True)
+        )
 
         prepared = SimpleNamespace(
             is_noop=False,
@@ -568,7 +578,7 @@ class TestBrowserWindow:
             records,
             sample_logfolder,
         )
-        dialog.files_written.connect(window.refresh_logs)
+        dialog.files_written.connect(window.navigation.refresh_logs)
         dialog.analysis_finished.connect(
             lambda succeeded: (analyzed.append(succeeded), analysis_loop.quit())
         )
@@ -801,7 +811,7 @@ class TestBrowserWindow:
             assert (
                 window.open_explorer_shortcut.context() == Qt.WidgetWithChildrenShortcut
             )
-            assert window.open_explorer_shortcut.parent() is window.log_table
+            assert window.open_explorer_shortcut.parent() is window.navigation.log_table
 
             opened: list[tuple[Path, bool]] = []
             monkeypatch.setattr(
@@ -809,17 +819,19 @@ class TestBrowserWindow:
                 "open_path_in_explorer",
                 lambda path, select=False: opened.append((path, select)),
             )
-            window.detail_view.yaml_view.setFocus()
+            window.detail_view.const_tab.yaml_view.setFocus()
             QTest.keyClick(
-                window.detail_view.yaml_view,
+                window.detail_view.const_tab.yaml_view,
                 Qt.Key_Return,
                 Qt.ControlModifier,
             )
             assert not opened
 
-            window.log_table.setFocus()
-            QTest.keyClick(window.log_table, Qt.Key_Return, Qt.ControlModifier)
-            assert opened == [(window._selected_record.path, False)]
+            window.navigation.log_table.setFocus()
+            QTest.keyClick(
+                window.navigation.log_table, Qt.Key_Return, Qt.ControlModifier
+            )
+            assert opened == [(window.navigation._selected_record.path, False)]
         finally:
             window.close()
 
@@ -830,7 +842,7 @@ class TestBrowserWindow:
         window = LogBrowserWindow(sample_logfolder)
         app.processEvents()
         try:
-            record = window._selected_record
+            record = window.navigation._selected_record
             assert record is not None
             assert record.data_path.exists()
             pd.DataFrame({"x": range(10), "y": range(10)}).to_feather(record.data_path)
@@ -860,9 +872,9 @@ class TestBrowserWindow:
             assert inspect_count == 1
             assert read_count == 1
             assert record.row_count == 10
-            assert window._selected_record is not None
-            assert window._selected_record is record
-            assert window._selected_record.row_count == 10
+            assert window.navigation._selected_record is not None
+            assert window.navigation._selected_record is record
+            assert window.navigation._selected_record.row_count == 10
         finally:
             window.close()
 
@@ -873,34 +885,36 @@ class TestBrowserWindow:
         window = LogBrowserWindow(sample_logfolder)
         app.processEvents()
         try:
-            record = window._selected_record
+            record = window.navigation._selected_record
             assert record is not None
             pd.DataFrame({"x": range(9), "y": range(9)}).to_feather(record.data_path)
 
             window.detail_view.refresh_current_record()
 
-            refreshed = window._selected_record
+            refreshed = window.navigation._selected_record
             assert refreshed is not None
             assert refreshed is window.detail_view.current_record
             assert refreshed.row_count == 9
             source_row = next(
                 row
-                for row in range(window.table_model.rowCount())
-                if window.table_model.get_record(row) is refreshed
+                for row in range(window.navigation.table_model.rowCount())
+                if window.navigation.table_model.get_record(row) is refreshed
             )
             assert (
-                window.table_model.data(
-                    window.table_model.index(source_row, COL_ROWS),
+                window.navigation.table_model.data(
+                    window.navigation.table_model.index(source_row, COL_ROWS),
                     Qt.DisplayRole,
                 )
                 == "9"
             )
 
             dataframe = window.detail_view._data_cache.dataframe
-            window.refresh_logs()
+            window.navigation.refresh_logs()
 
-            assert window._selected_record is window.detail_view.current_record
-            assert window._selected_record.row_count == 9
+            assert (
+                window.navigation._selected_record is window.detail_view.current_record
+            )
+            assert window.navigation._selected_record.row_count == 9
             assert window.detail_view._data_cache.dataframe is dataframe
         finally:
             window.close()
@@ -940,12 +954,12 @@ class TestBrowserWindow:
         window.show()
         app.processEvents()
         try:
-            window.log_table.setFocus()
-            QTest.keyClick(window.log_table, Qt.Key_Right)
+            window.navigation.log_table.setFocus()
+            QTest.keyClick(window.navigation.log_table, Qt.Key_Right)
             app.processEvents()
             assert window.detail_view.current_tab_index() == 1
 
-            QTest.keyClick(window.log_table, Qt.Key_Left)
+            QTest.keyClick(window.navigation.log_table, Qt.Key_Left)
             app.processEvents()
             assert window.detail_view.current_tab_index() == 0
         finally:
@@ -959,25 +973,90 @@ class TestBrowserWindow:
         window.show()
         app.processEvents()
         try:
-            window.log_table.setFocus()
+            window.navigation.log_table.setFocus()
             QTest.mouseClick(window.directory_label, Qt.LeftButton)
             app.processEvents()
-            assert app.focusWidget() is window.log_table
+            assert app.focusWidget() is window.navigation.log_table
 
-            QTest.keyClick(window.log_table, Qt.Key_Down)
+            QTest.keyClick(window.navigation.log_table, Qt.Key_Down)
             app.processEvents()
-            assert window.log_table.currentIndex().row() == 1
+            assert window.navigation.log_table.currentIndex().row() == 1
 
-            QTest.keyClick(window.log_table, Qt.Key_Right)
+            QTest.keyClick(window.navigation.log_table, Qt.Key_Right)
             app.processEvents()
             assert window.detail_view.current_tab_index() == 1
 
             QTest.mouseClick(window.detail_view.detail_label, Qt.LeftButton)
             app.processEvents()
-            assert app.focusWidget() is window.log_table
+            assert app.focusWidget() is window.navigation.log_table
 
-            QTest.keyClick(window.log_table, Qt.Key_Left)
+            QTest.keyClick(window.navigation.log_table, Qt.Key_Left)
             app.processEvents()
             assert window.detail_view.current_tab_index() == 0
         finally:
             window.close()
+
+
+@pytest.mark.parametrize("operation", ["star", "trash"])
+def test_batch_record_actions_update_every_selected_record(sample_records, operation):
+    window = LogBrowserWindow(sample_records[0].path.parent)
+    try:
+        changed = QSignalSpy(window._actions.records_changed)
+        if operation == "star":
+            window._actions.set_records_star_count(iter(sample_records), 3)
+            assert [record.star for record in sample_records] == [3, 3, 3]
+        else:
+            window._actions.set_records_trash(iter(sample_records), True)
+            assert all(record.trash for record in sample_records)
+        assert changed.count() == 1
+    finally:
+        window.close()
+
+
+def test_directory_switch_cancels_pending_detail_load(sample_records, tmp_path):
+    other = tmp_path / "other"
+    with LogFolder.new(other, title="other") as log:
+        log.add_row(x=1, y=2)
+    window = LogBrowserWindow(sample_records[0].path.parent)
+    try:
+        navigation = window.navigation
+        loaded = []
+        navigation.display_record.connect(loaded.append)
+        navigation.log_table.selectRow(1)
+        assert navigation._detail_load_timer.isActive()
+        navigation.set_directory(other)
+        QTest.qWait(150)
+        assert len(loaded) == 1
+        assert loaded[0].path.parent == other
+        assert window.detail_view.current_record is navigation.selected_record
+    finally:
+        window.close()
+
+
+def test_merge_file_notifications_debounce_list_refresh(sample_records, monkeypatch):
+    from logqbit.gui.browser.window import records as records_module
+    from PySide6.QtCore import QObject, Signal
+
+    class FakeMergeDialog(QObject):
+        files_written = Signal()
+
+        def __init__(self, parent, records, directory, *, target):
+            super().__init__(parent)
+
+        def exec(self):
+            self.files_written.emit()
+            self.files_written.emit()
+
+    window = LogBrowserWindow(sample_records[0].path.parent)
+    refreshes = []
+    monkeypatch.setattr(records_module, "MergeDialog", FakeMergeDialog)
+    monkeypatch.setattr(
+        window.navigation, "refresh_logs", lambda: refreshes.append(True)
+    )
+    try:
+        window._actions.merge_into_new_logfolder(sample_records)
+        assert refreshes == []
+        QTest.qWait(300)
+        assert refreshes == [True]
+    finally:
+        window.close()

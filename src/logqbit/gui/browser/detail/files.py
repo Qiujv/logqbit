@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pyqtgraph as pg
 from PySide6.QtCore import QMimeData, QPoint, Qt, QUrl, Signal
-from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QDesktopServices, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -29,6 +29,63 @@ from send2trash import send2trash
 logger = logging.getLogger(__name__)
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 _KNOWN_RECORD_FILENAMES = {"const.yaml", "data.feather", "metadata.json"}
+
+
+class FilesMenu(QMenu):
+    """Menu for opening files belonging to one record."""
+
+    def __init__(
+        self,
+        *,
+        file_open_callback: Callable[[Path], None] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._record_path: Path | None = None
+        self._file_open_callback = file_open_callback
+        self.aboutToShow.connect(self._rebuild_files_menu)
+
+    def set_record_path(self, record_path: Path | None) -> None:
+        if self._record_path == record_path:
+            return
+        self._record_path = record_path
+        self.clear()
+
+    def _rebuild_files_menu(self) -> None:
+        self.clear()
+        record_path = self._record_path
+        if record_path is None:
+            return
+
+        try:
+            file_paths = sorted(
+                (path for path in record_path.iterdir() if path.is_file()),
+                key=lambda path: path.name.casefold(),
+            )
+        except OSError:
+            file_paths = []
+
+        if not file_paths:
+            empty_action = self.addAction("(No files)")
+            empty_action.setEnabled(False)
+
+        for path in file_paths:
+            action = self.addAction(path.name)
+            action.setToolTip(str(path))
+            action.triggered.connect(
+                lambda _checked=False, file_path=path: self._open_file(file_path)
+            )
+
+        self.addSeparator()
+        show_action = self.addAction("Show in Explorer")
+        show_action.triggered.connect(self._show_record_in_explorer)
+
+    def _open_file(self, path: Path) -> None:
+        open_file(path, callback=self._file_open_callback, parent=self)
+
+    def _show_record_in_explorer(self) -> None:
+        if self._record_path is not None:
+            open_in_file_manager(self._record_path, parent=self)
 
 
 def read_yaml_text(path: Path) -> str:
@@ -105,6 +162,24 @@ def open_in_file_manager(
                 "Open in Explorer",
                 f"Failed to open file browser: {exc}",
             )
+
+
+def open_file(
+    path: Path,
+    *,
+    callback: Callable[[Path], None] | None = None,
+    parent: QWidget | None = None,
+) -> None:
+    """Open a file through a callback or the platform default application."""
+    if callback:
+        callback(path)
+        return
+    if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+        QMessageBox.warning(
+            parent,
+            "Open File",
+            f"No application is available to open {path.name}.",
+        )
 
 
 def _copy_file_to_clipboard(path: Path) -> None:

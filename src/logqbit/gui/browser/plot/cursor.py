@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
@@ -14,15 +13,7 @@ from PySide6.QtCore import QElapsedTimer, Qt
 from PySide6.QtWidgets import QAbstractButton, QLabel
 
 from logqbit.gui.browser.plot.mesh import PlotMeshData
-
-
-@dataclass(frozen=True)
-class CursorSeries:
-    """One numeric series available to a 1D cursor."""
-
-    x: np.ndarray
-    y: np.ndarray
-    name: str
+from logqbit.gui.browser.plot.rendering import PlotSeries
 
 
 class CursorController:
@@ -51,7 +42,7 @@ class CursorController:
         self._activated = activated
         self._cancel_pending_click = cancel_pending_click
         self._mode: Literal["1d", "2d"] | None = None
-        self._series: tuple[CursorSeries, ...] = ()
+        self._series: tuple[PlotSeries, ...] = ()
         self._mesh: PlotMeshData | None = None
         self._axis_names = ("x", "y", "z")
         self._group_label = ""
@@ -79,7 +70,7 @@ class CursorController:
 
     def configure_1d(
         self,
-        series: Sequence[CursorSeries],
+        series: Sequence[PlotSeries],
         *,
         preserve_overlay: bool = False,
     ) -> None:
@@ -309,7 +300,10 @@ class CursorController:
         if not plot_item.sceneBoundingRect().contains(scene_position):
             self._hide_preview()
             return
-        if self._preview_visible and self._preview_timer.elapsed() < self._PREVIEW_INTERVAL_MS:
+        if (
+            self._preview_visible
+            and self._preview_timer.elapsed() < self._PREVIEW_INTERVAL_MS
+        ):
             return
 
         self._preview_timer.restart()
@@ -334,7 +328,9 @@ class CursorController:
         plot_item = self._plot_widget.getPlotItem()
         axis = plot_item.getAxis(axis_name)
         view_range = plot_item.vb.viewRange()[0 if axis_name == "bottom" else 1]
-        pixel_length = plot_item.vb.width() if axis_name == "bottom" else plot_item.vb.height()
+        pixel_length = (
+            plot_item.vb.width() if axis_name == "bottom" else plot_item.vb.height()
+        )
         if pixel_length <= 0:
             return value
         tick_levels = axis.tickSpacing(*view_range, pixel_length)
@@ -345,11 +341,7 @@ class CursorController:
         if not math.isfinite(step) or step <= 0:
             return value
         steps = (value - offset) / step
-        nearest_step = (
-            math.floor(steps + 0.5)
-            if steps >= 0
-            else math.ceil(steps - 0.5)
-        )
+        nearest_step = math.floor(steps + 0.5) if steps >= 0 else math.ceil(steps - 0.5)
         return offset + nearest_step * step
 
     def _hide_preview(self) -> None:
