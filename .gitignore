@@ -33,7 +33,8 @@ __pycache__/
 # Documentation and notebook output
 /site/
 /docs/_build/
-/src/logqbit/_docs/
+/src/logqbit/_docs/*
+!/src/logqbit/_docs/.gitkeep
 .ipynb_checkpoints/
 
 # OS metadata

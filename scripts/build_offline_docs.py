@@ -92,6 +92,7 @@ def build(output: Path) -> None:
     for relative_path in UNNEEDED_PATHS:
         _remove(output / relative_path)
     _compact_html(output)
+    (output / ".gitkeep").touch()
 
 
 def main() -> None:
