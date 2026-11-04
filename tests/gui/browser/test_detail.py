@@ -252,7 +252,7 @@ class TestRecordDetailWidgets:
         )
         assert view.detail_label.text() == record.path.as_posix()
         assert view.detail_label.textInteractionFlags() & Qt.TextSelectableByMouse
-        assert view.detail_label.contextMenuPolicy() == Qt.NoContextMenu
+        assert view.detail_label.contextMenuPolicy() == Qt.DefaultContextMenu
         assert view.detail_label.wordWrap()
 
     def test_detail_refresh_keeps_dataframe_when_only_other_files_change(

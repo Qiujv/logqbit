@@ -121,7 +121,6 @@ class LogBrowserWindow(QMainWindow):
         self.directory_label.setWordWrap(True)
         self.directory_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.directory_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.directory_label.setFocusPolicy(Qt.NoFocus)
         self.directory_label.setContextMenuPolicy(Qt.CustomContextMenu)
         self.directory_label.customContextMenuRequested.connect(
             self._show_top_bar_context_menu
@@ -181,6 +180,13 @@ class LogBrowserWindow(QMainWindow):
 
     def _show_top_bar_context_menu(self, position) -> None:
         menu = self.navigation.create_header_context_menu()
+        first_action = menu.actions()[0] if menu.actions() else None
+        copy_action = QAction("Copy Directory", menu)
+        copy_action.triggered.connect(
+            lambda: QApplication.clipboard().setText(self.directory_label.text())
+        )
+        menu.insertAction(first_action, copy_action)
+        menu.insertSeparator(first_action)
         menu.exec(self.directory_label.mapToGlobal(position))
 
     def show_about_dialog(self) -> None:

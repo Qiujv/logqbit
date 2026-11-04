@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-from PySide6.QtCore import QEventLoop, QItemSelectionModel, QSettings, Qt, QTimer
+from PySide6.QtCore import QEventLoop, QItemSelectionModel, QPoint, QSettings, Qt, QTimer
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import (
@@ -428,6 +428,30 @@ class TestBrowserWindow:
             assert "https://qiujv.github.io/logqbit/" in shown[0].text()
             assert shown[0].textInteractionFlags() & Qt.TextSelectableByMouse
             assert shown[0].textInteractionFlags() & Qt.TextSelectableByKeyboard
+        finally:
+            window.close()
+
+    def test_directory_context_menu_copies_full_path(
+        self, sample_logfolder: Path
+    ) -> None:
+        app = _create_application()
+        window = LogBrowserWindow(sample_logfolder)
+
+        action_names = []
+
+        def trigger_first_action():
+            menu = app.activePopupWidget()
+            action = menu.actions()[0]
+            action_names.append(action.text())
+            action.trigger()
+            menu.close()
+
+        try:
+            app.clipboard().clear()
+            QTimer.singleShot(0, trigger_first_action)
+            window._show_top_bar_context_menu(QPoint())
+            assert action_names == ["Copy Directory"]
+            assert app.clipboard().text() == sample_logfolder.as_posix()
         finally:
             window.close()
 
@@ -974,7 +998,7 @@ class TestBrowserWindow:
         finally:
             window.close()
 
-    def test_path_labels_do_not_take_focus_from_direction_key_navigation(
+    def test_path_labels_can_copy_and_switch_detail_tabs(
         self, sample_records: list[LogRecord]
     ) -> None:
         app = _create_application()
@@ -982,26 +1006,20 @@ class TestBrowserWindow:
         window.show()
         app.processEvents()
         try:
-            window.navigation.log_table.setFocus()
-            QTest.mouseClick(window.directory_label, Qt.LeftButton)
-            app.processEvents()
-            assert app.focusWidget() is window.navigation.log_table
-
-            QTest.keyClick(window.navigation.log_table, Qt.Key_Down)
-            app.processEvents()
-            assert window.navigation.log_table.currentIndex().row() == 1
-
-            QTest.keyClick(window.navigation.log_table, Qt.Key_Right)
-            app.processEvents()
-            assert window.detail_view.current_tab_index() == 1
-
-            QTest.mouseClick(window.detail_view.detail_label, Qt.LeftButton)
-            app.processEvents()
-            assert app.focusWidget() is window.navigation.log_table
-
-            QTest.keyClick(window.navigation.log_table, Qt.Key_Left)
-            app.processEvents()
-            assert window.detail_view.current_tab_index() == 0
+            for label, key, expected_tab in (
+                (window.directory_label, Qt.Key_Right, 1),
+                (window.detail_view.detail_label, Qt.Key_Left, 0),
+            ):
+                QTest.mouseClick(label, Qt.LeftButton)
+                app.processEvents()
+                assert app.focusWidget() is label
+                label.setSelection(0, len(label.text()))
+                app.clipboard().clear()
+                QTest.keySequence(label, QKeySequence(QKeySequence.Copy))
+                assert app.clipboard().text() == label.text()
+                QTest.keyClick(label, key)
+                app.processEvents()
+                assert window.detail_view.current_tab_index() == expected_tab
         finally:
             window.close()
 

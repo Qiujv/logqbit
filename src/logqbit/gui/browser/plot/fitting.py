@@ -157,6 +157,7 @@ class FitController:
         view_box.selection_canceled.connect(self._selection_canceled)
 
         self._escape_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), plot_widget)
+        self._escape_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self._escape_shortcut.activated.connect(
             lambda: self.cancel_selection(show_status=True)
         )
