@@ -249,7 +249,14 @@ class RecordDetailView(QWidget):
             for record in self._selected_records
             if record.path in cache
         ]
-        self.plot_view.set_snapshot(frames, errors)
+        self.plot_view.set_snapshot(
+            frames, errors, defer=self.tab_widget.currentIndex() != TAB_PLOT
+        )
+
+    def refresh_comparison(self) -> None:
+        """Refresh the multi-record plot snapshot after an explicit refresh."""
+        if self.plot_view._comparison:
+            self._snapshots.request()
 
     def refresh_current_record(self, *, force: bool = False) -> None:
         if self._record is None:
@@ -327,7 +334,6 @@ class RecordDetailView(QWidget):
         self.tab_widget.addTab(self.data_view_manager.widget, "Data")
 
         self.plot_view = PlotView(parent=self)
-        self.plot_view.snapshot_refresh_button.clicked.connect(self._snapshots.request)
         self.tab_widget.addTab(self.plot_view, "Plot")
 
         self.tab_widget.currentChanged.connect(self._on_tab_changed)

@@ -1208,7 +1208,7 @@ def test_multi_selection_snapshot_and_return_to_single(tmp_path):
         frame.to_feather(record.data_path)
         assert detail._snapshots.cache[record.path].frame["signal"].iloc[0] != 10.0
         previous_count = ready.count()
-        detail.plot_view.snapshot_refresh_button.click()
+        window._on_refresh_clicked()
         for _ in range(100):
             QTest.qWait(50)
             if ready.count() > previous_count:

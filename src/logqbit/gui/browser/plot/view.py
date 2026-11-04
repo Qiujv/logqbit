@@ -223,13 +223,6 @@ class PlotView(QWidget):
             QSizePolicy.Preferred,
         )
         status_row.addWidget(self.plot_status_label, stretch=1)
-        self.snapshot_refresh_button = QToolButton()
-        self.snapshot_refresh_button.setText("Refresh")
-        self.snapshot_refresh_button.setToolTip(
-            "Refresh the multi-record plot; automatic updates are paused."
-        )
-        self.snapshot_refresh_button.hide()
-        status_row.addWidget(self.snapshot_refresh_button)
         self.cursor_button = QToolButton()
         self.cursor_button.setText("cursor")
         self.cursor_button.setCheckable(True)
@@ -473,16 +466,18 @@ class PlotView(QWidget):
     def set_comparison(self, enabled: bool) -> None:
         self._comparison = enabled
         self.tag_bar.save_enabled = not enabled
-        self.snapshot_refresh_button.setVisible(enabled)
         if not enabled:
             self._snapshot_frames = []
             self._snapshot_errors = []
 
-    def set_snapshot(self, frames, errors) -> None:
+    def set_snapshot(self, frames, errors, *, defer: bool = False) -> None:
         self._snapshot_frames = frames
         self._snapshot_errors = errors
         self._user_controls_view = False
-        self.refresh_plot()
+        if defer:
+            self.mark_needs_refresh()
+        else:
+            self.refresh_plot()
 
     def reset_plot_state(self, message: str = "No data to plot.") -> None:
         self._plot_record = None

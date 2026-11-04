@@ -307,6 +307,7 @@ class LogBrowserWindow(QMainWindow):
         current = self.navigation.selected_record
         if current is not None:
             self.detail_view.refresh_current_record(force=current is previous_record)
+            self.detail_view.refresh_comparison()
 
     def _on_theme_button_clicked(self) -> None:
         current_index = ThemeManager.THEME_MODES.index(self._theme_mode)

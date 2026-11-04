@@ -46,4 +46,4 @@ Keep selection debounce, list refresh debounce, and detail refresh debounce
 with their respective owners: they serve different purposes and must not be
 combined into a shared watcher service.
 
-Multi-selection plots are snapshots, refreshed manually from the Plot tab. The detail watcher continues to refresh the current record, but does not update the comparison. Selection changes discard obsolete background results and release snapshots for deselected records. Multi-record plots keep source frames separate and use the existing grouped renderer; missing columns and incompatible types are reported in the plot status.
+Multi-selection plots are snapshots, refreshed manually with the main window Refresh button or F5. The detail watcher continues to refresh the current record, but does not update the comparison. Selection changes discard obsolete background results and release snapshots for deselected records. Multi-record plots keep source frames separate and use the existing grouped renderer; missing columns and incompatible types are reported in the plot status.
