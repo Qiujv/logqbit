@@ -38,6 +38,8 @@ from logqbit.gui.browser.plot.controls import TagBar
 from logqbit.gui.browser.plot.rendering import PlotRenderer, RenderResult
 
 PLOT_EXPORT_SCALE = 2
+# Larger values make text and other fixed-size elements larger in copied plots.
+PLOT_COPY_CONTENT_SCALE = 1.4
 PLOT_AUTO_RANGE_PADDING = 0.01
 MARKER_SIZES = {"Small": 4, "Medium": 6, "Large": 8}
 
@@ -314,7 +316,9 @@ class PlotView(QWidget):
         self.plot_layout.setRowStretch(1, 1 if active else 0)
 
     @contextmanager
-    def _plot_with_record_title(self) -> Iterator[pg.PlotItem | None]:
+    def _plot_with_record_title(
+        self, *, font_scale: float = 1.0
+    ) -> Iterator[pg.PlotItem | None]:
         plot_item = self.plot_widget.getPlotItem()
         if plot_item is None:
             yield None
@@ -335,7 +339,7 @@ class PlotView(QWidget):
             plot_item.setTitle(
                 f"{title} — {path}",
                 color="k",
-                size=f"{axis_font.pointSizeF():g}pt",
+                size=f"{axis_font.pointSizeF() * font_scale:g}pt",
             )
             title_height = title_label.item.boundingRect().height()
             title_label.setMaximumHeight(title_height)
@@ -361,14 +365,31 @@ class PlotView(QWidget):
             return self._create_image_exporter(plot_item).export(toBytes=True)
 
     def copy_plot_to_clipboard(self) -> None:
-        with self._plot_with_record_title() as plot_item:
-            if plot_item is not None:
-                self._create_image_exporter(plot_item).export(copy=True)
+        plot_item = self.plot_widget.getPlotItem()
+        geometry = plot_item.geometry()
+        try:
+            plot_item.resize(
+                geometry.width() / PLOT_COPY_CONTENT_SCALE,
+                geometry.height() / PLOT_COPY_CONTENT_SCALE,
+            )
+            plot_item.layout.activate()
+            with self._plot_with_record_title(
+                font_scale=1 / PLOT_COPY_CONTENT_SCALE
+            ) as plot_item:
+                if plot_item is not None:
+                    self._create_image_exporter(
+                        plot_item, scale=PLOT_EXPORT_SCALE * PLOT_COPY_CONTENT_SCALE
+                    ).export(copy=True)
+        finally:
+            plot_item.setGeometry(geometry)
+            plot_item.layout.activate()
 
-    def _create_image_exporter(self, plot_item) -> ImageExporter:
+    def _create_image_exporter(
+        self, plot_item, *, scale: float = PLOT_EXPORT_SCALE
+    ) -> ImageExporter:
         exporter = ImageExporter(plot_item)
         parameters = exporter.parameters()
-        parameters["width"] *= PLOT_EXPORT_SCALE
+        parameters["width"] = int(parameters["width"] * scale)
         if self.renderer.has_mesh:
             parameters["antialias"] = False
         return exporter

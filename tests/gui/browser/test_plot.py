@@ -788,9 +788,11 @@ class TestPlotViewFitAndColorBar:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         manager = PlotView()
+        monkeypatch.setattr("logqbit.gui.browser.plot.view.PLOT_COPY_CONTENT_SCALE", 2.0)
         record_path = Path("/logs/example-record")
         manager._plot_record = SimpleNamespace(path=record_path, title="Example title")
         plot_item = manager.plot_widget.getPlotItem()
+        initial_geometry = plot_item.geometry()
         initial_minimum_width = plot_item.layout.minimumWidth()
         observed: dict[str, object] = {}
 
@@ -808,6 +810,7 @@ class TestPlotViewFitAndColorBar:
                 observed["visible"] = self.plot_item.titleLabel.isVisible()
                 observed["size"] = self.plot_item.titleLabel.opts["size"]
                 observed["width"] = self._parameters["width"]
+                observed["geometry"] = self.plot_item.geometry()
 
         monkeypatch.setattr("logqbit.gui.browser.plot.view.ImageExporter", FakeExporter)
 
@@ -818,13 +821,17 @@ class TestPlotViewFitAndColorBar:
             "title": f"Example title — {record_path.as_posix().replace('/', '/<wbr>')}",
             "visible": True,
             "size": (
-                f"{plot_item.getAxis('bottom').label.document().defaultFont().pointSizeF():g}pt"
+                f"{plot_item.getAxis('bottom').label.document().defaultFont().pointSizeF() / 2:g}pt"
             ),
-            "width": 800,
+            "width": 1600,
+            "geometry": plot_item.geometry().adjusted(
+                0, 0, -initial_geometry.width() / 2, -initial_geometry.height() / 2
+            ),
         }
         assert not plot_item.titleLabel.isVisible()
         assert plot_item.titleLabel.text == ""
         assert plot_item.layout.minimumWidth() == initial_minimum_width
+        assert plot_item.geometry() == initial_geometry
         manager.deleteLater()
 
     def test_save_plot_writes_png_with_record_path_title(
@@ -847,6 +854,7 @@ class TestPlotViewFitAndColorBar:
             def export(self, *, toBytes: bool):
                 observed["to_bytes"] = toBytes
                 observed["title"] = self.plot_item.titleLabel.text
+                observed["size"] = self.plot_item.titleLabel.opts["size"]
                 observed["width"] = self._parameters["width"]
 
                 class FakeImage:
@@ -864,6 +872,7 @@ class TestPlotViewFitAndColorBar:
         assert observed == {
             "to_bytes": True,
             "title": f"Example title — {tmp_path.as_posix().replace('/', '/<wbr>')}",
+            "size": f"{manager.plot_widget.getPlotItem().getAxis('bottom').label.document().defaultFont().pointSizeF():g}pt",
             "width": 800,
             "path": str(tmp_path / "plot.png"),
             "format": "PNG",
