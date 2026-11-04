@@ -18,6 +18,8 @@ from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import (
     QApplication,
     QHeaderView,
+    QLabel,
+    QMenu,
     QMessageBox,
     QSizePolicy,
     QToolButton,
@@ -429,6 +431,11 @@ class TestBrowserWindow:
             window.show_about_dialog()
 
             assert shown and shown[0].parent() is window
+            message_label = shown[0].findChild(QLabel, "qt_msgbox_label")
+            assert message_label is not None
+            message_label.ensurePolished()
+            assert not message_label.font().bold()
+            assert "<b>LogQbit</b>" in shown[0].text()
             assert not shown[0].iconPixmap().isNull()
             # QMessageBox suppresses the configured window title on macOS.
             assert "https://github.com/Qiujv/logqbit" in shown[0].text()
@@ -834,7 +841,9 @@ class TestBrowserWindow:
             dialog.close()
             window.close()
 
-    def test_copy_logfolders_shortcut_and_menu(self, sample_records) -> None:
+    def test_copy_logfolders_shortcut_and_menu(
+        self, sample_records, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         app = _create_application()
         window = LogBrowserWindow(sample_records[0].path.parent)
         window.show()
@@ -853,18 +862,15 @@ class TestBrowserWindow:
 
             menu_states = []
 
-            def inspect_menu():
-                menu = app.activePopupWidget()
-                action = next(a for a in menu.actions() if a.text() == "Copy LogFolder")
-                menu_states.append(action.isEnabled())
-                if action.isEnabled():
-                    QTest.mouseClick(
-                        menu, Qt.LeftButton, pos=menu.actionGeometry(action).center()
+            class TestMenu(QMenu):
+                def exec(self, _position):
+                    action = next(
+                        a for a in self.actions() if a.text() == "Copy LogFolder (Ctrl+C)"
                     )
-                else:
-                    menu.close()
+                    menu_states.append(action.isEnabled())
+                    return action if action.isEnabled() else None
 
-            QTimer.singleShot(0, inspect_menu)
+            monkeypatch.setattr("logqbit.gui.browser.window.records.QMenu", TestMenu)
             window._actions.open_table_context_menu(QPoint())
             assert menu_states == [False]
 
@@ -891,7 +897,6 @@ class TestBrowserWindow:
             } == expected
 
             app.clipboard().clear()
-            QTimer.singleShot(0, inspect_menu)
             window._actions.open_table_context_menu(QPoint())
             assert menu_states == [False, True]
             assert {

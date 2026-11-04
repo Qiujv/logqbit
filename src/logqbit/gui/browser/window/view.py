@@ -201,6 +201,7 @@ class LogBrowserWindow(QMainWindow):
 
         dialog = QMessageBox(self)
         dialog.setWindowTitle("About LogQbit")
+        dialog.setStyleSheet("QLabel#qt_msgbox_label { font-weight: normal; }")
         browser_icon = self.windowIcon()
         if browser_icon.isNull():
             dialog.setIcon(QMessageBox.Information)
