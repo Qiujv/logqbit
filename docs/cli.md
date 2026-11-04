@@ -39,6 +39,19 @@ logqbit copy-template move_from_labrad -o ./tools/
 
 该模板用于将已有 LabRAD 数据迁移为 LogQbit 记录；复制后请按自己的目录结构编辑。
 
+## 格式化历史 metadata
+
+新写入的 `metadata.json` 使用可读的 Unicode 和四空格缩进，方便直接搜索和查看文件内容。旧文件仍可正常读取；如需一次转换历史记录，可运行：
+
+```bash
+logqbit format-metadata-json ./runs --dry-run
+logqbit format-metadata-json ./runs
+```
+
+命令递归扫描指定目录下的 `metadata.json`，包括指定目录本身，不跟随符号链接。预览只报告结果，不修改文件；正式运行会保留未知字段和文件权限，对已符合格式的文件不做修改。无效 JSON、重复键或无法无损转换的数值会被跳过并报告；其他文件继续处理，有错误时命令返回非零状态。
+
+转换会修改文件内容和修改时间。运行前请备份重要数据并暂停对这些记录的写入：命令会检测部分并发修改，但不能保证避免所有并发写入冲突。
+
 ## Windows 快捷方式
 
 ```bash

@@ -8,6 +8,24 @@ import pytest
 from logqbit.metadata import LogMetadata
 
 
+def test_unicode_formats_remain_readable_and_updates_are_formatted(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "metadata.json"
+    path.write_text(
+        '{"title": "\\u4e2d\\u6587", "custom": "\\u6d4b\\u8bd5"}', encoding="utf-8"
+    )
+    meta = LogMetadata(path, create=False)
+    assert meta.title == "中文"
+    meta.star = 2
+    assert '    "title": "中文"' in path.read_text(encoding="utf-8")
+    assert LogMetadata(path, create=False).root["custom"] == "测试"
+
+    created = tmp_path / "new.json"
+    LogMetadata(created, title="中文")
+    assert '    "title": "中文"' in created.read_text(encoding="utf-8")
+
+
 def test_logmetadata_creates_defaults(tmp_path: Path) -> None:
     meta_path = tmp_path / "metadata.json"
     meta = LogMetadata(meta_path)

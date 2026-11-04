@@ -125,7 +125,7 @@ for path_in, path_out, n_files in path_pairs:
             "create_machine": create_machine,
         }
         with open(lfo_path / "metadata.json", "w", encoding="utf-8") as f:
-            json.dump(metadata, f)
+            json.dump(metadata, f, ensure_ascii=False, indent=4)
 
 print("\n✓ Migration complete!")
 print(f"Converted data saved to: {folder_out}")

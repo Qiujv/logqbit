@@ -109,7 +109,7 @@ class LogMetadata:
             pass
         elif create:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(_default_root(title), f)
+                json.dump(_default_root(title), f, ensure_ascii=False, indent=4)
         else:
             raise FileNotFoundError(f"Metadata file at '{path}' does not exist.")
 
@@ -146,7 +146,7 @@ class LogMetadata:
         tmp_path = Path(tmp)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(self.root, f)
+                json.dump(self.root, f, ensure_ascii=False, indent=4)
             tmp_path.replace(path)
         finally:
             with suppress(OSError):

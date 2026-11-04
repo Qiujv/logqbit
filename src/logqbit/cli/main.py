@@ -105,6 +105,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Open the bundled offline documentation",
     )
 
+    format_parser = subparsers.add_parser(
+        "format-metadata-json",
+        help="Format metadata JSON files for readable Unicode and text search",
+    )
+    format_parser.add_argument(
+        "directory", type=Path, help="Directory to scan recursively"
+    )
+    format_parser.add_argument(
+        "--dry-run", action="store_true", help="Preview without writing"
+    )
+
     shortcuts_parser = subparsers.add_parser(
         "shortcuts",
         help="Create a Windows desktop shortcut for the browser",
@@ -142,6 +153,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return create_example_data()
     if args.command == "docs":
         return open_offline_docs()
+    if args.command == "format-metadata-json":
+        from logqbit.cli.format_metadata import format_metadata_json
+
+        return format_metadata_json(args.directory, dry_run=args.dry_run)
     if args.command == "shortcuts":
         from logqbit.cli.shortcuts import create_shortcuts
 
