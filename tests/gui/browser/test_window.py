@@ -865,7 +865,9 @@ class TestBrowserWindow:
             class TestMenu(QMenu):
                 def exec(self, _position):
                     action = next(
-                        a for a in self.actions() if a.text() == "Copy LogFolder (Ctrl+C)"
+                        a
+                        for a in self.actions()
+                        if a.text() == "Copy LogFolder (Ctrl+C)"
                     )
                     menu_states.append(action.isEnabled())
                     return action if action.isEnabled() else None
@@ -1163,5 +1165,65 @@ def test_merge_file_notifications_debounce_list_refresh(sample_records, monkeypa
         assert refreshes == []
         QTest.qWait(300)
         assert refreshes == [True]
+    finally:
+        window.close()
+
+
+def test_multi_selection_snapshot_and_return_to_single(tmp_path):
+    for index in range(2):
+        with LogFolder.new(tmp_path, title=f"record {index}") as log:
+            log.add_row(x=1.0, signal=float(index))
+            log.add_row(x=2.0, signal=float(index + 1))
+            log.meta.plot_axes = ["x"]
+            log.meta.plot_fields = ["signal"]
+    window = LogBrowserWindow(tmp_path)
+    try:
+        detail = window.detail_view
+        detail.set_current_tab(2)
+        navigation = window.navigation
+        model = navigation.log_table.selectionModel()
+        ready = QSignalSpy(detail._snapshots.ready)
+        model.select(
+            navigation.table_proxy.index(1, 0),
+            QItemSelectionModel.Select | QItemSelectionModel.Rows,
+        )
+        for _ in range(100):
+            QTest.qWait(50)
+            if ready.count():
+                break
+        assert ready.count(), (
+            navigation.selected_records(),
+            detail._selected_records,
+            detail.plot_view._comparison,
+            detail._snapshots.active,
+            detail.plot_view.plot_status_label.text(),
+        )
+        assert len(detail.plot_view.plot_widget.getPlotItem().listDataItems()) == 2
+        assert "2 selected" in detail.detail_id_label.text()
+        assert detail.plot_view._comparison
+        assert not detail.plot_view.tag_bar.save_enabled
+        record = navigation.selected_records()[1]
+        frame = pd.read_feather(record.data_path)
+        frame["signal"] = [10.0, 11.0]
+        frame.to_feather(record.data_path)
+        assert detail._snapshots.cache[record.path].frame["signal"].iloc[0] != 10.0
+        previous_count = ready.count()
+        detail.plot_view.snapshot_refresh_button.click()
+        for _ in range(100):
+            QTest.qWait(50)
+            if ready.count() > previous_count:
+                break
+        assert ready.count() > previous_count
+        assert detail._snapshots.cache[record.path].frame["signal"].iloc[0] == 10.0
+        navigation.refresh_logs()
+        assert len(navigation.selected_records()) == 2
+        model.select(
+            navigation.table_proxy.index(1, 0),
+            QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+        )
+        QTest.qWait(200)
+        assert not detail.plot_view._comparison
+        assert detail.plot_view.tag_bar.save_enabled
+        assert len(detail._snapshots.cache) == 0
     finally:
         window.close()

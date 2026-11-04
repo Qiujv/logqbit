@@ -316,30 +316,39 @@ class PlotRenderer:
         x_col: str,
         y_cols: Sequence[str],
         groupby: Sequence[str] = (),
+        *,
+        groups: Sequence[PlotGroup] | None = None,
     ) -> RenderResult:
-        for col in (x_col, *groupby):
+        for col in (x_col, *groupby) if groups is None else ():
             if col not in frame.columns:
                 return RenderResult(f"Column '{col}' not in data.")
 
         self.clear()
         x_values, x_is_datetime = _plot_values(frame[x_col])
         y_datetime_columns = [
-            pd.api.types.is_datetime64_any_dtype(frame[y_col])
+            pd.api.types.is_datetime64_any_dtype(source[y_col])
+            for source in (
+                [frame] if groups is None else [group.frame for group in groups]
+            )
             for y_col in y_cols
-            if y_col in frame.columns
+            if y_col in source.columns
         ]
         if any(y_datetime_columns) and not all(y_datetime_columns):
             return RenderResult("Datetime and numeric fields cannot share a y axis.")
         y_is_datetime = bool(y_datetime_columns) and all(y_datetime_columns)
         self._set_datetime_axes(x_is_datetime, y_is_datetime)
-        if groupby:
+        if groupby or groups is not None:
             self._show_legend()
 
         plotted = 0
         plotted_groups: set[str] = set()
         fit_series: tuple[np.ndarray, np.ndarray, str, str] | None = None
         cursor_series: list[PlotSeries] = []
-        plot_groups, total_group_count = _groups_for_plot(frame, groupby)
+        plot_groups, total_group_count = (
+            _groups_for_plot(frame, groupby)
+            if groups is None
+            else (list(groups[-MAX_PLOT_GROUPS:]), len(groups))
+        )
         for plot_group in plot_groups:
             x_values, _ = _plot_values(plot_group.frame[x_col])
             for y_col in y_cols:
@@ -402,7 +411,7 @@ class PlotRenderer:
         self.plot_widget.setLabel("bottom", x_col)
         self.plot_widget.setLabel("left", ", ".join(y_cols))
         status = f"1D plot: {x_col} vs {', '.join(y_cols[:3])}"
-        if groupby:
+        if groupby or groups is not None:
             status += f" ({len(plotted_groups)} groups, {plotted} curves)"
             if total_group_count > MAX_PLOT_GROUPS:
                 status += f"; showing latest {MAX_PLOT_GROUPS} of {total_group_count}"
@@ -417,8 +426,10 @@ class PlotRenderer:
         y_col: str,
         z_col: str,
         groupby: Sequence[str] = (),
+        *,
+        groups: Sequence[PlotGroup] | None = None,
     ) -> RenderResult:
-        for col in (x_col, y_col, z_col, *groupby):
+        for col in (x_col, y_col, z_col, *groupby) if groups is None else ():
             if col not in frame.columns:
                 return RenderResult(f"Column '{col}' not in data.")
 
@@ -426,7 +437,11 @@ class PlotRenderer:
         y_is_datetime = pd.api.types.is_datetime64_any_dtype(frame[y_col])
 
         mesh_groups = []
-        plot_groups, total_group_count = _groups_for_plot(frame, groupby)
+        plot_groups, total_group_count = (
+            _groups_for_plot(frame, groupby)
+            if groups is None
+            else (list(groups[-MAX_PLOT_GROUPS:]), len(groups))
+        )
         for plot_group in plot_groups:
             sub = plot_group.frame[[x_col, y_col, z_col]]
             arr = np.column_stack(
@@ -450,7 +465,7 @@ class PlotRenderer:
 
         self.clear(preserve_color_bar=True)
         self._set_datetime_axes(x_is_datetime, y_is_datetime)
-        if groupby:
+        if groupby or groups is not None:
             self._show_legend()
 
         rendered_groups = []
@@ -486,7 +501,7 @@ class PlotRenderer:
         self.plot_widget.setLabel("left", y_col)
 
         total_points = sum(mesh.point_count for _, mesh, _ in rendered_groups)
-        if groupby:
+        if groupby or groups is not None:
             status = (
                 f"2D plot: {total_points} points in {len(rendered_groups)} group(s); "
                 f"cursor uses {cursor_label} ({cursor_mesh.point_count} points)"

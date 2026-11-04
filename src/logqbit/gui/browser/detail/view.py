@@ -40,6 +40,7 @@ from logqbit.gui.browser.detail.files import (
 )
 from logqbit.gui.browser.detail.const import ConstTab
 from logqbit.gui.browser.plot.view import PlotView
+from logqbit.gui.browser.plot.snapshot import PlotSnapshots
 from logqbit.file_version import FileVersion
 
 if TYPE_CHECKING:
@@ -129,6 +130,10 @@ class RecordDetailView(QWidget):
     ) -> None:
         super().__init__(parent)
         self._record: LogRecord | None = None
+        self._selected_records = []
+        self._snapshots = PlotSnapshots(self)
+        self._snapshots.ready.connect(self._snapshot_ready)
+        self._snapshots.loading.connect(self._snapshot_loading)
         self._data_cache = DetailDataCache()
         self._metadata_cache = DetailMetadataCache()
         self._file_open_callback = file_open_callback
@@ -176,7 +181,7 @@ class RecordDetailView(QWidget):
         data_changed = self._data_cache.update(record)
         dataframe = self._data_cache.dataframe
         self._record = record
-        self.detail_id_label.setText(f"#{record.log_id}")
+        self._update_detail_id()
         self.detail_label.setText(record.path.as_posix())
         self.files_menu.set_record_path(record.path)
         self.const_tab.load_record(record)
@@ -189,11 +194,62 @@ class RecordDetailView(QWidget):
         self._update_image_tabs(list_image_files(record.path))
         self.files_button.setEnabled(True)
         defer_plot = self.tab_widget.currentIndex() != TAB_PLOT
-        if metadata_changed:
-            self.plot_view.update_controls(record, dataframe)
-        if metadata_changed or data_changed:
-            self.plot_view.update_plot(record, dataframe, defer=defer_plot)
+        if not self.plot_view._comparison:
+            if metadata_changed:
+                self.plot_view.update_controls(record, dataframe)
+            if metadata_changed or data_changed:
+                self.plot_view.update_plot(record, dataframe, defer=defer_plot)
         self._sync_detail_watcher()
+
+    def _update_detail_id(self) -> None:
+        if self._record is None:
+            self.detail_id_label.setText("")
+            return
+        suffix = (
+            f" · {len(self._selected_records)} selected"
+            if len(self._selected_records) > 1
+            else ""
+        )
+        self.detail_id_label.setText(f"#{self._record.log_id}{suffix}")
+
+    def set_selected_records(self, records) -> None:
+        records = list(records)
+        old_paths = [record.path for record in self._selected_records]
+        paths = [record.path for record in records]
+        was_comparison = self.plot_view._comparison
+        self._selected_records = records
+        self._update_detail_id()
+        if len(records) < 2:
+            self._snapshots.clear()
+            self.plot_view.set_comparison(False)
+            if was_comparison and self._record is not None:
+                self.plot_view.update_controls(self._record, self._data_cache.dataframe)
+                self.plot_view.update_plot(
+                    self._record,
+                    self._data_cache.dataframe,
+                    defer=self.tab_widget.currentIndex() != TAB_PLOT,
+                )
+            return
+        self.plot_view.set_comparison(True)
+        if paths != old_paths:
+            self._snapshots.set_records(records)
+            self.plot_view._snapshot_frames = []
+            self.plot_view._clear_plot("Preparing comparison snapshot…")
+            if self.tab_widget.currentIndex() == TAB_PLOT:
+                self._snapshots.request()
+
+    def _snapshot_loading(self) -> None:
+        self.plot_view._clear_plot("Loading comparison snapshot…")
+
+    def _snapshot_ready(self, cache, errors) -> None:
+        if not self.plot_view._comparison:
+            return
+        frames = [
+            (record, cache[record.path].frame)
+            for record in self._selected_records
+            if record.path in cache
+        ]
+        self.plot_view.set_snapshot(frames, errors)
 
     def refresh_current_record(self, *, force: bool = False) -> None:
         if self._record is None:
@@ -208,6 +264,9 @@ class RecordDetailView(QWidget):
         self._refresh_timer.stop()
         self._clear_detail_watcher()
         self._record = None
+        self._selected_records = []
+        self._snapshots.clear()
+        self.plot_view.set_comparison(False)
         self._data_cache.clear()
         self._metadata_cache.clear()
         self.detail_id_label.setText("")
@@ -268,6 +327,7 @@ class RecordDetailView(QWidget):
         self.tab_widget.addTab(self.data_view_manager.widget, "Data")
 
         self.plot_view = PlotView(parent=self)
+        self.plot_view.snapshot_refresh_button.clicked.connect(self._snapshots.request)
         self.tab_widget.addTab(self.plot_view, "Plot")
 
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -291,7 +351,10 @@ class RecordDetailView(QWidget):
 
     def _on_tab_changed(self, index: int) -> None:
         if index == TAB_PLOT:
-            self.plot_view.refresh_if_needed()
+            if self.plot_view._comparison and not self.plot_view._snapshot_frames:
+                self._snapshots.request()
+            else:
+                self.plot_view.refresh_if_needed()
 
     def _on_load_more(self) -> None:
         if self._record:

@@ -788,7 +788,9 @@ class TestPlotViewFitAndColorBar:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         manager = PlotView()
-        monkeypatch.setattr("logqbit.gui.browser.plot.view.PLOT_COPY_CONTENT_SCALE", 2.0)
+        monkeypatch.setattr(
+            "logqbit.gui.browser.plot.view.PLOT_COPY_CONTENT_SCALE", 2.0
+        )
         record_path = Path("/logs/example-record")
         manager._plot_record = SimpleNamespace(path=record_path, title="Example title")
         plot_item = manager.plot_widget.getPlotItem()
@@ -1182,3 +1184,44 @@ class TestBuildGridsRect:
 
 def test_warmup_plotter_jit() -> None:
     warmup_plotter_jit()
+
+
+def test_comparison_reports_missing_columns_and_preserves_dataframes():
+    manager = PlotView()
+    first = pd.DataFrame({"x": [1, 2], "signal": [2, 3], "device": ["a", "a"]})
+    second = pd.DataFrame({"x": [1, 2], "signal": [4, 5]})
+    third = pd.DataFrame({"x": [1, 2]})
+    manager._plot_record = SimpleNamespace(log_id="1")
+    manager.tag_bar.set_columns(
+        ["x", "signal", "device"], ["x"], ["signal"], ["device"]
+    )
+    manager.set_comparison(True)
+    manager.set_snapshot(
+        [
+            (SimpleNamespace(log_id=str(i)), frame)
+            for i, frame in enumerate((first, second, third), 1)
+        ],
+        [],
+    )
+    assert len(manager.plot_widget.getPlotItem().listDataItems()) == 2
+    assert "#2: missing group columns device" in manager.plot_status_label.text()
+    assert "#3: missing signal" in manager.plot_status_label.text()
+    assert list(second.columns) == ["x", "signal"]
+    assert first["x"].dtype == "int64"
+
+
+def test_comparison_2d_uses_grouped_meshes_and_cursor():
+    manager = PlotView()
+    first = pd.DataFrame({"x": [0, 0, 1, 1], "y": [0, 1, 0, 1], "z": [1, 2, 3, 4]})
+    second = first.copy()
+    second["z"] += 2
+    manager._plot_record = SimpleNamespace(log_id="1")
+    manager.tag_bar.set_columns(["x", "y", "z"], ["x", "y"], ["z"], [])
+    manager.set_comparison(True)
+    manager.set_snapshot(
+        [(SimpleNamespace(log_id="1"), first), (SimpleNamespace(log_id="2"), second)],
+        [],
+    )
+    assert len(manager.renderer._mesh_items) == 2
+    assert manager.cursor_controller._group_label == "#1"
+    assert "cursor uses #1" in manager.plot_status_label.text()

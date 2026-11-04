@@ -20,6 +20,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QGridLayout,
+    QFileDialog,
     QApplication,
     QHBoxLayout,
     QLabel,
@@ -35,7 +36,14 @@ if TYPE_CHECKING:
 from logqbit.gui.browser.plot.cursor import CursorController
 from logqbit.gui.browser.plot.fitting import FitController, FitKind
 from logqbit.gui.browser.plot.controls import TagBar
-from logqbit.gui.browser.plot.rendering import PlotRenderer, RenderResult
+from logqbit.gui.browser.plot.rendering import (
+    PlotRenderer,
+    RenderResult,
+    PlotGroup,
+    iter_plot_groups,
+    _plot_values,
+    MAX_PLOT_GROUPS,
+)
 
 PLOT_EXPORT_SCALE = 2
 # Larger values make text and other fixed-size elements larger in copied plots.
@@ -119,6 +127,9 @@ class PlotView(QWidget):
         super().__init__(parent)
         self._plot_record: LogRecord | None = None
         self._plot_frame: pd.DataFrame | None = None
+        self._comparison = False
+        self._snapshot_frames = []
+        self._snapshot_errors = []
         self._suppress_updates = False
         self._needs_refresh = False
         self._user_controls_view = False
@@ -200,6 +211,13 @@ class PlotView(QWidget):
             QSizePolicy.Preferred,
         )
         status_row.addWidget(self.plot_status_label, stretch=1)
+        self.snapshot_label = QLabel("Snapshot · auto update paused")
+        self.snapshot_label.hide()
+        status_row.addWidget(self.snapshot_label)
+        self.snapshot_refresh_button = QToolButton()
+        self.snapshot_refresh_button.setText("Refresh")
+        self.snapshot_refresh_button.hide()
+        status_row.addWidget(self.snapshot_refresh_button)
         self.cursor_button = QToolButton()
         self.cursor_button.setText("cursor")
         self.cursor_button.setCheckable(True)
@@ -335,6 +353,11 @@ class PlotView(QWidget):
             title_label.item.setTextWidth(available_width)
             title = html.escape(record.title)
             path = html.escape(record.path.as_posix()).replace("/", "/<wbr>")
+            if self._comparison:
+                title = "Comparison"
+                path = html.escape(
+                    ", ".join(f"#{item.log_id}" for item, _ in self._snapshot_frames)
+                )
             axis_font = plot_item.getAxis("bottom").label.document().defaultFont()
             plot_item.setTitle(
                 f"{title} — {path}",
@@ -402,7 +425,15 @@ class PlotView(QWidget):
         if image is None:
             return
 
-        output_path = self._next_plot_path(record.path)
+        if self._comparison:
+            filename, _ = QFileDialog.getSaveFileName(
+                self, "Save comparison plot", "plot.png", "PNG images (*.png)"
+            )
+            if not filename:
+                return
+            output_path = Path(filename)
+        else:
+            output_path = self._next_plot_path(record.path)
         if image.save(str(output_path), "PNG"):
             self.plot_status_label.setText(f"Saved plot to {output_path}")
         else:
@@ -419,13 +450,28 @@ class PlotView(QWidget):
 
     def _save_tag_bar(self) -> None:
         record = self._plot_record
-        if record is None:
+        if record is None or self._comparison:
             return
         record.meta.update(
             plot_axes=self.tag_bar.axes,
             plot_fields=self.tag_bar.fields,
             plot_groupby=self.tag_bar.groupby,
         )
+
+    def set_comparison(self, enabled: bool) -> None:
+        self._comparison = enabled
+        self.tag_bar.save_enabled = not enabled
+        self.snapshot_label.setVisible(enabled)
+        self.snapshot_refresh_button.setVisible(enabled)
+        if not enabled:
+            self._snapshot_frames = []
+            self._snapshot_errors = []
+
+    def set_snapshot(self, frames, errors) -> None:
+        self._snapshot_frames = frames
+        self._snapshot_errors = errors
+        self._user_controls_view = False
+        self.refresh_plot()
 
     def reset_plot_state(self, message: str = "No data to plot.") -> None:
         self._plot_record = None
@@ -549,6 +595,9 @@ class PlotView(QWidget):
         if self._plot_record is None:
             self._clear_plot("No log selected.")
             return
+        if self._comparison:
+            self._render_comparison(axes, fields, groupby)
+            return
         if self._plot_frame is None or self._plot_frame.empty:
             self._clear_plot("No data to plot.")
             return
@@ -576,6 +625,110 @@ class PlotView(QWidget):
         self.marker_size_menu.menuAction().setVisible(result.mode == "1d")
         self.fit_controller.set_visible(result.mode == "1d")
         self._configure_interactions(result, preserve=preserve)
+
+    def _render_comparison(self, axes, fields, groupby) -> None:
+        groups = []
+        errors = list(self._snapshot_errors)
+        reference_modes = None
+        field_mode = None
+        reference_frame = None
+        for record, frame in self._snapshot_frames:
+            required = list(axes[:2]) + (list(fields[:1]) if len(axes) >= 2 else [])
+            missing = [name for name in required if name not in frame.columns]
+            missing_fields = [name for name in fields if name not in frame.columns]
+            if missing or (len(axes) == 1 and len(missing_fields) == len(fields)):
+                errors.append(
+                    f"#{record.log_id}: missing {', '.join(dict.fromkeys(missing + missing_fields))}"
+                )
+                continue
+            if missing_fields:
+                errors.append(f"#{record.log_id}: missing {', '.join(missing_fields)}")
+            axis_modes = tuple(
+                pd.api.types.is_datetime64_any_dtype(frame[name]) for name in axes[:2]
+            )
+            if reference_modes is None:
+                reference_modes = axis_modes
+                reference_frame = frame
+            elif axis_modes != reference_modes:
+                errors.append(f"#{record.log_id}: incompatible axis types")
+                continue
+            if len(axes) == 1:
+                incompatible = []
+                for name in fields:
+                    if name not in frame.columns:
+                        continue
+                    mode = pd.api.types.is_datetime64_any_dtype(frame[name])
+                    if field_mode is None:
+                        field_mode = mode
+                    elif mode != field_mode:
+                        incompatible.append(name)
+                if incompatible:
+                    errors.append(
+                        f"#{record.log_id}: incompatible field types {', '.join(incompatible)}"
+                    )
+                    frame = frame.drop(columns=incompatible)
+                if not any(name in frame.columns for name in fields):
+                    continue
+            coordinate = _plot_values(frame[axes[0]])[0].notna()
+            if len(axes) >= 2:
+                valid = (
+                    coordinate
+                    & _plot_values(frame[axes[1]])[0].notna()
+                    & _plot_values(frame[fields[0]])[0].notna()
+                )
+            else:
+                valid = pd.Series(False, index=frame.index)
+                for name in fields:
+                    if name in frame.columns:
+                        valid |= coordinate & _plot_values(frame[name])[0].notna()
+            if not valid.any():
+                errors.append(f"#{record.log_id}: no valid points")
+                continue
+            available_groupby = [name for name in groupby if name in frame.columns]
+            absent = [name for name in groupby if name not in frame.columns]
+            if absent:
+                errors.append(
+                    f"#{record.log_id}: missing group columns {', '.join(absent)}"
+                )
+            for group in iter_plot_groups(frame, available_groupby):
+                labels = [f"#{record.log_id}"]
+                if group.label:
+                    labels.append(group.label)
+                labels.extend(f"{name}=<missing column>" for name in absent)
+                groups.append(PlotGroup(", ".join(labels), group.frame))
+        if not groups or reference_frame is None:
+            self._clear_plot("; ".join(errors) or "No data to plot.")
+            return
+        self.cursor_controller.clear()
+        self.fit_controller.disable("Fit is available for a single 1D field.")
+        with self.renderer.scene_update_transaction():
+            if len(axes) == 1:
+                result = self.renderer.render_1d(
+                    reference_frame, axes[0], fields, groups=groups
+                )
+            else:
+                result = self.renderer.render_2d(
+                    reference_frame, axes[0], axes[1], fields[0], groups=groups
+                )
+            if result.mode == "empty":
+                self._clear_plot("; ".join([result.status, *errors]))
+                return
+            self._restore_or_autorange(None)
+        self.log_x_action.setEnabled(not result.x_is_datetime)
+        self.log_y_action.setEnabled(not result.y_is_datetime)
+        if len(groups) > MAX_PLOT_GROUPS:
+            omitted = sorted(
+                {group.label.split(",", 1)[0] for group in groups[:-MAX_PLOT_GROUPS]}
+            )
+            errors.append("omitted groups from " + ", ".join(omitted))
+        if result.fit_series is not None:
+            errors.insert(0, f"fit uses {result.fit_series[2]}")
+        status = "; ".join([result.status, *errors])
+        self.plot_status_label.setText(status)
+        self.plot_status_label.setToolTip(status)
+        self.marker_size_menu.menuAction().setVisible(result.mode == "1d")
+        self.fit_controller.set_visible(result.mode == "1d")
+        self._configure_interactions(result, preserve=False)
 
     def _configure_interactions(self, result: RenderResult, *, preserve: bool) -> None:
         if result.mode == "1d":

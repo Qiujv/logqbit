@@ -11,6 +11,7 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QModelIndex,
     QSignalBlocker,
+    QItemSelectionModel,
     QSortFilterProxyModel,
     Qt,
     QTimer,
@@ -86,9 +87,7 @@ class LogListTableModel(QAbstractTableModel):
                     font.setBold(is_bold)
                     font.setStrikeOut(is_struck_out)
                     font.setUnderline(is_underlined)
-                    self._record_fonts[
-                        (is_bold, is_struck_out, is_underlined)
-                    ] = font
+                    self._record_fonts[(is_bold, is_struck_out, is_underlined)] = font
 
     def set_records(self, records: list[LogRecord]) -> None:
         self.beginResetModel()
@@ -217,6 +216,7 @@ class RecordNavigation(QWidget):
     """Own the record table, catalog, filters, watcher, and pin navigation."""
 
     display_record = Signal(object)
+    selection_records_changed = Signal(object)
     open_record = Signal(object)
     empty_selection = Signal(str)
     directory_changed = Signal(object)
@@ -299,6 +299,7 @@ class RecordNavigation(QWidget):
         header.setResizeContentsPrecision(-1)
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(False)
+        header.sortIndicatorChanged.connect(lambda *_: self._detail_load_timer.start())
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self.open_header_context_menu)
         table.setColumnHidden(COL_CREATE_TIME, True)
@@ -376,7 +377,10 @@ class RecordNavigation(QWidget):
 
     def selected_records(self) -> list[LogRecord]:
         records: list[LogRecord] = []
-        for proxy_index in self.log_table.selectionModel().selectedRows():
+        for proxy_index in sorted(
+            self.log_table.selectionModel().selectedRows(),
+            key=lambda index: index.row(),
+        ):
             source_index = self.table_proxy.mapToSource(proxy_index)
             record = self.table_model.get_record(source_index.row())
             if record is not None:
@@ -397,6 +401,11 @@ class RecordNavigation(QWidget):
 
     def refresh_logs(self, *, preferred_path: Path | None = None) -> None:
         previous_record = self._selected_record
+        previous_paths = (
+            {record.path for record in self.selected_records()}
+            if preferred_path is None
+            else set()
+        )
         previous_path = (
             Path(preferred_path)
             if preferred_path is not None
@@ -410,7 +419,11 @@ class RecordNavigation(QWidget):
             records = [record for record in records if not record.trash]
         if self._show_starred_only:
             records = [record for record in records if record.star > 0]
-        self.table_model.set_records(records)
+        blocker = QSignalBlocker(self.log_table.selectionModel())
+        try:
+            self.table_model.set_records(records)
+        finally:
+            del blocker
         self._resize_content_columns()
         self._rebuild_pin_bar(all_records)
         if records:
@@ -425,16 +438,26 @@ class RecordNavigation(QWidget):
             blocker = QSignalBlocker(self.log_table.selectionModel())
             try:
                 self.log_table.selectRow(proxy_index.row())
+                for row, item in enumerate(records):
+                    if item.path in previous_paths:
+                        index = self.table_proxy.mapFromSource(
+                            self.table_model.index(row, 0)
+                        )
+                        self.log_table.selectionModel().select(
+                            index, QItemSelectionModel.Select | QItemSelectionModel.Rows
+                        )
             finally:
                 del blocker
             self._selected_record = selected
             if selected is not previous_record:
                 self._detail_load_timer.stop()
                 self.display_record.emit(selected)
+            self.selection_records_changed.emit(self.selected_records())
         else:
             self._detail_load_timer.stop()
             self._selected_record = None
             self.log_table.clearSelection()
+            self.selection_records_changed.emit([])
             self.empty_selection.emit(
                 "No logs to display." if all_records else "No logs found."
             )
@@ -558,6 +581,7 @@ class RecordNavigation(QWidget):
         self._selected_record = record
         self._detail_load_timer.stop()
         self.display_record.emit(record)
+        self.selection_records_changed.emit([record])
 
     def _open_pin_context_menu(
         self, button: QToolButton, point, record: LogRecord
@@ -568,19 +592,23 @@ class RecordNavigation(QWidget):
             self.unpin_record(record)
 
     def _on_selection_changed(self) -> None:
-        selected = self.log_table.selectionModel().selectedRows()
-        if not selected:
+        records = self.selected_records()
+        if not records:
+            self._detail_load_timer.stop()
+            self._selected_record = None
+            self.selection_records_changed.emit([])
+            self.empty_selection.emit("No log selected.")
             return
-        source_index = self.table_proxy.mapToSource(selected[0])
-        record = self.table_model.get_record(source_index.row())
-        if record is None:
-            return
-        self._selected_record = record
+        if self._selected_record is None or all(
+            record.path != self._selected_record.path for record in records
+        ):
+            self._selected_record = records[0]
         self._detail_load_timer.start()
 
     def _emit_selected_record(self) -> None:
         if self._selected_record is not None:
             self.display_record.emit(self._selected_record)
+            self.selection_records_changed.emit(self.selected_records())
 
     def _on_double_clicked(self, proxy_index) -> None:
         source_index = self.table_proxy.mapToSource(proxy_index)

@@ -148,6 +148,7 @@ class TagBar(QWidget):
         model.rowsMoved.connect(lambda *_: self._on_model_changed())
         model.layoutChanged.connect(lambda: self._on_model_changed())
 
+        self.save_enabled = True
         self._loading = False
         self._columns: tuple[str, ...] = ()
         self._groupby_checks: dict[str, QCheckBox] = {}
@@ -187,7 +188,10 @@ class TagBar(QWidget):
 
     def _show_context_menu(self, pos) -> None:
         menu = QMenu(self)
-        menu.addAction("Save", self.save_clicked.emit)
+        action = menu.addAction("Save", self.save_clicked.emit)
+        action.setEnabled(self.save_enabled)
+        if not self.save_enabled:
+            action.setToolTip("Plot settings are temporary for multiple records")
         menu.exec(self._list.mapToGlobal(pos))
 
     def _toggle_item_role(self, item: QListWidgetItem) -> None:

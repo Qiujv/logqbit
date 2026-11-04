@@ -109,6 +109,9 @@ class LogBrowserWindow(QMainWindow):
         layout.addWidget(splitter)
         self.setCentralWidget(central)
         self.navigation.display_record.connect(self.detail_view.load_record)
+        self.navigation.selection_records_changed.connect(
+            self.detail_view.set_selected_records
+        )
         self.navigation.open_record.connect(self._open_record_window)
         self.navigation.empty_selection.connect(self.detail_view.clear)
         self.navigation.directory_changed.connect(self._directory_changed)

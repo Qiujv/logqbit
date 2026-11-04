@@ -18,6 +18,7 @@ boundaries; changing them does not require compatibility aliases.
 - `plot/view.py` owns the plot panel, mouse input, refresh policy,
   interaction coordination, and image export.
 - `plot/controls.py` owns field roles and grouping controls.
+- `plot/snapshot.py` loads bounded, temporary multi-record snapshots in a single background worker.
 - `plot/rendering.py` prepares plot coordinates/groups and owns data graphics,
   axes, legends and color-bar signal connections. It returns data for controllers
   without reaching into the panel, metadata, or interaction buttons.
@@ -44,3 +45,5 @@ Do not replace this with a blanket `PlotItem.clear()` during data refresh.
 Keep selection debounce, list refresh debounce, and detail refresh debounce
 with their respective owners: they serve different purposes and must not be
 combined into a shared watcher service.
+
+Multi-selection plots are snapshots, refreshed manually from the Plot tab. The detail watcher continues to refresh the current record, but does not update the comparison. Selection changes discard obsolete background results and release snapshots for deselected records. Multi-record plots keep source frames separate and use the existing grouped renderer; missing columns and incompatible types are reported in the plot status.
