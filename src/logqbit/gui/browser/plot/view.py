@@ -52,6 +52,18 @@ PLOT_AUTO_RANGE_PADDING = 0.01
 MARKER_SIZES = {"Small": 4, "Medium": 6, "Large": 8}
 
 
+class PlotStatusLabel(QLabel):
+    """Keep the full status accessible when the row clips its text."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.setToolTip(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        super().setText(text)
+        self.setToolTip(text)
+
+
 class PlotViewBox(pg.ViewBox):
     """ViewBox that draws a fit-selection rectangle only while armed."""
 
@@ -204,18 +216,18 @@ class PlotView(QWidget):
         # Status row
         status_row = QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
-        self.plot_status_label = QLabel("No data to plot.")
+        self.plot_status_label = PlotStatusLabel("No data to plot.")
         self.plot_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.plot_status_label.setSizePolicy(
             QSizePolicy.Ignored,
             QSizePolicy.Preferred,
         )
         status_row.addWidget(self.plot_status_label, stretch=1)
-        self.snapshot_label = QLabel("Snapshot · auto update paused")
-        self.snapshot_label.hide()
-        status_row.addWidget(self.snapshot_label)
         self.snapshot_refresh_button = QToolButton()
         self.snapshot_refresh_button.setText("Refresh")
+        self.snapshot_refresh_button.setToolTip(
+            "Refresh the multi-record plot; automatic updates are paused."
+        )
         self.snapshot_refresh_button.hide()
         status_row.addWidget(self.snapshot_refresh_button)
         self.cursor_button = QToolButton()
@@ -461,7 +473,6 @@ class PlotView(QWidget):
     def set_comparison(self, enabled: bool) -> None:
         self._comparison = enabled
         self.tag_bar.save_enabled = not enabled
-        self.snapshot_label.setVisible(enabled)
         self.snapshot_refresh_button.setVisible(enabled)
         if not enabled:
             self._snapshot_frames = []
@@ -725,7 +736,6 @@ class PlotView(QWidget):
             errors.insert(0, f"fit uses {result.fit_series[2]}")
         status = "; ".join([result.status, *errors])
         self.plot_status_label.setText(status)
-        self.plot_status_label.setToolTip(status)
         self.marker_size_menu.menuAction().setVisible(result.mode == "1d")
         self.fit_controller.set_visible(result.mode == "1d")
         self._configure_interactions(result, preserve=False)

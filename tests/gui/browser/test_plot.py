@@ -1225,3 +1225,16 @@ def test_comparison_2d_uses_grouped_meshes_and_cursor():
     assert len(manager.renderer._mesh_items) == 2
     assert manager.cursor_controller._group_label == "#1"
     assert "cursor uses #1" in manager.plot_status_label.text()
+
+
+def test_plot_status_tooltip_tracks_fit_and_plot_updates():
+    manager = PlotView()
+    assert manager.plot_status_label.toolTip() == "No data to plot."
+    manager._plot_record = object()
+    manager._plot_frame = pd.DataFrame({"x": [0.0, 1.0, 2.0], "y": [0.0, 1.0, 4.0]})
+    manager._refresh_plot_1d("x", ["y"])
+    assert manager.plot_status_label.toolTip() == manager.plot_status_label.text()
+    manager.fit_controller._fit_selection("quadratic", QRectF(-1, -1, 4, 6))
+    assert "using 3 points" in manager.plot_status_label.toolTip()
+    manager._clear_plot("No data to plot.")
+    assert manager.plot_status_label.toolTip() == "No data to plot."
