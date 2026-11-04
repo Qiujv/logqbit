@@ -20,7 +20,10 @@ from PySide6.QtWidgets import (
 from send2trash import send2trash
 
 from logqbit.catalog import LogRecord, PreparedMerge, export_records
-from logqbit.gui.browser.detail.files import open_in_file_manager
+from logqbit.gui.browser.detail.files import (
+    copy_paths_to_clipboard,
+    open_in_file_manager,
+)
 from logqbit.gui.browser.window.merge import MergeDialog
 from logqbit.gui.browser.window.navigation import RecordNavigation
 from logqbit.metadata import LogMetadata
@@ -106,6 +109,7 @@ class RecordActions(QObject):
         toggle_trash_action = menu.addAction("Toggle 🗑️Trash (T)")
         toggle_trash_action.setCheckable(True)
         send_to_recycle_action = menu.addAction("Send to Recycle Bin (Del)")
+        copy_action = menu.addAction("Copy LogFolder (Ctrl+C)")
         open_explorer = menu.addAction("Open in Explorer (Ctrl+Enter)")
         menu.addSeparator()
         merge_new_action = menu.addAction("Merge into New LogFolder...")
@@ -122,6 +126,7 @@ class RecordActions(QObject):
                 toggle_star_action,
                 toggle_trash_action,
                 send_to_recycle_action,
+                copy_action,
                 open_explorer,
                 pin_action,
                 export_action,
@@ -149,6 +154,8 @@ class RecordActions(QObject):
             self.set_records_trash(records, toggle_trash_action.isChecked())
         elif chosen == send_to_recycle_action and records:
             self.send_records_to_recycle_bin(records)
+        elif chosen == copy_action and records:
+            copy_paths_to_clipboard(record.path for record in records)
         elif chosen == open_explorer and records:
             self.open_path_in_explorer(records[0].path, len(records) != 1)
         elif chosen == pin_action and records:
@@ -409,6 +416,11 @@ class RecordActions(QObject):
         records = self.get_selected_records()
         if records:
             self.open_path_in_explorer(records[0].path, len(records) != 1)
+
+    def shortcut_copy_logfolders(self) -> None:
+        records = self.get_selected_records()
+        if records:
+            copy_paths_to_clipboard(record.path for record in records)
 
     def shortcut_rename_title(self) -> None:
         records = self.get_selected_records()

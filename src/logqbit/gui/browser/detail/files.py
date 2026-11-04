@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import pyqtgraph as pg
@@ -182,9 +182,9 @@ def open_file(
         )
 
 
-def _copy_file_to_clipboard(path: Path) -> None:
+def copy_paths_to_clipboard(paths: Iterable[Path]) -> None:
     mime_data = QMimeData()
-    mime_data.setUrls([QUrl.fromLocalFile(str(path.resolve()))])
+    mime_data.setUrls([QUrl.fromLocalFile(str(path.resolve())) for path in paths])
     QApplication.clipboard().setMimeData(mime_data)
 
 
@@ -307,7 +307,7 @@ class ImageTab(QWidget):
         copy_shortcut.activated.connect(self._copy_file)
 
     def _copy_file(self, _checked: bool = False) -> None:
-        _copy_file_to_clipboard(self._image_path)
+        copy_paths_to_clipboard([self._image_path])
 
     def _open_context_menu(self, widget: QWidget, position: QPoint) -> None:
         menu = QMenu(widget)

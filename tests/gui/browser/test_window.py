@@ -5,7 +5,14 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-from PySide6.QtCore import QEventLoop, QItemSelectionModel, QPoint, QSettings, Qt, QTimer
+from PySide6.QtCore import (
+    QEventLoop,
+    QItemSelectionModel,
+    QPoint,
+    QSettings,
+    Qt,
+    QTimer,
+)
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import (
@@ -825,6 +832,72 @@ class TestBrowserWindow:
             assert dialog._cancel_button.text() == "Close"
         finally:
             dialog.close()
+            window.close()
+
+    def test_copy_logfolders_shortcut_and_menu(self, sample_records) -> None:
+        app = _create_application()
+        window = LogBrowserWindow(sample_records[0].path.parent)
+        window.show()
+        app.processEvents()
+        table = window.navigation.log_table
+        shortcut = window.copy_logfolders_shortcut
+        try:
+            assert shortcut.parent() is table
+            assert shortcut.context() == Qt.WidgetWithChildrenShortcut
+            assert shortcut.key() == QKeySequence(QKeySequence.Copy)
+            table.clearSelection()
+            app.clipboard().setText("unchanged")
+            table.setFocus()
+            QTest.keySequence(table, QKeySequence(QKeySequence.Copy))
+            assert app.clipboard().text() == "unchanged"
+
+            menu_states = []
+
+            def inspect_menu():
+                menu = app.activePopupWidget()
+                action = next(a for a in menu.actions() if a.text() == "Copy LogFolder")
+                menu_states.append(action.isEnabled())
+                if action.isEnabled():
+                    QTest.mouseClick(
+                        menu, Qt.LeftButton, pos=menu.actionGeometry(action).center()
+                    )
+                else:
+                    menu.close()
+
+            QTimer.singleShot(0, inspect_menu)
+            window._actions.open_table_context_menu(QPoint())
+            assert menu_states == [False]
+
+            table.selectRow(0)
+            window.activateWindow()
+            table.setFocus()
+            app.processEvents()
+            QTest.keySequence(table, QKeySequence(QKeySequence.Copy))
+            assert [
+                Path(url.toLocalFile()) for url in app.clipboard().mimeData().urls()
+            ] == [window.navigation.selected_records()[0].path.resolve()]
+
+            table.selectionModel().select(
+                window.navigation.table_proxy.index(1, 0),
+                QItemSelectionModel.Select | QItemSelectionModel.Rows,
+            )
+            expected = {
+                record.path.resolve() for record in window.navigation.selected_records()
+            }
+            assert len(expected) == 2
+            QTest.keySequence(table, QKeySequence(QKeySequence.Copy))
+            assert {
+                Path(url.toLocalFile()) for url in app.clipboard().mimeData().urls()
+            } == expected
+
+            app.clipboard().clear()
+            QTimer.singleShot(0, inspect_menu)
+            window._actions.open_table_context_menu(QPoint())
+            assert menu_states == [False, True]
+            assert {
+                Path(url.toLocalFile()) for url in app.clipboard().mimeData().urls()
+            } == expected
+        finally:
             window.close()
 
     def test_open_explorer_shortcut_is_scoped_to_log_table(

@@ -177,6 +177,13 @@ class LogBrowserWindow(QMainWindow):
         )
         self.open_explorer_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.open_explorer_shortcut.activated.connect(actions.shortcut_open_in_explorer)
+        self.copy_logfolders_shortcut = QShortcut(
+            QKeySequence.Copy, self.navigation.log_table
+        )
+        self.copy_logfolders_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.copy_logfolders_shortcut.activated.connect(
+            actions.shortcut_copy_logfolders
+        )
 
     def _show_top_bar_context_menu(self, position) -> None:
         menu = self.navigation.create_header_context_menu()
