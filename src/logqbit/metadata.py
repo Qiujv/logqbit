@@ -4,7 +4,9 @@ import json
 import logging
 import os
 import socket
+import sys
 import tempfile
+import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from datetime import datetime
@@ -16,6 +18,22 @@ from .file_version import FileVersion
 _ReadT = TypeVar("_ReadT")
 _WriteT = TypeVar("_WriteT")
 logger = logging.getLogger(__name__)
+
+
+def _replace_with_retry(source: Path, target: Path) -> None:
+    """Retry transient Windows access failures without changing the file contents."""
+    delays = (0.02, 0.04, 0.08, 0.16, 0.32, 0.64)
+    for attempt in range(len(delays) + 1):
+        try:
+            source.replace(target)
+            return
+        except PermissionError:
+            if sys.platform != "win32" or attempt == len(delays):
+                raise
+            logger.debug(
+                "Replacing metadata %s failed; retrying", target, exc_info=True
+            )
+            time.sleep(delays[attempt])
 
 
 def _default_root(title: str) -> dict[str, object]:
@@ -147,7 +165,7 @@ class LogMetadata:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(self.root, f, ensure_ascii=False, indent=4)
-            tmp_path.replace(path)
+            _replace_with_retry(tmp_path, path)
         finally:
             with suppress(OSError):
                 tmp_path.unlink()
