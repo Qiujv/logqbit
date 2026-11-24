@@ -14,6 +14,7 @@ import pyqtgraph as pg
 
 from logqbit.catalog import PlotColumns, resolve_plot_columns
 from logqbit.gui.browser.plot.fitting import fit_exponential, fit_quadratic
+from logqbit.gui.browser.plot.label import ViewBoxLabel
 from logqbit.gui.browser.plot.view import PlotViewBox
 from logqbit.gui.browser.plot.controls import TagBar
 from logqbit.gui.browser.plot.rendering import iter_plot_groups, MAX_PLOT_GROUPS
@@ -27,6 +28,46 @@ from logqbit.gui.browser.plot.view import (
     PLOT_AUTO_RANGE_PADDING,
     PlotView,
 )
+
+
+def test_viewbox_label_stays_visible_and_tracks_view_changes() -> None:
+    widget = pg.PlotWidget()
+    widget.resize(500, 350)
+    widget.show()
+    pg.QtWidgets.QApplication.processEvents()
+    view = widget.getPlotItem().vb
+    view.setRange(xRange=(0, 10), yRange=(0, 10), padding=0)
+    item = pg.TextItem("cursor readout", anchor=(0, 1))
+    widget.addItem(item, ignoreBounds=True)
+    layout = ViewBoxLabel(view, item)
+
+    for x, y in ((0.1, 0.1), (9.9, 0.1), (0.1, 9.9), (9.9, 9.9)):
+        layout.set_anchor(x, y)
+        assert item.isVisible()
+        bounds = view.mapRectToScene(view.boundingRect())
+        assert bounds.contains(item.mapRectToScene(item.boundingRect()))
+
+    view.setRange(xRange=(0, 5), yRange=(0, 5), padding=0)
+    assert item.isVisible()
+    bounds = view.mapRectToScene(view.boundingRect())
+    label = item.mapRectToScene(item.boundingRect())
+    assert bounds.contains(label)
+    assert label.right() == pytest.approx(bounds.right() - 4, abs=0.1)
+    assert label.top() == pytest.approx(bounds.top() + 4, abs=0.1)
+    view.setRange(xRange=(0, 10), yRange=(0, 10), padding=0)
+    assert item.isVisible()
+    assert view.mapRectToScene(view.boundingRect()).contains(
+        item.mapRectToScene(item.boundingRect())
+    )
+    view.setRange(xRange=(10, 15), yRange=(10, 15), padding=0)
+    bounds = view.mapRectToScene(view.boundingRect())
+    label = item.mapRectToScene(item.boundingRect())
+    assert item.isVisible()
+    assert bounds.contains(label)
+    assert label.left() == pytest.approx(bounds.left() + 4, abs=0.1)
+    assert label.bottom() == pytest.approx(bounds.bottom() - 4, abs=0.1)
+    layout.dispose()
+    widget.close()
 
 
 class TestTagBar:
@@ -523,9 +564,11 @@ class TestPlotViewFitAndColorBar:
         assert selected_points.opts["size"] == 6
         assert selected_points.opts["brush"].color().name() == "#1e90ff"
         result_text = manager.fit_controller._overlays[3]
-        assert (
-            result_text.pos().y() <= selection.top()
-            or result_text.pos().y() >= selection.bottom()
+        assert manager.fit_controller._result_label.anchor == QPointF(
+            selection.left(), selection.bottom()
+        )
+        assert manager.view_box.mapRectToScene(manager.view_box.boundingRect()).contains(
+            result_text.mapRectToScene(result_text.boundingRect())
         )
 
         manager.quadratic_fit_button.click()

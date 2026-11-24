@@ -16,6 +16,8 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QAbstractButton, QGraphicsRectItem, QLabel
 
+from logqbit.gui.browser.plot.label import ViewBoxLabel
+
 FitKind = Literal["exponential", "quadratic"]
 
 
@@ -146,6 +148,7 @@ class FitController:
         self._color = "#1E90FF"
         self._x_is_datetime = False
         self._overlays: list[object] = []
+        self._result_label: ViewBoxLabel | None = None
 
         exponential_button.clicked.connect(
             lambda checked: self._toggle("exponential", checked)
@@ -213,6 +216,9 @@ class FitController:
             self._status_label.setText("Fit selection canceled.")
 
     def clear_overlays(self) -> None:
+        if self._result_label is not None:
+            self._result_label.dispose()
+            self._result_label = None
         plot_item = self._plot_widget.getPlotItem()
         if plot_item is not None:
             for item in self._overlays:
@@ -279,20 +285,13 @@ class FitController:
             border=pg.mkPen("#555555"),
             anchor=(0, 0),
         )
-        view_bottom, view_top = self._view_box.viewRange()[1]
-        below_space = rect.top() - view_bottom
-        above_space = view_top - rect.bottom()
-        if above_space >= below_space:
-            pixel_height = abs(self._view_box.viewPixelSize()[1])
-            text_y = rect.bottom() + result_text.boundingRect().height() * pixel_height
-        else:
-            text_y = rect.top()
-        result_text.setPos(rect.left(), text_y)
         plot_item = self._plot_widget.getPlotItem()
         if plot_item is not None:
             plot_item.addItem(fit_curve)
             plot_item.addItem(result_text, ignoreBounds=True)
             self._overlays.extend((fit_curve, result_text))
+            self._result_label = ViewBoxLabel(self._view_box, result_text)
+            self._result_label.set_anchor(rect.left(), rect.bottom())
         self._status_label.setText(
             f"{kind.capitalize()} fit using {len(x)} points: {label}"
         )

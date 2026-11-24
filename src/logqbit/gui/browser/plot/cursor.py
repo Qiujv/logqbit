@@ -13,6 +13,7 @@ from PySide6.QtCore import QElapsedTimer, Qt
 from PySide6.QtWidgets import QAbstractButton, QLabel
 
 from logqbit.gui.browser.plot.mesh import PlotMeshData
+from logqbit.gui.browser.plot.label import ViewBoxLabel
 from logqbit.gui.browser.plot.rendering import PlotSeries
 
 
@@ -58,6 +59,8 @@ class CursorController:
         self._preview_readout: pg.TextItem | None = None
         self._preview_timer = QElapsedTimer()
         self._preview_visible = False
+        self._readout_layout: ViewBoxLabel | None = None
+        self._preview_layout: ViewBoxLabel | None = None
 
         button.clicked.connect(self._toggle)
         plot_widget.scene().sigMouseMoved.connect(self._update_preview)
@@ -229,6 +232,7 @@ class CursorController:
         )
         readout.setZValue(30)
         self._add_main_item(readout)
+        self._readout_layout = ViewBoxLabel(self._plot_widget.getPlotItem().vb, readout)
         return readout
 
     def _make_preview_items(self) -> None:
@@ -259,13 +263,19 @@ class CursorController:
         readout.setZValue(19)
         self._preview_readout = readout
         self._add_main_item(readout)
+        self._preview_layout = ViewBoxLabel(self._plot_widget.getPlotItem().vb, readout)
         self._hide_preview()
 
     def _add_main_item(self, item: object) -> None:
-        self._plot_widget.addItem(item)
+        self._plot_widget.addItem(item, ignoreBounds=True)
         self._items.append(item)
 
     def _remove_cursor_items(self) -> None:
+        for layout in (self._readout_layout, self._preview_layout):
+            if layout is not None:
+                layout.dispose()
+        self._readout_layout = None
+        self._preview_layout = None
         for item in self._items:
             self._plot_widget.removeItem(item)
         self._items.clear()
@@ -297,7 +307,7 @@ class CursorController:
         if not self.active or self._preview_readout is None:
             return
         plot_item = self._plot_widget.getPlotItem()
-        if not plot_item.sceneBoundingRect().contains(scene_position):
+        if not plot_item.vb.sceneBoundingRect().contains(scene_position):
             self._hide_preview()
             return
         if (
@@ -321,8 +331,8 @@ class CursorController:
             f"x = {self._format_axis_value(x, 'bottom')}\n"
             f"y = {self._format_axis_value(y, 'left')}"
         )
-        self._preview_readout.setPos(x, y)
-        self._preview_readout.show()
+        if self._preview_layout is not None:
+            self._preview_layout.set_anchor(x, y)
 
     def _snap_preview_coordinate(self, value: float, axis_name: str) -> float:
         plot_item = self._plot_widget.getPlotItem()
@@ -345,6 +355,8 @@ class CursorController:
         return offset + nearest_step * step
 
     def _hide_preview(self) -> None:
+        if self._preview_layout is not None:
+            self._preview_layout.hide()
         for item in (
             self._preview_vertical_line,
             self._preview_horizontal_line,
@@ -369,8 +381,8 @@ class CursorController:
             )
         self._vertical_line.setValue(snapped_x)
         self._readout.setText("\n".join(lines))
-        self._readout.setPos(snapped_x, first_y)
-        self._readout.show()
+        if self._readout_layout is not None:
+            self._readout_layout.set_anchor(snapped_x, first_y)
 
     def _format_axis_value(self, value: float, axis_name: str) -> str:
         """Format DateAxis coordinates like their visible tick labels."""
@@ -413,8 +425,8 @@ class CursorController:
         text = "\n".join(lines)
         if self._readout is not None:
             self._readout.setText(text)
-            self._readout.setPos(x, y)
-            self._readout.show()
+            if self._readout_layout is not None:
+                self._readout_layout.set_anchor(x, y)
         self._section_readout.setText(text)
 
     def _set_sections_visible(self, visible: bool) -> None:
