@@ -133,6 +133,7 @@ class LogBrowserWindow(QMainWindow):
         self.directory_button.setText("Change dir...")
         self.directory_button.setPopupMode(QToolButton.InstantPopup)
         self._directory_menu = QMenu(self.directory_button)
+        self._directory_menu.aboutToShow.connect(self._rebuild_directory_menu)
         self.directory_button.setMenu(self._directory_menu)
         refresh_button = QPushButton("🔄️Refresh")
         refresh_button.setToolTip("Refresh logs and current detail (F5)")
@@ -230,14 +231,37 @@ class LogBrowserWindow(QMainWindow):
                     target
                 )
             )
-        clear_action = self._directory_menu.addAction("Cleanup")
-        if menu_items:
-            self._directory_menu.addSeparator()
-        open_action = self._directory_menu.addAction("Open Other...")
+        clear_action = self._directory_menu.addAction("🧹Cleanup")
+        self._directory_menu.addSeparator()
+        self._directory_menu.addSection("Sibling Folders")
+        try:
+            siblings = sorted(
+                (
+                    path
+                    for path in self.navigation.base_dir.parent.iterdir()
+                    if path != self.navigation.base_dir
+                    and not path.name.startswith(".")
+                    and path.is_dir()
+                ),
+                key=lambda path: (path.name.casefold(), path.name),
+            )[:10]
+        except OSError:
+            logger.debug("Could not list sibling directories", exc_info=True)
+            siblings = []
+        for path in siblings:
+            action = self._directory_menu.addAction(f"./{path.name}")
+            action.setToolTip(str(path))
+            action.triggered.connect(
+                lambda _checked=False, target=path: self.navigation.set_directory(
+                    target
+                )
+            )
+        open_action = self._directory_menu.addAction("📂Open other folder...")
         open_action.triggered.connect(self._open_directory_dialog)
         clear_action.setEnabled(bool(menu_items))
         clear_action.triggered.connect(self._clear_recent_directories)
-        new_window_action = self._directory_menu.addAction("New Window")
+        self._directory_menu.addSeparator()
+        new_window_action = self._directory_menu.addAction("+ New window")
         new_window_action.triggered.connect(
             lambda: self._open_new_window(self.navigation.base_dir)
         )

@@ -375,7 +375,7 @@ class TestBrowserWindow:
         clear_action = next(
             action
             for action in window._directory_menu.actions()
-            if action.text() == "Cleanup"
+            if action.text() == "🧹Cleanup"
         )
         assert clear_action.isEnabled()
 
@@ -386,6 +386,53 @@ class TestBrowserWindow:
             tmp_path / "other",
         ]
         window.close()
+
+    def test_directory_menu_lists_and_switches_to_siblings(
+        self, tmp_path: Path
+    ) -> None:
+        current = tmp_path / "current"
+        current.mkdir()
+        for index in range(12):
+            (tmp_path / f"folder-{index:02}").mkdir()
+        (tmp_path / ".hidden").mkdir()
+        (tmp_path / "a-file").touch()
+        window = LogBrowserWindow(current)
+        try:
+            window.settings_manager.save_recent_directories([current])
+            window._rebuild_directory_menu()
+            actions = window._directory_menu.actions()
+            section = next(
+                i
+                for i, action in enumerate(actions)
+                if action.text() == "Sibling Folders"
+            )
+            open_other = next(
+                i
+                for i, action in enumerate(actions)
+                if action.text() == "📂Open other folder..."
+            )
+            assert [action.text() for action in actions[section + 1 : open_other]] == [
+                f"./folder-{index:02}" for index in range(10)
+            ]
+            actions[section + 1].trigger()
+            assert window.navigation.base_dir == tmp_path / "folder-00"
+        finally:
+            window.close()
+
+    def test_directory_menu_refreshes_siblings_when_opened(
+        self, tmp_path: Path
+    ) -> None:
+        current = tmp_path / "current"
+        current.mkdir()
+        window = LogBrowserWindow(current)
+        try:
+            (tmp_path / "new-folder").mkdir()
+            window._directory_menu.aboutToShow.emit()
+            assert "./new-folder" in [
+                action.text() for action in window._directory_menu.actions()
+            ]
+        finally:
+            window.close()
 
     def test_open_other_folder_starts_from_current_parent(
         self, sample_logfolder: Path, monkeypatch: pytest.MonkeyPatch
