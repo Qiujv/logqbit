@@ -479,6 +479,14 @@ class TestRecordDetailWidgets:
         assert view.tab_widget.count() == TAB_PLOT + 1
         assert view.current_tab_index() == TAB_PLOT
 
+        view.load_record(record_with_image)
+        assert view.current_tab_index() == TAB_PLOT + 1
+
+        view.load_record(record_without_image)
+        view.tab_widget.tabBarClicked.emit(TAB_PLOT)
+        view.load_record(record_with_image)
+        assert view.current_tab_index() == TAB_PLOT
+
     def test_switching_records_preserves_image_tab_position(
         self,
         sample_logfolder: Path,
@@ -509,6 +517,12 @@ class TestRecordDetailWidgets:
 
         assert view.current_tab_index() == TAB_PLOT + 2
         assert view.tab_widget.tabText(view.current_tab_index()) == "second.png"
+
+        (second_path / "second.png").unlink()
+        view.refresh_current_record()
+        assert view.current_tab_index() == TAB_PLOT + 1
+        view.load_record(first_record)
+        assert view.current_tab_index() == TAB_PLOT + 2
 
     def test_detail_window_watch_toggle_controls_watcher(
         self, sample_logfolder: Path

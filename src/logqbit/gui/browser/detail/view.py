@@ -139,6 +139,7 @@ class RecordDetailView(QWidget):
         self._file_open_callback = file_open_callback
         self._enable_tab_shortcuts = enable_tab_shortcuts
         self._shortcuts: list[QAction] = []
+        self._preferred_tab_index = TAB_CONST
         self._detail_watcher = self._create_detail_watcher()
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
@@ -165,6 +166,7 @@ class RecordDetailView(QWidget):
 
     def set_current_tab(self, index: int) -> None:
         if 0 <= index < self.tab_widget.count():
+            self._preferred_tab_index = index
             self.tab_widget.setCurrentIndex(index)
 
     def switch_tab(self, step: int) -> None:
@@ -280,7 +282,11 @@ class RecordDetailView(QWidget):
         self.detail_label.setText(message)
         self.const_tab.clear("")
         self.data_view_manager.set_empty("")
-        self._clear_dynamic_tabs()
+        was_blocked = self.tab_widget.blockSignals(True)
+        try:
+            self._clear_dynamic_tabs()
+        finally:
+            self.tab_widget.blockSignals(was_blocked)
         self.files_button.setEnabled(False)
         self.files_menu.set_record_path(None)
         self.plot_view.reset_plot_state("")
@@ -337,6 +343,7 @@ class RecordDetailView(QWidget):
         self.tab_widget.addTab(self.plot_view, "Plot")
 
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        self.tab_widget.tabBarClicked.connect(self._remember_tab_choice)
         detail_layout.addWidget(self.tab_widget)
 
     def _setup_shortcuts(self) -> None:
@@ -356,11 +363,16 @@ class RecordDetailView(QWidget):
         add_shortcut(Qt.Key_Right, lambda: self.switch_tab(1))
 
     def _on_tab_changed(self, index: int) -> None:
+        self._remember_tab_choice(index)
         if index == TAB_PLOT:
             if self.plot_view._comparison and not self.plot_view._snapshot_frames:
                 self._snapshots.request()
             else:
                 self.plot_view.refresh_if_needed()
+
+    def _remember_tab_choice(self, index: int) -> None:
+        if index >= 0:
+            self._preferred_tab_index = index
 
     def _on_load_more(self) -> None:
         if self._record:
@@ -426,8 +438,6 @@ class RecordDetailView(QWidget):
         )
 
     def _update_image_tabs(self, image_files: list[Path]) -> None:
-        first_image_index = TAB_PLOT + 1
-        selected_image_offset = self.tab_widget.currentIndex() - first_image_index
         was_blocked = self.tab_widget.blockSignals(True)
         try:
             self._clear_dynamic_tabs()
@@ -435,9 +445,9 @@ class RecordDetailView(QWidget):
                 image_tab = self._create_image_tab(image_path)
                 self.tab_widget.addTab(image_tab, image_path.name)
 
-            if selected_image_offset >= 0 and image_files:
-                restored_offset = min(selected_image_offset, len(image_files) - 1)
-                self.tab_widget.setCurrentIndex(first_image_index + restored_offset)
+            self.tab_widget.setCurrentIndex(
+                min(self._preferred_tab_index, self.tab_widget.count() - 1)
+            )
         finally:
             self.tab_widget.blockSignals(was_blocked)
 
